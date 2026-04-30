@@ -1,0 +1,15 @@
+PklModuleImpl
+  PklClassPropertyImpl
+    PklObjectBodyImpl
+      PklObjectElementImpl
+        PklTypeTestExprImpl
+          PklUnqualifiedAccessExprImpl
+          PklDeclaredTypeImpl
+            PklTypeNameImpl
+              PklQualifiedIdentifierImpl
+      PklObjectElementImpl
+        PklTypeCastExprImpl
+          PklUnqualifiedAccessExprImpl
+          PklDeclaredTypeImpl
+            PklTypeNameImpl
+              PklQualifiedIdentifierImpl

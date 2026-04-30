@@ -1,0 +1,13 @@
+[package]
+name = "pkl-analysis"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-pkl.workspace = true
+smallvec = "1.13"
+thiserror = "2.0"
+
+[dev-dependencies]
+insta.workspace = true

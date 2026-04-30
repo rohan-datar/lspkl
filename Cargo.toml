@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.dependencies]
+insta = "1.43.2"
+tree-sitter = "0.25"
+tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl" }
+
+# Phase 2: VFS + LSP skeleton
+dashmap = "6"
+url = "2"
+thiserror = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+tower-lsp-server = "0.22"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Path deps
+pkl-analysis = { path = "crates/pkl-analysis" }
+pkl-vfs = { path = "crates/pkl-vfs" }
+lspkl = { path = "crates/lspkl" }

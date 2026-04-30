@@ -1,0 +1,9 @@
+---
+source: crates/pkl-analysis/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    SingleLineStringLiteral
+  ClassProperty
+    SingleLineStringLiteral

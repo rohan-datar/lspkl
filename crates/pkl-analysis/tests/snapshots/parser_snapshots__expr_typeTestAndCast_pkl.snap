@@ -1,0 +1,17 @@
+---
+source: crates/pkl-analysis/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    ObjectBody
+      ObjectElement
+        TypeTestExpr
+          UnqualifiedAccessExpr
+          DeclaredType
+            QualifiedIdentifier
+      ObjectElement
+        TypeCastExpr
+          UnqualifiedAccessExpr
+          DeclaredType
+            QualifiedIdentifier
