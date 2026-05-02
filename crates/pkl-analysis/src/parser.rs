@@ -6,8 +6,7 @@
 //!      mapping each tree-sitter node `kind` string to a [`NodeKind`] variant.
 //!
 //! Anything we have not mapped yet falls into [`NodeKind::Unmapped`] so the
-//! parser never panics on unknown nodes — the snapshot tests will surface the
-//! missing variants and we extend `ts_node_to_kind` until none remain.
+//! parser never panics on unknown nodes.
 
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -39,9 +38,6 @@ pub fn parse(source: &str) -> Result<SyntaxTree, ParseError> {
 }
 
 /// Build the index-based AST from a tree-sitter tree, depth-first.
-///
-/// Order matters: pushing the parent before its children keeps `NodeId(0)` as the
-/// root and lets us refer to the parent's id while walking.
 struct TreeBuilder {
     nodes: Vec<NodeEntry>,
 }
@@ -91,10 +87,6 @@ fn should_keep_child(ts_node: &TsNode<'_>) -> bool {
 }
 
 /// Convert a tree-sitter node to its [`NodeKind`].
-///
-/// This is the big mapping function. Every case here corresponds to a branch in
-/// the Kotlin `Node.toNode()` switch. Add cases as snapshot tests reveal
-/// `Unmapped` outputs.
 fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
     let raw = ts_node.kind();
     match raw {
@@ -217,8 +209,7 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
 }
 
 /// tree-sitter-pkl wraps modifier keywords inside a `modifier` node whose only
-/// child is the keyword itself. To keep modifier checks ergonomic we collapse
-/// the wrapper and tag the resulting Terminal with the right [`TokenType`].
+/// child is the keyword itself.
 fn modifier_token(ts_node: &TsNode<'_>) -> TokenType {
     let mut cursor = ts_node.walk();
     if let Some(child) = ts_node.named_child(0) {

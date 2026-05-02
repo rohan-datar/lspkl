@@ -54,10 +54,6 @@ impl Span {
 }
 
 /// All node kinds in the Pkl AST, mapped from tree-sitter's grammar.
-///
-/// New variants are added as we extend the `parser::ts_node_to_kind` mapping.
-/// Anything not yet mapped lands in [`NodeKind::Unmapped`] so the tree round-trips
-/// without panicking and the snapshot tests show what is missing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeKind {
     // ---- Top-level ----
@@ -174,8 +170,6 @@ pub enum NodeKind {
 }
 
 impl NodeKind {
-    /// Short, stable name for snapshot rendering. Modeled on `PklNode::class.simpleName`
-    /// in the Kotlin engine so output diffs map to the original `.txt` fixtures.
     pub fn name(&self) -> &str {
         match self {
             NodeKind::Terminal(_) => "Terminal",
@@ -190,8 +184,6 @@ impl NodeKind {
 }
 
 /// Token classes for terminal nodes (modifiers, keywords, operators, identifiers).
-///
-/// We start with the tokens needed by the analyzers/features later. Extend as needed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TokenType {
     Identifier,
@@ -225,7 +217,7 @@ pub enum TokenType {
     ReadOrNull,
     ReadGlob,
 
-    /// Anything we have not classified yet. Carries no data; the actual token text
+    /// Anything not classified yet. Carries no data; the actual token text
     /// can be retrieved via `SyntaxTree::text(node)`.
     Other,
 }
@@ -318,7 +310,7 @@ impl SyntaxTree {
     }
 
     /// Find the deepest node whose span contains `(line, col)`.
-    /// Lines and columns are 1-indexed (matching the Kotlin LSP code).
+    /// Lines and columns are 1-indexed.
     pub fn find_at(&self, line: u32, col: u32) -> Option<NodeId> {
         self.find_at_recursive(NodeId::ROOT, line, col)
     }
@@ -384,8 +376,7 @@ impl SyntaxTree {
     }
 }
 
-/// Long-name list used by `NodeKind::name`. Kept in a single function so adding
-/// new variants is a one-line change.
+/// Long-name list used by `NodeKind::name`.
 fn kind_static_name(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::Module => "Module",
