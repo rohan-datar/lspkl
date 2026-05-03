@@ -209,35 +209,26 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
 }
 
 /// tree-sitter-pkl wraps modifier keywords inside a `modifier` node whose only
-/// child is the keyword itself.
+/// child is the keyword itself. Depending on the grammar that child may be
+/// named or anonymous, so we look at `named_child(0)` first and fall back to
+/// the very first child of any kind.
 fn modifier_token(ts_node: &TsNode<'_>) -> TokenType {
     let mut cursor = ts_node.walk();
-    if let Some(child) = ts_node.named_child(0) {
-        return match child.kind() {
-            "abstract" => TokenType::Abstract,
-            "external" => TokenType::External,
-            "hidden" => TokenType::Hidden,
-            "local" => TokenType::Local,
-            "open" => TokenType::Open,
-            "fixed" => TokenType::Fixed,
-            "const" => TokenType::Const,
-            _ => TokenType::Other,
-        };
+    let kind = ts_node
+        .named_child(0)
+        .or_else(|| ts_node.children(&mut cursor).next())
+        .map(|child| child.kind());
+
+    match kind {
+        Some("abstract") => TokenType::Abstract,
+        Some("external") => TokenType::External,
+        Some("hidden") => TokenType::Hidden,
+        Some("local") => TokenType::Local,
+        Some("open") => TokenType::Open,
+        Some("fixed") => TokenType::Fixed,
+        Some("const") => TokenType::Const,
+        _ => TokenType::Other,
     }
-    // Fall back to scanning anonymous children.
-    for child in ts_node.children(&mut cursor) {
-        return match child.kind() {
-            "abstract" => TokenType::Abstract,
-            "external" => TokenType::External,
-            "hidden" => TokenType::Hidden,
-            "local" => TokenType::Local,
-            "open" => TokenType::Open,
-            "fixed" => TokenType::Fixed,
-            "const" => TokenType::Const,
-            _ => TokenType::Other,
-        };
-    }
-    TokenType::Other
 }
 
 fn span_of(ts_node: &TsNode<'_>) -> Span {

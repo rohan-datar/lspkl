@@ -15,8 +15,8 @@
     let
       supportedSystems = [
         "x86_64-linux"
-        "aarch64-linux"
         "aarch64-darwin"
+        "aarch64-linux"
       ];
       forEachSupportedSystem =
         f:
@@ -43,7 +43,6 @@
               clippy
               rustc
               cargo
-              cargo-insta
               rustfmt
               rust-src
             ]
@@ -61,6 +60,7 @@
               cargo-deny
               cargo-edit
               cargo-watch
+              cargo-insta
               rust-analyzer
               self.formatter.${system}
             ];

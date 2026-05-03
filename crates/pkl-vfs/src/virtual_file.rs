@@ -57,8 +57,8 @@ impl VirtualFile {
     /// snippets that never touch disk.
     pub fn new(url: Url, origin: Origin, contents: String, version: Option<i32>) -> Self {
         let state = RwLock::new(FileState {
-            contents: contents,
-            version: version,
+            contents,
+            version,
             tree: None,
         });
         Self { url, origin, state }

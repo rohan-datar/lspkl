@@ -3,7 +3,6 @@
 //! Mirrors `VirtualFileManager.kt` in pkl-lsp.
 
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -157,6 +156,6 @@ pub fn url_to_path(url: &Url) -> Result<std::path::PathBuf, FileError> {
             Err(_) => Err(FileError::InvalidPath(url.clone())),
         }
     } else {
-        return Err(FileError::UnsupportedScheme(url.scheme().into()));
+        Err(FileError::UnsupportedScheme(url.scheme().into()))
     }
 }
