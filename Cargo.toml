@@ -22,4 +22,5 @@ serde_json = "1"
 # Path deps
 pkl-analysis = { path = "crates/pkl-analysis" }
 pkl-vfs = { path = "crates/pkl-vfs" }
+pkl-types = { path = "crates/pkl-types" }
 lspkl = { path = "crates/lspkl" }

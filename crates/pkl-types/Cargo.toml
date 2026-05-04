@@ -1,0 +1,10 @@
+[package]
+name = "pkl-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pkl-analysis.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]

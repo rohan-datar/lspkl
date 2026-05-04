@@ -681,6 +681,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkl-types"
+version = "0.1.0"
+dependencies = [
+ "pkl-analysis",
+ "thiserror",
+]
+
+[[package]]
 name = "pkl-vfs"
 version = "0.1.0"
 dependencies = [
