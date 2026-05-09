@@ -61,6 +61,7 @@
               cargo-edit
               cargo-watch
               cargo-insta
+              cargo-nextest
               rust-analyzer
               self.formatter.${system}
             ];

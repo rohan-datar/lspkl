@@ -37,9 +37,13 @@ pub struct BaseModule {
     number_type: Type,
     string_type: Type,
     listing_type: Type,
+    list_type: Type,
+    set_type: Type,
     mapping_type: Type,
+    map_type: Type,
     object_type: Type,
     module_type: Type,
+    bytes_type: Type,
 }
 
 impl BaseModule {
@@ -60,8 +64,12 @@ impl BaseModule {
             float_type: find_class(tree.clone(), &classes, "Float")?,
             number_type: find_class(tree.clone(), &classes, "Number")?,
             string_type: find_class(tree.clone(), &classes, "String")?,
+            bytes_type: find_class(tree.clone(), &classes, "Bytes")?,
             listing_type: find_class(tree.clone(), &classes, "Listing")?,
+            list_type: find_class(tree.clone(), &classes, "List")?,
+            set_type: find_class(tree.clone(), &classes, "Set")?,
             mapping_type: find_class(tree.clone(), &classes, "Mapping")?,
+            map_type: find_class(tree.clone(), &classes, "Map")?,
             object_type: find_class(tree.clone(), &classes, "Object")?,
             module_type: find_class(tree.clone(), &classes, "Module")?,
         })
@@ -111,8 +119,17 @@ impl BaseModule {
     pub fn listing_type(&self) -> &Type {
         &self.listing_type
     }
+    pub fn list_type(&self) -> &Type {
+        &self.list_type
+    }
+    pub fn set_type(&self) -> &Type {
+        &self.set_type
+    }
     pub fn mapping_type(&self) -> &Type {
         &self.mapping_type
+    }
+    pub fn map_type(&self) -> &Type {
+        &self.map_type
     }
     pub fn object_type(&self) -> &Type {
         &self.object_type
@@ -120,11 +137,14 @@ impl BaseModule {
     pub fn module_type(&self) -> &Type {
         &self.module_type
     }
+    pub fn bytes_type(&self) -> &Type {
+        &self.bytes_type
+    }
 }
 
 fn find_class(
     tree: Arc<SyntaxTree>,
-    classes: &Vec<NodeId>,
+    classes: &[NodeId],
     name: &'static str,
 ) -> Result<Type, BaseModuleError> {
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {

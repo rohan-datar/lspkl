@@ -17,7 +17,7 @@ impl NodeId {
     }
 }
 
-/// 1-indexed line/column source span. Matches pkl-lsp's `Span` for snapshot parity.
+/// 1-indexed line/column source span.
 ///
 /// `byte_range` is preserved alongside so we can extract the underlying source text
 /// without reconstructing offsets from line/column.
@@ -165,7 +165,6 @@ pub enum NodeKind {
     ShebangComment,
 
     /// A tree-sitter node type we have not mapped to a concrete variant yet.
-    /// Carries the raw tree-sitter type string so snapshots reveal what is missing.
     Unmapped(String),
 }
 
@@ -373,6 +372,40 @@ impl SyntaxTree {
 
     pub fn has_modifier(&self, id: NodeId, modifier: TokenType) -> bool {
         self.modifiers(id).contains(&modifier)
+    }
+
+    /// For a `Class` node, return the node representing its `extends` target
+    /// (the type after the `extends` keyword), if any.
+    pub fn class_extends_target(&self, class_node: NodeId) -> Option<NodeId> {
+        if !matches!(self.kind(class_node), NodeKind::Class) {
+            return None;
+        }
+
+        let extends_clause =
+            self.child(class_node, |n| matches!(n, NodeKind::ClassExtendsClause))?;
+
+        self.child(extends_clause, |n| !matches!(n, NodeKind::Terminal(_)))
+    }
+
+    pub fn escaped_string_literal(&self, string_node: NodeId) -> Option<String> {
+        if !matches!(
+            self.kind(string_node),
+            NodeKind::SingleLineStringLiteral
+                | NodeKind::MultiLineStringLiteral
+                | NodeKind::StringConstant
+                | NodeKind::StringLiteralType
+        ) {
+            return None;
+        }
+
+        let lit = self.text(string_node);
+
+        Some(
+            lit.trim_matches('"')
+                .chars()
+                .flat_map(char::escape_default)
+                .collect(),
+        )
     }
 }
 
