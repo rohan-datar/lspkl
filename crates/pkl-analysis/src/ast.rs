@@ -180,6 +180,87 @@ impl NodeKind {
     pub fn is_terminal(&self) -> bool {
         matches!(self, NodeKind::Terminal(_))
     }
+
+    pub fn is_module_member(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::Class | NodeKind::TypeAlias | NodeKind::ClassMethod
+        )
+    }
+
+    pub fn is_object_member(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::ObjectProperty
+                | NodeKind::ObjectEntry
+                | NodeKind::MemberPredicate
+                | NodeKind::ForGenerator
+                | NodeKind::WhenGenerator
+                | NodeKind::ObjectElement
+                | NodeKind::ObjectSpread
+                | NodeKind::ObjectMethod
+        )
+    }
+
+    pub fn is_type_node(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::UnknownType
+                | NodeKind::NothingType
+                | NodeKind::ModuleType
+                | NodeKind::DeclaredType
+                | NodeKind::ParenthesizedType
+                | NodeKind::NullableType
+                | NodeKind::ConstrainedType
+                | NodeKind::UnionType
+                | NodeKind::FunctionType
+                | NodeKind::DefaultUnionType
+        )
+    }
+
+    pub fn is_expr_node(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::ModuleExpr
+                | NodeKind::NullLiteralExpr
+                | NodeKind::TrueLiteralExpr
+                | NodeKind::FalseLiteralExpr
+                | NodeKind::IntLiteralExpr
+                | NodeKind::FloatLiteralExpr
+                | NodeKind::ThrowExpr
+                | NodeKind::TraceExpr
+                | NodeKind::ImportExpr
+                | NodeKind::ImportGlobExpr
+                | NodeKind::ReadExpr
+                | NodeKind::SingleLineStringLiteral
+                | NodeKind::MultiLineStringLiteral
+                | NodeKind::NewExpr
+                | NodeKind::AmendExpr
+                | NodeKind::UnqualifiedAccessExpr
+                | NodeKind::QualifiedAccessExpr
+                | NodeKind::SuperAccessExpr
+                | NodeKind::SuperSubscriptExpr
+                | NodeKind::SubscriptExpr
+                | NodeKind::NonNullExpr
+                | NodeKind::UnaryMinusExpr
+                | NodeKind::LogicalNotExpr
+                | NodeKind::AdditiveExpr
+                | NodeKind::MultiplicativeExpr
+                | NodeKind::ComparisonExpr
+                | NodeKind::EqualityExpr
+                | NodeKind::ExponentiationExpr
+                | NodeKind::LogicalAndExpr
+                | NodeKind::LogicalOrExpr
+                | NodeKind::NullCoalesceExpr
+                | NodeKind::PipeExpr
+                | NodeKind::TypeTestExpr
+                | NodeKind::TypeCastExpr
+                | NodeKind::IfExpr
+                | NodeKind::LetExpr
+                | NodeKind::FunctionLiteralExpr
+                | NodeKind::ParenthesizedExpr
+        )
+    }
 }
 
 /// Token classes for terminal nodes (modifiers, keywords, operators, identifiers).
@@ -359,6 +440,21 @@ impl SyntaxTree {
         self.identifier(id).map(|nid| self.text(nid))
     }
 
+    // find the module name and simple type name of a declared type
+    pub fn declared_type_parts(&self, id: NodeId) -> Option<(&str, &str)> {
+        if !matches!(self.kind(id), NodeKind::DeclaredType) {
+            return None;
+        }
+        let simple_type_name =
+            self.name(self.child(id, |c| matches!(c, NodeKind::SimpleTypeName))?)?;
+        let module_name = self.child(id, |c| matches!(c, NodeKind::ModuleName));
+        if module_name.is_none() || self.name(module_name.unwrap()).is_none() {
+            Some(("", simple_type_name))
+        } else {
+            Some((self.name(module_name.unwrap()).unwrap(), simple_type_name))
+        }
+    }
+
     pub fn modifiers(&self, id: NodeId) -> Vec<TokenType> {
         self.children(id)
             .iter()
@@ -372,6 +468,16 @@ impl SyntaxTree {
 
     pub fn has_modifier(&self, id: NodeId, modifier: TokenType) -> bool {
         self.modifiers(id).contains(&modifier)
+    }
+
+    pub fn is_amend(&self) -> bool {
+        let Some(header_clause) = self.child(self.root(), |c| {
+            matches!(c, NodeKind::ModuleExtendsAmendsClause)
+        }) else {
+            return false;
+        };
+
+        self.text(header_clause).starts_with("amends")
     }
 
     /// For a `Class` node, return the node representing its `extends` target

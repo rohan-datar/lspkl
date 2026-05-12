@@ -54,6 +54,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              pkl
               rustToolchain
               openssl
               pkg-config

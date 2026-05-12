@@ -14,7 +14,7 @@ pub enum BaseModuleError {
     Parse(#[from] pkl_analysis::ParseError),
 
     #[error("base.pkl is missing the required class `{0}`")]
-    MissingClass(&'static str),
+    MissingClass(String),
 
     #[error("could not find pkl base module!")]
     NotFound(#[from] std::io::Error),
@@ -44,6 +44,7 @@ pub struct BaseModule {
     object_type: Type,
     module_type: Type,
     bytes_type: Type,
+    function_type: Type,
 }
 
 impl BaseModule {
@@ -72,6 +73,7 @@ impl BaseModule {
             map_type: find_class(tree.clone(), &classes, "Map")?,
             object_type: find_class(tree.clone(), &classes, "Object")?,
             module_type: find_class(tree.clone(), &classes, "Module")?,
+            function_type: find_class(tree.clone(), &classes, "Function")?,
         })
     }
 
@@ -95,6 +97,23 @@ impl BaseModule {
     }
 
     // ---- Well-known type accessors ----
+    pub fn function_n_type(&self, n: usize) -> Option<Type> {
+        if n > 5 {
+            return None;
+        }
+        let fn_class_name = format!("Function{}", n);
+        let tree = self.tree.clone();
+        let classes = tree.children_matching(tree.root(), |kind| *kind == NodeKind::Class);
+        let Ok(fn_class) = find_class(tree, &classes, fn_class_name.as_str()) else {
+            return None;
+        };
+        Some(fn_class)
+    }
+
+    pub fn function_type(&self) -> &Type {
+        &self.function_type
+    }
+
     pub fn any_type(&self) -> &Type {
         &self.any_type
     }
@@ -145,10 +164,10 @@ impl BaseModule {
 fn find_class(
     tree: Arc<SyntaxTree>,
     classes: &[NodeId],
-    name: &'static str,
+    name: &str,
 ) -> Result<Type, BaseModuleError> {
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {
-        return Err(BaseModuleError::MissingClass(name));
+        return Err(BaseModuleError::MissingClass(name.to_string()));
     };
     Ok(Type::class(NodeRef {
         file_id: FileId::BASE,

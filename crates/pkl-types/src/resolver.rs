@@ -2,6 +2,7 @@
 
 use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
 
+use crate::FileId;
 use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 
@@ -22,6 +23,26 @@ pub fn resolve_type_name_in_module(tree: &SyntaxTree, name: &str) -> Option<Node
         .iter()
         .find(|class| tree.name(**class) == Some(name))
         .cloned()
+}
+
+/// Look up the definition of a declared type
+// TODO: suppored imported types. Currently only supports local and base types
+pub fn resolve_declared_type(ctx: &AnalysisContext, node: NodeId) -> Option<NodeRef> {
+    let (_, simple_type_name) = ctx.tree.declared_type_parts(node)?;
+    // TODO: Add imported modules
+    if let Some(type_def) = resolve_type_name_in_module(ctx.tree, simple_type_name) {
+        return Some(NodeRef {
+            file_id: ctx.file_id,
+            node_id: type_def,
+        });
+    };
+    if let Some(type_def) = resolve_type_name_in_module(ctx.base.tree(), simple_type_name) {
+        return Some(NodeRef {
+            file_id: FileId::BASE,
+            node_id: type_def,
+        });
+    };
+    None
 }
 
 /// Is class `a` a (non-strict) subclass of class `b`?

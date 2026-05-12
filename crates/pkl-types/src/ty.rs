@@ -1,8 +1,8 @@
 //! The resolved type system.
 
 use std::collections::HashMap;
-use std::fmt::Display;
 
+use crate::constraint::ConstraintExpr;
 use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 use crate::resolver;
@@ -32,7 +32,7 @@ pub enum Type {
         constraints: Vec<ConstraintExpr>,
     },
 
-    /// A module used as a type. Mirrors Kotlin's `Type.Module` in `Types.kt`.
+    /// A module used as a type.
     Module {
         module_node: NodeRef,
         reference_name: String,
@@ -85,6 +85,74 @@ impl Type {
         Type::StringLiteral {
             value: value.into(),
             constraints: Vec::new(),
+        }
+    }
+
+    /// Return `self` with contraints attached. No-op for `Unknown` and `Nothing`
+    pub fn with_constraints(self, constraints: Vec<ConstraintExpr>) -> Type {
+        match self {
+            Type::Variable { type_param, .. } => Type::Variable {
+                type_param,
+                constraints,
+            },
+            Type::Class {
+                class_node,
+                type_args,
+                ..
+            } => Type::Class {
+                class_node,
+                type_args,
+                constraints,
+            },
+            Type::Module {
+                module_node,
+                reference_name,
+                ..
+            } => Type::Module {
+                module_node,
+                reference_name,
+                constraints,
+            },
+            Type::Alias {
+                alias_node,
+                type_args,
+                ..
+            } => Type::Alias {
+                alias_node,
+                type_args,
+                constraints,
+            },
+            Type::Union { left, right, .. } => Type::Union {
+                left,
+                right,
+                constraints,
+            },
+            Type::StringLiteral { value, .. } => Type::StringLiteral { value, constraints },
+            _ => self,
+        }
+    }
+
+    pub fn with_type_args(self, type_args: Vec<Type>) -> Type {
+        match self {
+            Type::Class {
+                class_node,
+                constraints,
+                ..
+            } => Type::Class {
+                class_node,
+                type_args,
+                constraints,
+            },
+            Type::Alias {
+                alias_node,
+                constraints,
+                ..
+            } => Type::Alias {
+                alias_node,
+                type_args,
+                constraints,
+            },
+            _ => self,
         }
     }
 
@@ -232,7 +300,7 @@ impl Type {
     }
 
     /// If `self` is an alias, resolve through to the underlying type. Otherwise
-    /// returns a clone. Mirrors `Type.unaliased(...)` in `Types.kt`.
+    /// returns a clone.
     pub fn unaliased(&self, ctx: &AnalysisContext) -> Type {
         let _ = ctx;
         todo!("walk Alias chain via ctx; guard against cycles (see Types.kt:882-893)")
@@ -242,70 +310,6 @@ impl Type {
 /// Type-parameter substitution table. Maps a type-parameter declaration's
 /// `NodeRef` to the concrete `Type` it has been bound to.
 pub type TypeBindings = HashMap<NodeRef, Type>;
-
-// ---- Constraints ----
-
-/// A constraint attached to a constrained type, e.g. `Int(this >= 0)`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ConstraintExpr {
-    /// Could not analyze the constraint statically — hold onto the source text
-    /// so it can be rendered.
-    Opaque(String),
-    /// A simple comparison like `this >= 0`.
-    Comparison {
-        op: CompareOp,
-        value: ConstraintValue,
-    },
-}
-
-impl Display for ConstraintExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConstraintExpr::Opaque(val) => write!(f, "{}", val),
-            ConstraintExpr::Comparison { op, value } => write!(f, "this {} {}", op, value),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ConstraintValue {
-    Int(i64),
-    String(String),
-    Bool(bool),
-}
-
-impl Display for ConstraintValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConstraintValue::Int(value) => write!(f, "{}", value),
-            ConstraintValue::String(value) => write!(f, "{}", value),
-            ConstraintValue::Bool(value) => write!(f, "{}", value),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompareOp {
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-    Ne,
-}
-
-impl Display for CompareOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CompareOp::Lt => write!(f, "<"),
-            CompareOp::Le => write!(f, "<="),
-            CompareOp::Gt => write!(f, ">"),
-            CompareOp::Ge => write!(f, ">="),
-            CompareOp::Eq => write!(f, "="),
-            CompareOp::Ne => write!(f, "!="),
-        }
-    }
-}
 
 fn render_resolved_type(
     ctx: &AnalysisContext,

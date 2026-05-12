@@ -2,8 +2,11 @@
 
 use pkl_analysis::ast::{NodeId, NodeKind};
 
-use crate::NodeRef;
+use crate::ConstraintExpr;
 use crate::context::AnalysisContext;
+
+use crate::resolver::resolve_declared_type;
+
 use crate::ty::{Type, TypeBindings};
 
 /// Convert an AST type node into a resolved [`Type`].
@@ -13,58 +16,119 @@ use crate::ty::{Type, TypeBindings};
 /// [`Type::Unknown`] on unresolved names — never an error — to avoid
 /// cascading diagnostics.
 pub fn to_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
-    // todo!(
-    //     "match on ctx.tree.kind(node):\n\
-    //      - UnknownType -> Type::Unknown\n\
-    //      - NothingType -> Type::Nothing\n\
-    //      - DeclaredType -> resolve simpleTypeName, dispatch on what was found:\n\
-    //          * PklClass -> Type::class_with_args(node_ref, recursed_args)\n\
-    //          * PklTypeAlias -> Type::Alias {{ ... }}\n\
-    //          * PklTypeParameter -> bindings.get(node_ref).cloned().unwrap_or(Type::Unknown)\n\
-    //          * PklModule -> Type::Module {{ ... }}\n\
-    //      - NullableType -> recurse on inner, wrap via .nullable(ctx)\n\
-    //      - UnionType -> recurse on left+right, build Type::Union\n\
-    //      - ParenthesizedType / DefaultUnionType -> recurse on inner\n\
-    //      - ConstrainedType -> recurse on inner, attach constraints\n\
-    //      - StringLiteralType -> Type::string_literal(escaped_text)\n\
-    //      - FunctionType -> base.function_N_type with args (skip until BaseModule exposes those)\n\
-    //      - ModuleType -> Type::Module pointing at enclosing module (or base.module_type)\n\
-    // )
     use NodeKind::*;
     match ctx.tree.kind(node) {
         UnknownType => Type::Unknown,
         NothingType => Type::Nothing,
-        ModuleType => todo!("ModuleType"),
+        ModuleType => {
+            let Some(type_node) = resolve_declared_type(ctx, node) else {
+                return ctx.base.module_type().clone();
+            };
+
+            Type::Module {
+                module_node: type_node,
+                reference_name: ctx
+                    .tree_for(type_node.file_id)
+                    .unwrap()
+                    .name(type_node.node_id)
+                    .unwrap()
+                    .to_string(),
+                constraints: Vec::new(),
+            }
+        }
         StringLiteralType => Type::string_literal(
             ctx.tree
                 .escaped_string_literal(node)
                 .expect("could not escape string literal text"),
         ),
         DeclaredType => {
-            todo!("resolve type name")
+            let Some(type_node) = resolve_declared_type(ctx, node) else {
+                return Type::Unknown;
+            };
+            let Some(tree) = ctx.tree_for(type_node.file_id) else {
+                return Type::Unknown;
+            };
+            let type_args = tree.child(type_node.node_id, |c| {
+                matches!(c, NodeKind::TypeArgumentList)
+            });
+            let args = if type_args.is_some() {
+                tree.children_matching(type_args.unwrap(), |c| c.is_type_node())
+                    .iter()
+                    .map(|n| to_type(*n, bindings, ctx))
+                    .collect()
+            } else {
+                vec![]
+            };
+            match tree.kind(type_node.node_id) {
+                Class => Type::class_with_args(type_node, args),
+                TypeAlias => Type::Alias {
+                    alias_node: type_node,
+                    type_args: args,
+                    constraints: Vec::new(),
+                },
+                TypeParameter => bindings.get(&type_node).cloned().unwrap_or(Type::Unknown),
+                Module => Type::Module {
+                    module_node: type_node,
+                    reference_name: tree
+                        .name(type_node.node_id)
+                        .expect("unable to find name for module")
+                        .to_string(),
+                    constraints: Vec::new(),
+                },
+                _ => Type::Unknown,
+            }
         }
         ParenthesizedType | DefaultUnionType => to_type(ctx.tree.children(node)[0], bindings, ctx),
         NullableType => to_type(ctx.tree.children(node)[0], bindings, ctx).nullable(ctx),
         ConstrainedType => {
-            todo!("ConstrainedType")
+            let Some(inner) = ctx.tree.child(node, |c| c.is_type_node()) else {
+                return Type::Unknown;
+            };
+            let inner_ty = to_type(inner, bindings, ctx);
+            let cs = ctx
+                .tree
+                .children_matching(node, |c| c.is_expr_node())
+                .iter()
+                .map(|&n| ConstraintExpr::opaque(ctx.tree.text(n)))
+                .collect();
+            inner_ty.with_constraints(cs)
         }
         UnionType => {
-            todo!("UnionType")
+            let type_children = ctx.tree.children_matching(node, |c| c.is_type_node());
+            if type_children.len() != 2 {
+                return Type::Unknown;
+            }
+
+            Type::Union {
+                left: Box::new(to_type(type_children[0], bindings, ctx)),
+                right: Box::new(to_type(type_children[1], bindings, ctx)),
+                constraints: Vec::new(),
+            }
         }
         FunctionType => {
-            todo!("FunctionType")
-        }
-        TypeArgumentList => {
-            todo!("TypeArgumentList")
-        }
-        TypeName => {
-            todo!("TypeName")
-        }
-        SimpleTypeName => {
-            todo!("SimpleTypeName")
-        }
-        ModuleName => {
-            todo!("ModuleName")
+            let types = ctx.tree.children_matching(node, |c| c.is_type_node());
+            let n_params = types.len().saturating_sub(1);
+            let return_type = to_type(
+                *types.last().expect("Function must have return type"),
+                bindings,
+                ctx,
+            );
+            let param_nodes = &types[..types.len() - 1];
+            let param_types: Vec<Type> = param_nodes
+                .into_iter()
+                .map(|&n| to_type(n, bindings, ctx))
+                .collect();
+
+            let args: Vec<Type> = param_types
+                .iter()
+                .cloned()
+                .chain(std::iter::once(return_type))
+                .collect();
+
+            ctx.base
+                .function_n_type(n_params)
+                .unwrap_or(ctx.base.function_type().clone())
+                .with_type_args(args)
         }
         _ => Type::Unknown,
     }
