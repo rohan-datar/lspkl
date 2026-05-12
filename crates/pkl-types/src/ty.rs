@@ -1,11 +1,12 @@
 //! The resolved type system.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::constraint::ConstraintExpr;
 use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 use crate::resolver;
+use crate::to_type::to_type;
 
 /// A resolved type. Names are already resolved to declarations; aliases are
 /// preserved for display but transparent for subtyping.
@@ -166,6 +167,19 @@ impl Type {
         }
     }
 
+    /// Return `self` with contraints attached. No-op for `Unknown` and `Nothing`
+    pub fn constraints(&self) -> Vec<ConstraintExpr> {
+        match self {
+            Type::Variable { constraints, .. }
+            | Type::Class { constraints, .. }
+            | Type::Module { constraints, .. }
+            | Type::Alias { constraints, .. }
+            | Type::Union { constraints, .. }
+            | Type::StringLiteral { constraints, .. } => constraints.clone(),
+            _ => vec![],
+        }
+    }
+
     /// Is `self` a (non-strict) subtype of `other`?
     pub fn is_subtype_of(&self, other: &Type, ctx: &AnalysisContext) -> bool {
         match (self, other) {
@@ -302,8 +316,29 @@ impl Type {
     /// If `self` is an alias, resolve through to the underlying type. Otherwise
     /// returns a clone.
     pub fn unaliased(&self, ctx: &AnalysisContext) -> Type {
-        let _ = ctx;
-        todo!("walk Alias chain via ctx; guard against cycles (see Types.kt:882-893)")
+        let mut current = self.clone();
+        let mut seen: HashSet<NodeRef> = HashSet::new();
+        while let Type::Alias {
+            alias_node,
+            type_args,
+            constraints,
+        } = current
+        {
+            // TODO add generics
+            // TODO chain outer alias constriants
+            let _ = (type_args, constraints);
+            if !seen.insert(alias_node) {
+                return Type::Unknown;
+            }
+            let Some(tree) = ctx.tree_for(alias_node.file_id) else {
+                return Type::Unknown;
+            };
+            let Some(body) = tree.type_alias_body(alias_node.node_id) else {
+                return Type::Unknown;
+            };
+            current = to_type(body, &TypeBindings::new(), ctx);
+        }
+        current
     }
 }
 

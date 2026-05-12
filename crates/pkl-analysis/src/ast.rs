@@ -493,6 +493,10 @@ impl SyntaxTree {
         self.child(extends_clause, |n| !matches!(n, NodeKind::Terminal(_)))
     }
 
+    pub fn type_alias_body(&self, alias_node: NodeId) -> Option<NodeId> {
+        self.child(alias_node, |c| c.is_type_node())
+    }
+
     pub fn escaped_string_literal(&self, string_node: NodeId) -> Option<String> {
         if !matches!(
             self.kind(string_node),
