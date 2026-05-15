@@ -106,7 +106,6 @@ pub enum NodeKind {
     ThrowExpr,
     TraceExpr,
     ImportExpr,
-    ImportGlobExpr,
     ReadExpr,
     SingleLineStringLiteral,
     MultiLineStringLiteral,
@@ -149,15 +148,11 @@ pub enum NodeKind {
     FunctionType,
     DefaultUnionType,
     TypeArgumentList,
-    TypeName,
-    SimpleTypeName,
-    ModuleName,
 
     // ---- Other ----
     QualifiedIdentifier,
     StringConstant,
     StringInterpolation,
-    ModuleUri,
     Terminal(TokenType),
     Error,
     LineComment,
@@ -230,7 +225,6 @@ impl NodeKind {
                 | NodeKind::ThrowExpr
                 | NodeKind::TraceExpr
                 | NodeKind::ImportExpr
-                | NodeKind::ImportGlobExpr
                 | NodeKind::ReadExpr
                 | NodeKind::SingleLineStringLiteral
                 | NodeKind::MultiLineStringLiteral
@@ -441,18 +435,26 @@ impl SyntaxTree {
     }
 
     // find the module name and simple type name of a declared type
-    pub fn declared_type_parts(&self, id: NodeId) -> Option<(&str, &str)> {
+    pub fn declared_type_parts(&self, id: NodeId) -> Vec<&str> {
         if !matches!(self.kind(id), NodeKind::DeclaredType) {
-            return None;
+            return vec![];
         }
-        let simple_type_name =
-            self.name(self.child(id, |c| matches!(c, NodeKind::SimpleTypeName))?)?;
-        let module_name = self.child(id, |c| matches!(c, NodeKind::ModuleName));
-        if module_name.is_none() || self.name(module_name.unwrap()).is_none() {
-            Some(("", simple_type_name))
-        } else {
-            Some((self.name(module_name.unwrap()).unwrap(), simple_type_name))
+        let Some(qid) = self.child(id, |c| matches!(c, NodeKind::QualifiedIdentifier)) else {
+            return vec![];
+        };
+        self.qualified_identifier_segments(qid)
+    }
+
+    pub fn qualified_identifier_segments(&self, id: NodeId) -> Vec<&str> {
+        if !matches!(self.kind(id), NodeKind::QualifiedIdentifier) {
+            return vec![];
         }
+        self.children_matching(id, |c| {
+            matches!(c, NodeKind::Terminal(TokenType::Identifier))
+        })
+        .iter()
+        .map(|&n| self.text(n))
+        .collect()
     }
 
     pub fn modifiers(&self, id: NodeId) -> Vec<TokenType> {
@@ -563,7 +565,6 @@ fn kind_static_name(kind: &NodeKind) -> &'static str {
         NodeKind::ThrowExpr => "ThrowExpr",
         NodeKind::TraceExpr => "TraceExpr",
         NodeKind::ImportExpr => "ImportExpr",
-        NodeKind::ImportGlobExpr => "ImportGlobExpr",
         NodeKind::ReadExpr => "ReadExpr",
         NodeKind::SingleLineStringLiteral => "SingleLineStringLiteral",
         NodeKind::MultiLineStringLiteral => "MultiLineStringLiteral",
@@ -604,13 +605,9 @@ fn kind_static_name(kind: &NodeKind) -> &'static str {
         NodeKind::FunctionType => "FunctionType",
         NodeKind::DefaultUnionType => "DefaultUnionType",
         NodeKind::TypeArgumentList => "TypeArgumentList",
-        NodeKind::TypeName => "TypeName",
-        NodeKind::SimpleTypeName => "SimpleTypeName",
-        NodeKind::ModuleName => "ModuleName",
         NodeKind::QualifiedIdentifier => "QualifiedIdentifier",
         NodeKind::StringConstant => "StringConstant",
         NodeKind::StringInterpolation => "StringInterpolation",
-        NodeKind::ModuleUri => "ModuleUri",
         NodeKind::Error => "Error",
         NodeKind::LineComment => "LineComment",
         NodeKind::BlockComment => "BlockComment",

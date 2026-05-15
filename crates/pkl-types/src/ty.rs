@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet};
 use crate::constraint::ConstraintExpr;
 use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
-use crate::resolver;
+use crate::resolver::is_subclass;
 use crate::to_type::to_type;
+use crate::{BaseModule, resolver};
 
 /// A resolved type. Names are already resolved to declarations; aliases are
 /// preserved for display but transparent for subtyping.
@@ -219,6 +220,43 @@ impl Type {
         }
     }
 
+    /// Does `self` share a non-trivial subtype with `other`? In set terms:
+    /// is the intersection of the two types' inhabitants non-empty?
+    ///
+    /// Companion to [`Self::is_subtype_of`]. Where `is_subtype_of` answers
+    /// set inclusion ("every A is a B"), this answers set intersection
+    /// ("some value is both an A and a B").
+    ///
+    /// **Precondition:** callers should have already checked
+    /// `!self.is_subtype_of(other, ctx)` — this method only matters in the
+    /// "neither is a subtype of the other" middle case used by
+    /// `ExprAnalyzer`'s type-cast diagnostic. See `Types.kt:195`.
+    pub fn has_common_subtype_with(&self, other: &Type, ctx: &AnalysisContext) -> bool {
+        match (self, other) {
+            (Type::Unknown, _) | (_, Type::Unknown) | (Type::Nothing, _) | (_, Type::Nothing) => {
+                false
+            }
+            (Type::Alias { .. }, _) => self.unaliased(ctx).has_common_subtype_with(other, ctx),
+            (_, Type::Alias { .. }) => self.has_common_subtype_with(&other.unaliased(ctx), ctx),
+            (Type::Union { left, right, .. }, _) => {
+                left.has_common_subtype_with(other, ctx)
+                    || right.has_common_subtype_with(other, ctx)
+            }
+            (_, Type::Union { left, right, .. }) => {
+                self.has_common_subtype_with(left, ctx) || self.has_common_subtype_with(right, ctx)
+            }
+            (Type::StringLiteral { value: a, .. }, Type::StringLiteral { value: b, .. }) => a == b,
+            (Type::Variable { .. }, _) | (_, Type::Variable { .. }) => true,
+            // TODO better class and module handling
+            (Type::Class { class_node: a, .. }, Type::Class { class_node: b, .. }) => {
+                is_subclass(*a, *b, ctx) || is_subclass(*b, *a, ctx)
+            }
+            (Type::Module { .. }, Type::Class { .. } | Type::Module { .. })
+            | (Type::Class { .. }, Type::Module { .. }) => true,
+            _ => false,
+        }
+    }
+
     /// Render this type to a human-readable string for hover/diagnostics.
     pub fn render(&self, ctx: &AnalysisContext) -> String {
         match self {
@@ -313,6 +351,23 @@ impl Type {
         }
     }
 
+    /// Is this an alias of `NonNull`?
+    pub fn is_non_null(&self, base: &BaseModule) -> bool {
+        match self {
+            Type::Alias { alias_node, .. } => {
+                let Type::Alias {
+                    alias_node: base_alias_node,
+                    ..
+                } = base.non_null_type()
+                else {
+                    return false;
+                };
+                alias_node == base_alias_node
+            }
+            _ => false,
+        }
+    }
+
     /// If `self` is an alias, resolve through to the underlying type. Otherwise
     /// returns a clone.
     pub fn unaliased(&self, ctx: &AnalysisContext) -> Type {
@@ -336,7 +391,14 @@ impl Type {
             let Some(body) = tree.type_alias_body(alias_node.node_id) else {
                 return Type::Unknown;
             };
-            current = to_type(body, &TypeBindings::new(), ctx);
+            current = to_type(
+                NodeRef {
+                    file_id: alias_node.file_id,
+                    node_id: body,
+                },
+                &TypeBindings::new(),
+                ctx,
+            );
         }
         current
     }

@@ -31,4 +31,12 @@ impl NodeRef {
     pub fn new(file_id: FileId, node_id: NodeId) -> Self {
         Self { file_id, node_id }
     }
+
+    /// Return a new `NodeRef` in the same file, pointing at `node_id`.
+    pub fn with_node(self, node_id: NodeId) -> Self {
+        Self {
+            file_id: self.file_id,
+            node_id,
+        }
+    }
 }

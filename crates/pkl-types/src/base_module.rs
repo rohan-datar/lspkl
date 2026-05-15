@@ -16,6 +16,9 @@ pub enum BaseModuleError {
     #[error("base.pkl is missing the required class `{0}`")]
     MissingClass(String),
 
+    #[error("base.pkl is missing the required typealias `{0}`")]
+    MissingAlias(String),
+
     #[error("could not find pkl base module!")]
     NotFound(#[from] std::io::Error),
 }
@@ -28,8 +31,11 @@ pub struct BaseModule {
 
     // Cached `Type` values for the classes the type checker references most
     // often. Populated by `load` so callers can grab them without re-walking
-    // the AST. Add entries as analyzers need them.
+    // the AST.
+
+    // classes
     any_type: Type,
+    annotation_type: Type,
     null_type: Type,
     boolean_type: Type,
     int_type: Type,
@@ -45,6 +51,9 @@ pub struct BaseModule {
     module_type: Type,
     bytes_type: Type,
     function_type: Type,
+
+    // typealiases
+    non_null_type: Type,
 }
 
 impl BaseModule {
@@ -53,12 +62,15 @@ impl BaseModule {
         let tree = Arc::new(pkl_analysis::parse(source)?);
         let classes = tree.children_matching(tree.root(), |kind| *kind == NodeKind::Class);
 
+        let aliases = tree.children_matching(tree.root(), |kind| *kind == NodeKind::TypeAlias);
+
         Ok(Self {
             tree: tree.clone(),
             file_id: FileId::BASE,
 
             // well-known types
             any_type: find_class(tree.clone(), &classes, "Any")?,
+            annotation_type: find_class(tree.clone(), &classes, "Annotation")?,
             null_type: find_class(tree.clone(), &classes, "Null")?,
             boolean_type: find_class(tree.clone(), &classes, "Boolean")?,
             int_type: find_class(tree.clone(), &classes, "Int")?,
@@ -74,6 +86,7 @@ impl BaseModule {
             object_type: find_class(tree.clone(), &classes, "Object")?,
             module_type: find_class(tree.clone(), &classes, "Module")?,
             function_type: find_class(tree.clone(), &classes, "Function")?,
+            non_null_type: find_alias(tree.clone(), &aliases, "NonNull")?,
         })
     }
 
@@ -117,6 +130,9 @@ impl BaseModule {
     pub fn any_type(&self) -> &Type {
         &self.any_type
     }
+    pub fn annotation_type(&self) -> &Type {
+        &self.annotation_type
+    }
     pub fn null_type(&self) -> &Type {
         &self.null_type
     }
@@ -159,6 +175,10 @@ impl BaseModule {
     pub fn bytes_type(&self) -> &Type {
         &self.bytes_type
     }
+
+    pub fn non_null_type(&self) -> &Type {
+        &self.non_null_type
+    }
 }
 
 fn find_class(
@@ -173,4 +193,23 @@ fn find_class(
         file_id: FileId::BASE,
         node_id: *id,
     }))
+}
+
+fn find_alias(
+    tree: Arc<SyntaxTree>,
+    aliases: &[NodeId],
+    name: &str,
+) -> Result<Type, BaseModuleError> {
+    let Some(id) = aliases.iter().find(|&c| tree.name(*c) == Some(name)) else {
+        return Err(BaseModuleError::MissingAlias(name.to_string()));
+    };
+
+    Ok(Type::Alias {
+        alias_node: NodeRef {
+            file_id: FileId::BASE,
+            node_id: *id,
+        },
+        type_args: vec![],
+        constraints: vec![],
+    })
 }

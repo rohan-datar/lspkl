@@ -140,7 +140,6 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
         "throwExpr" => NodeKind::ThrowExpr,
         "traceExpr" => NodeKind::TraceExpr,
         "importExpr" => NodeKind::ImportExpr,
-        "importGlobExpr" => NodeKind::ImportGlobExpr,
         "readExpr" => NodeKind::ReadExpr,
         "slStringLiteralExpr" => NodeKind::SingleLineStringLiteral,
         "mlStringLiteralExpr" => NodeKind::MultiLineStringLiteral,
@@ -183,15 +182,11 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
         "functionLiteralType" => NodeKind::FunctionType,
         "defaultUnionType" => NodeKind::DefaultUnionType,
         "typeArgumentList" => NodeKind::TypeArgumentList,
-        "typeName" => NodeKind::TypeName,
-        "simpleTypeName" => NodeKind::SimpleTypeName,
-        "moduleName" => NodeKind::ModuleName,
 
         // ---- Other ----
         "qualifiedIdentifier" => NodeKind::QualifiedIdentifier,
         "stringConstant" => NodeKind::StringConstant,
         "stringInterpolation" => NodeKind::StringInterpolation,
-        "moduleUri" => NodeKind::ModuleUri,
         "lineComment" => NodeKind::LineComment,
         "blockComment" => NodeKind::BlockComment,
         "shebangComment" => NodeKind::ShebangComment,

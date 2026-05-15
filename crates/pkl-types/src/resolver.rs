@@ -26,17 +26,22 @@ pub fn resolve_type_name_in_module(tree: &SyntaxTree, name: &str) -> Option<Node
 }
 
 /// Look up the definition of a declared type
-// TODO: suppored imported types. Currently only supports local and base types
-pub fn resolve_declared_type(ctx: &AnalysisContext, node: NodeId) -> Option<NodeRef> {
-    let (_, simple_type_name) = ctx.tree.declared_type_parts(node)?;
-    // TODO: Add imported modules
-    if let Some(type_def) = resolve_type_name_in_module(ctx.tree, simple_type_name) {
+pub fn resolve_declared_type(ctx: &AnalysisContext, node: NodeRef) -> Option<NodeRef> {
+    let tree = ctx.tree_for(node.file_id)?;
+    let name_parts = tree.declared_type_parts(node.node_id);
+    resolve_type_name(ctx, &name_parts)
+}
+
+// TODO: properly support qualified identifiers
+pub fn resolve_type_name(ctx: &AnalysisContext, name_parts: &[&str]) -> Option<NodeRef> {
+    let simple_name = name_parts.last()?;
+    if let Some(type_def) = resolve_type_name_in_module(ctx.tree, simple_name) {
         return Some(NodeRef {
             file_id: ctx.file_id,
             node_id: type_def,
         });
     };
-    if let Some(type_def) = resolve_type_name_in_module(ctx.base.tree(), simple_type_name) {
+    if let Some(type_def) = resolve_type_name_in_module(ctx.base.tree(), simple_name) {
         return Some(NodeRef {
             file_id: FileId::BASE,
             node_id: type_def,
