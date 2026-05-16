@@ -7,6 +7,7 @@ edition = "2024"
 pkl-analysis.workspace = true
 dashmap.workspace = true
 url.workspace = true
+fluent-uri.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

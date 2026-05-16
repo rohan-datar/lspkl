@@ -3,13 +3,13 @@
 //! These tests exercise the public API of `FileManager` and `VirtualFile`.
 use std::sync::Arc;
 
+use fluent_uri::Uri;
 use pkl_vfs::{FileManager, Origin, VirtualFile};
-use url::Url;
 
-fn ephemeral_url(name: &str) -> Url {
+fn ephemeral_url(name: &str) -> Uri<String> {
     // Ephemeral / virtual-only URIs use a synthetic scheme so they don't
     // collide with real `file://` paths.
-    Url::parse(&format!("inmemory:///{name}")).unwrap()
+    Uri::parse(format!("inmemory:///{name}")).unwrap()
 }
 
 #[test]
@@ -150,14 +150,14 @@ fn ephemeral_constructor_round_trips() {
 #[test]
 fn url_to_path_rejects_non_file_scheme() {
     use pkl_vfs::file_manager::url_to_path;
-    let url = Url::parse("https://example.com/foo.pkl").unwrap();
+    let url = Uri::parse(String::from("https://example.com/foo.pkl")).unwrap();
     assert!(url_to_path(&url).is_err());
 }
 
 #[test]
 fn url_to_path_accepts_file_scheme() {
     use pkl_vfs::file_manager::url_to_path;
-    let url = Url::parse("file:///tmp/foo.pkl").unwrap();
+    let url = Uri::parse(String::from("file:///tmp/foo.pkl")).unwrap();
     let path = url_to_path(&url).expect("file:// URLs must convert to a path");
     assert_eq!(path.to_str(), Some("/tmp/foo.pkl"));
 }
@@ -169,7 +169,9 @@ fn get_or_load_reads_from_disk() {
 
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "foo = 1").unwrap();
-    let url = Url::from_file_path(tmp.path()).expect("tempfile path must convert");
+    // tempfile paths on Unix are ASCII-only so no percent-encoding is needed.
+    let url = Uri::parse(format!("file://{}", tmp.path().display()))
+        .expect("tempfile path must convert");
 
     let mgr = FileManager::new();
     let file = mgr
@@ -183,7 +185,7 @@ fn get_or_load_reads_from_disk() {
 #[test]
 fn get_or_load_rejects_unsupported_scheme() {
     let mgr = FileManager::new();
-    let url = Url::parse("https://example.com/foo.pkl").unwrap();
+    let url = Uri::parse(String::from("https://example.com/foo.pkl")).unwrap();
     let result = mgr.get_or_load(&url);
     assert!(matches!(
         result,

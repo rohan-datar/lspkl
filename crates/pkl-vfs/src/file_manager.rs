@@ -6,10 +6,11 @@ use std::fs;
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use fluent_uri::Uri;
 use pkl_analysis::ast::SyntaxTree;
 use pkl_analysis::parse;
 use thiserror::Error;
-use url::Url;
+use url;
 
 use crate::virtual_file::{Origin, VirtualFile};
 
@@ -19,7 +20,7 @@ pub enum FileError {
     UnsupportedScheme(String),
 
     #[error("URL `{0}` could not be converted to a filesystem path")]
-    InvalidPath(Url),
+    InvalidPath(Uri<String>),
 
     #[error("I/O error reading {path:?}: {source}")]
     Io {
@@ -32,13 +33,13 @@ pub enum FileError {
     Parse(#[from] pkl_analysis::ParseError),
 
     #[error("file is not open: {0}")]
-    NotOpen(Url),
+    NotOpen(Uri<String>),
 }
 
 /// Owns every `VirtualFile` the server is currently tracking.
 #[derive(Debug, Default)]
 pub struct FileManager {
-    files: DashMap<Url, Arc<VirtualFile>>,
+    files: DashMap<Uri<String>, Arc<VirtualFile>>,
 }
 
 impl FileManager {
@@ -59,14 +60,17 @@ impl FileManager {
 
     /// Get the file for `url` if it has been opened or fetched. Does NOT read
     /// from disk; use [`get_or_load`] for that.
-    pub fn get(&self, url: &Url) -> Option<Arc<VirtualFile>> {
+    pub fn get(&self, url: &Uri<String>) -> Option<Arc<VirtualFile>> {
         self.files.get(url).map(|f| f.value().clone())
     }
 
     /// Register a file the editor just opened. Implements the `didOpen` flow.
-    pub fn open(&self, url: Url, contents: String, version: Option<i32>) -> Arc<VirtualFile> {
-        // let _ = (url, contents, version);
-        // todo!("construct an Arc<VirtualFile> with the right Origin (file:// vs other) and insert")
+    pub fn open(
+        &self,
+        url: Uri<String>,
+        contents: String,
+        version: Option<i32>,
+    ) -> Arc<VirtualFile> {
         let origin = Self::origin_for(&url);
         let file = Arc::new(VirtualFile::new(url.clone(), origin, contents, version));
         self.files.insert(url.clone(), file.clone());
@@ -79,7 +83,7 @@ impl FileManager {
     /// Returns `Err` if the file is not currently open.
     pub fn update(
         &self,
-        url: &Url,
+        url: &Uri<String>,
         new_contents: String,
         new_version: Option<i32>,
     ) -> Result<Arc<VirtualFile>, FileError> {
@@ -92,13 +96,13 @@ impl FileManager {
 
     /// Remove a file from the registry. Implements the `didClose` flow.
     /// No-op if the file isn't tracked.
-    pub fn close(&self, url: &Url) {
+    pub fn close(&self, url: &Uri<String>) {
         self.files.remove(url);
     }
 
     /// Read a file from disk if it's not already in the registry. Used when
     /// resolving imports to files the editor never opened.
-    pub fn get_or_load(&self, url: &Url) -> Result<Arc<VirtualFile>, FileError> {
+    pub fn get_or_load(&self, url: &Uri<String>) -> Result<Arc<VirtualFile>, FileError> {
         if let Some(file) = self.files.get(url) {
             return Ok(file.clone());
         };
@@ -118,7 +122,7 @@ impl FileManager {
     /// Tree-sitter parsing is synchronous and CPU-bound. Callers in async
     /// contexts should wrap this in `tokio::task::spawn_blocking` — the
     /// FileManager itself stays sync to keep tests easy.
-    pub fn parse(&self, url: &Url) -> Result<Arc<SyntaxTree>, FileError> {
+    pub fn parse(&self, url: &Uri<String>) -> Result<Arc<SyntaxTree>, FileError> {
         let Some(file) = self.files.get(url) else {
             return Err(FileError::NotOpen(url.clone()));
         };
@@ -136,8 +140,8 @@ impl FileManager {
         }
     }
 
-    fn origin_for(url: &Url) -> Origin {
-        match url.scheme() {
+    fn origin_for(url: &Uri<String>) -> Origin {
+        match url.scheme().as_str() {
             "file" => Origin::Fs { url: url.clone() },
             "pkl" => Origin::Stdlib,
             "https" => Origin::Https,
@@ -149,13 +153,16 @@ impl FileManager {
 
 /// Helper for tests and `get_or_load`: convert a `file://` URL into a path.
 /// Pulled out for unit testing.
-pub fn url_to_path(url: &Url) -> Result<std::path::PathBuf, FileError> {
-    if url.scheme() == "file" {
-        match url.to_file_path() {
-            Ok(path) => Ok(path),
-            Err(_) => Err(FileError::InvalidPath(url.clone())),
-        }
-    } else {
-        Err(FileError::UnsupportedScheme(url.scheme().into()))
+///
+/// Unix only. Windows path handling (drive letters, UNC) is not implemented.
+pub fn url_to_path(url: &Uri<String>) -> Result<std::path::PathBuf, FileError> {
+    let scheme = url.scheme().as_str();
+    if scheme != "file" {
+        return Err(FileError::UnsupportedScheme(scheme.into()));
     }
+    // re-parse the url via the `url` crate for windows supported
+    let parsed = url::Url::parse(url.as_str()).map_err(|_| FileError::InvalidPath(url.clone()))?;
+    parsed
+        .to_file_path()
+        .map_err(|_| FileError::InvalidPath(url.clone()))
 }

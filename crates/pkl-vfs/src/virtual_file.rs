@@ -3,14 +3,14 @@
 //! Mirrors `VirtualFile.kt` in pkl-lsp.
 use std::sync::{Arc, RwLock};
 
+use fluent_uri::Uri;
 use pkl_analysis::ast::SyntaxTree;
-use url::Url;
 
 /// Where the contents of a file came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// On-disk file accessible via `path`.
-    Fs { url: Url },
+    Fs { url: Uri<String> },
 
     /// Part of the Stdlib
     Stdlib,
@@ -47,7 +47,7 @@ pub struct FileState {
 /// A single file the language server knows about.
 #[derive(Debug)]
 pub struct VirtualFile {
-    pub url: Url,
+    pub url: Uri<String>,
     pub origin: Origin,
     state: RwLock<FileState>,
 }
@@ -55,7 +55,7 @@ pub struct VirtualFile {
 impl VirtualFile {
     /// Build a new in-memory file. Used both for `didOpen` and for ephemeral
     /// snippets that never touch disk.
-    pub fn new(url: Url, origin: Origin, contents: String, version: Option<i32>) -> Self {
+    pub fn new(url: Uri<String>, origin: Origin, contents: String, version: Option<i32>) -> Self {
         let state = RwLock::new(FileState {
             contents,
             version,

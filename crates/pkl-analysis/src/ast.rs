@@ -255,6 +255,16 @@ impl NodeKind {
                 | NodeKind::ParenthesizedExpr
         )
     }
+
+    pub fn is_module_uri_owner(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::Import
+                | NodeKind::ImportGlob
+                | NodeKind::ImportExpr
+                | NodeKind::ModuleExtendsAmendsClause
+        )
+    }
 }
 
 /// Token classes for terminal nodes (modifiers, keywords, operators, identifiers).
@@ -518,6 +528,14 @@ impl SyntaxTree {
                 .flat_map(char::escape_default)
                 .collect(),
         )
+    }
+
+    pub fn is_glob_import(&self, node: NodeId) -> bool {
+        match self.kind(node) {
+            NodeKind::ImportGlob => true,
+            NodeKind::ImportExpr => self.text(node).starts_with("import*"),
+            _ => false,
+        }
     }
 }
 

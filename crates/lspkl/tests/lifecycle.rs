@@ -105,7 +105,7 @@ async fn did_open_then_state_has_file() {
         .await;
 
     // state.file_manager should now know about the URL.
-    let url = url::Url::parse(uri.as_str()).unwrap();
+    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
     let file = backend
         .state
         .file_manager
@@ -142,7 +142,7 @@ async fn did_change_updates_contents() {
         })
         .await;
 
-    let url = url::Url::parse(uri.as_str()).unwrap();
+    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
     let file = backend.state.file_manager.get(&url).unwrap();
     assert_eq!(file.contents(), "foo = 2");
     assert_eq!(file.version(), Some(2));
@@ -167,7 +167,7 @@ async fn did_close_removes_file_from_state() {
         })
         .await;
 
-    let url = url::Url::parse(uri.as_str()).unwrap();
+    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
     assert!(
         backend.state.file_manager.get(&url).is_none(),
         "file must be removed after did_close"

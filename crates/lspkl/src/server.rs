@@ -14,7 +14,7 @@ use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc};
 
 use tracing::{error, info};
-use url::Url;
+use fluent_uri::Uri;
 
 use crate::state::ServerState;
 
@@ -122,7 +122,7 @@ impl LanguageServer for PklBackend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!(uri = %params.text_document.uri.as_str(), "didOpen");
-        let Ok(url) = Url::parse(params.text_document.uri.as_str()) else {
+        let Ok(url) = Uri::parse(params.text_document.uri.as_str().to_string()) else {
             error!(uri = %params.text_document.uri.as_str(), "Failed to parse URI!");
             return;
         };
@@ -136,7 +136,7 @@ impl LanguageServer for PklBackend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         info!(uri = %params.text_document.uri.as_str(), "didChange");
-        let Ok(url) = Url::parse(params.text_document.uri.as_str()) else {
+        let Ok(url) = Uri::parse(params.text_document.uri.as_str().to_string()) else {
             error!(uri = %params.text_document.uri.as_str(), "Failed to parse URI!");
             return;
         };
@@ -161,7 +161,7 @@ impl LanguageServer for PklBackend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         info!(uri = %params.text_document.uri.as_str(), "didClose");
-        let Ok(url) = Url::parse(params.text_document.uri.as_str()) else {
+        let Ok(url) = Uri::parse(params.text_document.uri.as_str().to_string()) else {
             error!(uri = %params.text_document.uri.as_str(), "Failed to parse URI!");
             return;
         };

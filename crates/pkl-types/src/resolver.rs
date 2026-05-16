@@ -64,22 +64,13 @@ pub fn is_subclass(a: NodeRef, b: NodeRef, ctx: &AnalysisContext) -> bool {
         return false;
     };
 
-    let Some(super_type_name) = a_tree.name(extends_target) else {
+    let super_type_name = a_tree.qualified_identifier_segments(extends_target);
+
+    let Some(super_type_node) = resolve_type_name(ctx, &super_type_name) else {
         return false;
     };
 
-    let Some(super_type_node) = resolve_type_name_in_module(a_tree, super_type_name) else {
-        return false;
-    };
-
-    is_subclass(
-        NodeRef {
-            file_id: a.file_id,
-            node_id: super_type_node,
-        },
-        b,
-        ctx,
-    )
+    is_subclass(super_type_node, b, ctx)
 }
 
 fn kind_is_class(kind: &NodeKind) -> bool {
