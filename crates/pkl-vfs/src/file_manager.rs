@@ -153,14 +153,12 @@ impl FileManager {
 
 /// Helper for tests and `get_or_load`: convert a `file://` URL into a path.
 /// Pulled out for unit testing.
-///
-/// Unix only. Windows path handling (drive letters, UNC) is not implemented.
 pub fn url_to_path(url: &Uri<String>) -> Result<std::path::PathBuf, FileError> {
     let scheme = url.scheme().as_str();
     if scheme != "file" {
         return Err(FileError::UnsupportedScheme(scheme.into()));
     }
-    // re-parse the url via the `url` crate for windows supported
+    // re-parse the url via the `url` crate for windows support
     let parsed = url::Url::parse(url.as_str()).map_err(|_| FileError::InvalidPath(url.clone()))?;
     parsed
         .to_file_path()

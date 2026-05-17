@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree, unquote_identifier};
 use thiserror::Error;
 
 use crate::file_id::{FileId, NodeRef};
@@ -186,6 +186,7 @@ fn find_class(
     classes: &[NodeId],
     name: &str,
 ) -> Result<Type, BaseModuleError> {
+    let name = unquote_identifier(name);
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {
         return Err(BaseModuleError::MissingClass(name.to_string()));
     };
@@ -200,6 +201,7 @@ fn find_alias(
     aliases: &[NodeId],
     name: &str,
 ) -> Result<Type, BaseModuleError> {
+    let name = unquote_identifier(name);
     let Some(id) = aliases.iter().find(|&c| tree.name(*c) == Some(name)) else {
         return Err(BaseModuleError::MissingAlias(name.to_string()));
     };

@@ -705,6 +705,7 @@ dependencies = [
  "insta",
  "pkl-analysis",
  "pkl-types",
+ "semver",
 ]
 
 [[package]]

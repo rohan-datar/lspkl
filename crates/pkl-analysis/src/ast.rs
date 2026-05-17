@@ -183,6 +183,16 @@ impl NodeKind {
         )
     }
 
+    pub fn is_string_literal(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::SingleLineStringLiteral
+                | NodeKind::MultiLineStringLiteral
+                | NodeKind::StringConstant
+                | NodeKind::StringLiteralType
+        )
+    }
+
     pub fn is_object_member(&self) -> bool {
         matches!(
             self,
@@ -441,7 +451,8 @@ impl SyntaxTree {
     }
 
     pub fn name(&self, id: NodeId) -> Option<&str> {
-        self.identifier(id).map(|nid| self.text(nid))
+        self.identifier(id)
+            .map(|nid| unquote_identifier(self.text(nid)))
     }
 
     // find the module name and simple type name of a declared type
@@ -463,7 +474,7 @@ impl SyntaxTree {
             matches!(c, NodeKind::Terminal(TokenType::Identifier))
         })
         .iter()
-        .map(|&n| self.text(n))
+        .map(|&n| unquote_identifier(self.text(n)))
         .collect()
     }
 
@@ -510,13 +521,7 @@ impl SyntaxTree {
     }
 
     pub fn escaped_string_literal(&self, string_node: NodeId) -> Option<String> {
-        if !matches!(
-            self.kind(string_node),
-            NodeKind::SingleLineStringLiteral
-                | NodeKind::MultiLineStringLiteral
-                | NodeKind::StringConstant
-                | NodeKind::StringLiteralType
-        ) {
+        if !self.kind(string_node).is_string_literal() {
             return None;
         }
 
@@ -633,4 +638,11 @@ fn kind_static_name(kind: &NodeKind) -> &'static str {
         NodeKind::Terminal(_) => "Terminal",
         NodeKind::Unmapped(_) => "Unmapped",
     }
+}
+
+/// Strip surrounding backticks from a Pkl identifier text.
+pub fn unquote_identifier(text: &str) -> &str {
+    text.strip_prefix('`')
+        .and_then(|s| s.strip_suffix('`'))
+        .unwrap_or(text)
 }
