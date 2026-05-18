@@ -516,6 +516,14 @@ impl SyntaxTree {
         self.child(extends_clause, |n| !matches!(n, NodeKind::Terminal(_)))
     }
 
+    pub fn module_extends_or_amends_target(&self) -> Option<String> {
+        let header = self.child(self.root(), |k| matches!(k, NodeKind::ModuleHeader))?;
+        let extend_amend_clause =
+            self.child(header, |k| matches!(k, NodeKind::ModuleExtendsAmendsClause))?;
+        let target = self.child(extend_amend_clause, |k| k.is_string_literal())?;
+        self.escaped_string_literal(target)
+    }
+
     pub fn type_alias_body(&self, alias_node: NodeId) -> Option<NodeId> {
         self.child(alias_node, |c| c.is_type_node())
     }

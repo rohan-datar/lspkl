@@ -36,6 +36,7 @@ pub struct BaseModule {
     // classes
     any_type: Type,
     annotation_type: Type,
+    dynamic_type: Type,
     null_type: Type,
     boolean_type: Type,
     int_type: Type,
@@ -71,6 +72,7 @@ impl BaseModule {
             // well-known types
             any_type: find_class(tree.clone(), &classes, "Any")?,
             annotation_type: find_class(tree.clone(), &classes, "Annotation")?,
+            dynamic_type: find_class(tree.clone(), &classes, "Dynamic")?,
             null_type: find_class(tree.clone(), &classes, "Null")?,
             boolean_type: find_class(tree.clone(), &classes, "Boolean")?,
             int_type: find_class(tree.clone(), &classes, "Int")?,

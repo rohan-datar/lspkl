@@ -3,7 +3,10 @@
 use pkl_analysis::ast::{NodeId, NodeKind, TokenType};
 
 use crate::context::AnalysisContext;
+use crate::resolver::{find_member_on_type, resolve_local_binding, resolve_type_name_in_module};
+use crate::to_type::to_type;
 use crate::ty::{Type, TypeBindings};
+use crate::{FileId, NodeRef};
 
 /// Infer the [`Type`] of an expression node.
 ///
@@ -65,19 +68,75 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
         ),
         NodeKind::AdditiveExpr => additive_expr_type(node, bindings, ctx),
         NodeKind::MultiplicativeExpr => multiplicative_expr_type(node, bindings, ctx),
-        NodeKind::QualifiedAccessExpr => todo!("Qualified Access Expression"),
-        NodeKind::UnqualifiedAccessExpr => todo!("Unqualified Access Expression"),
+        NodeKind::QualifiedAccessExpr => {
+            let Some(reciever) = ctx.tree.child(node, |k| k.is_expr_node()) else {
+                return Type::Unknown;
+            };
+            let Some(accessor) = ctx.tree.child(node, |k| {
+                matches!(k, NodeKind::Terminal(TokenType::Identifier))
+            }) else {
+                return Type::Unknown;
+            };
+            let Some(name) = ctx.tree.name(accessor) else {
+                return Type::Unknown;
+            };
+            let reciever_type = compute_expr_type(reciever, bindings, ctx);
+            find_member_on_type(&reciever_type, name, bindings, ctx).unwrap_or(Type::Unknown)
+        }
+        NodeKind::UnqualifiedAccessExpr => {
+            let Some(name) = ctx.tree.name(node) else {
+                return Type::Unknown;
+            };
+            if let Some(local_type) = resolve_local_binding(node, name, bindings, ctx) {
+                return local_type;
+            };
+            if let Some(this_type) =
+                find_member_on_type(&compute_this_type(node, bindings, ctx), name, bindings, ctx)
+            {
+                return this_type;
+            };
+            if let Some(module_type) = find_member_on_type(
+                &Type::Module {
+                    module_node: NodeRef::new(ctx.file_id, ctx.tree.root()),
+                    reference_name: "".to_string(), // this is probably fine, we don't really care about the module name
+                    constraints: vec![],
+                },
+                name,
+                bindings,
+                ctx,
+            ) {
+                return module_type;
+            };
+            if let Some(base_type) = resolve_type_name_in_module(ctx.base.tree(), name) {
+                return to_type(NodeRef::new(FileId::BASE, base_type), bindings, ctx);
+            };
+
+            Type::Unknown
+        }
         _ => Type::Unknown,
     }
 }
 
 /// Compute the type of `this` at a given AST position.
 pub fn compute_this_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
-    let _ = (node, bindings, ctx);
-    todo!(
-        "walk parent chain looking for the nearest enclosing class / object body / module; \
-         return the appropriate type."
-    )
+    let _ = bindings;
+    let mut current = Some(node);
+    while let Some(id) = current {
+        match ctx.tree.kind(id) {
+            NodeKind::Module => {
+                return Type::Module {
+                    module_node: NodeRef::new(ctx.file_id, id),
+                    reference_name: ctx.tree.name(id).unwrap_or("").to_string(),
+                    constraints: vec![],
+                };
+            }
+            NodeKind::Class => return Type::class(NodeRef::new(ctx.file_id, id)),
+            NodeKind::TypeAlias => return Type::Unknown,
+            NodeKind::AmendExpr | NodeKind::NewExpr | NodeKind::ObjectBody => return Type::Unknown, // TODO properly handle these cases
+            _ => current = ctx.tree.parent(id),
+        }
+    }
+    Type::Unknown
 }
 
 // find non-terminal children of an expression

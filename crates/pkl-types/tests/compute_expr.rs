@@ -85,6 +85,45 @@ fn throw_expr_has_nothing_type() {
 }
 
 #[test]
+fn unqualified_access_resolves_to_module_property_type() {
+    let base = harness::load_test_base();
+    // `y = x` references module-level `x`. The unqualified access's type
+    // should equal x's declared type (Int).
+    harness::with_snippet(&base, "x: Int = 1\ny = x", |ctx| {
+        let access =
+            harness::find_first(ctx.tree, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
+        let bindings = TypeBindings::new();
+        let ty = compute_expr::compute_expr_type(access, &bindings, ctx);
+        assert!(
+            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            "expected Int (or super), got {ty:?}"
+        );
+    });
+}
+
+#[test]
+fn qualified_access_resolves_to_member_type() {
+    let base = harness::load_test_base();
+    // Property access on a typed receiver. `foo.x` should have type Int.
+    let src = r#"
+class Foo {
+  x: Int
+}
+foo: Foo = new Foo { x = 1 }
+y = foo.x
+"#;
+    harness::with_snippet(&base, src, |ctx| {
+        let access = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::QualifiedAccessExpr));
+        let bindings = TypeBindings::new();
+        let ty = compute_expr::compute_expr_type(access, &bindings, ctx);
+        assert!(
+            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            "expected Int (or super), got {ty:?}"
+        );
+    });
+}
+
+#[test]
 fn if_expr_unions_its_branches() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x = if (true) 1 else "two""#, |ctx| {
