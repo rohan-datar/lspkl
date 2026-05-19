@@ -81,7 +81,8 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 return Type::Unknown;
             };
             let reciever_type = compute_expr_type(reciever, bindings, ctx);
-            find_member_on_type(&reciever_type, name, bindings, ctx).unwrap_or(Type::Unknown)
+            find_member_on_type(&reciever_type, name, bindings, ctx)
+                .map_or(Type::Unknown, |(_, ty)| ty)
         }
         NodeKind::UnqualifiedAccessExpr => {
             let Some(name) = ctx.tree.name(node) else {
@@ -92,6 +93,7 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
             };
             if let Some(this_type) =
                 find_member_on_type(&compute_this_type(node, bindings, ctx), name, bindings, ctx)
+                    .map(|(_, ty)| ty)
             {
                 return this_type;
             };
@@ -104,7 +106,9 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 name,
                 bindings,
                 ctx,
-            ) {
+            )
+            .map(|(_, ty)| ty)
+            {
                 return module_type;
             };
             if let Some(base_type) = resolve_type_name_in_module(ctx.base.tree(), name) {

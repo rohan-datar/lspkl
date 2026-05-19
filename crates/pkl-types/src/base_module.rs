@@ -135,6 +135,9 @@ impl BaseModule {
     pub fn annotation_type(&self) -> &Type {
         &self.annotation_type
     }
+    pub fn dynamic_type(&self) -> &Type {
+        &self.dynamic_type
+    }
     pub fn null_type(&self) -> &Type {
         &self.null_type
     }

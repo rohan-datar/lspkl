@@ -550,6 +550,27 @@ impl SyntaxTree {
             _ => false,
         }
     }
+
+    pub fn is_type_name(&self, node: NodeId) -> bool {
+        if !matches!(self.kind(node), NodeKind::QualifiedIdentifier) {
+            return false;
+        }
+        let Some(parent) = self.parent(node) else {
+            return false;
+        };
+        matches!(
+            self.kind(parent),
+            NodeKind::DeclaredType | NodeKind::ClassExtendsClause
+        )
+    }
+
+    pub fn is_property_access(&self, node: NodeId) -> bool {
+        if !matches!(self.kind(node), NodeKind::UnqualifiedAccessExpr) {
+            return false;
+        }
+        self.child(node, |k| matches!(k, NodeKind::ArgumentList))
+            .is_none()
+    }
 }
 
 /// Long-name list used by `NodeKind::name`.

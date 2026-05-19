@@ -124,6 +124,48 @@ y = foo.x
 }
 
 #[test]
+fn let_binding_resolves_through_inner_function() {
+    // `myVar` is bound by a let; the function literal introduces its own param
+    // `y`. Looking up `myVar` from inside the function body requires walking
+    // out past the function's ParameterList to the enclosing LetExpr.
+    let base = harness::load_test_base();
+    let src = "x = let (myVar: Int = 1) (y: Int) -> myVar + y";
+    harness::with_snippet(&base, src, |ctx| {
+        let my_var = find_unqualified_access_named(ctx.tree, "myVar")
+            .expect("expected an UnqualifiedAccessExpr named `myVar`");
+        let bindings = TypeBindings::new();
+        let ty = compute_expr::compute_expr_type(my_var, &bindings, ctx);
+        assert!(
+            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            "expected Int (or super) for `myVar`, got {ty:?}"
+        );
+    });
+}
+
+fn find_unqualified_access_named(
+    tree: &pkl_analysis::ast::SyntaxTree,
+    target: &str,
+) -> Option<pkl_analysis::ast::NodeId> {
+    fn go(
+        tree: &pkl_analysis::ast::SyntaxTree,
+        id: pkl_analysis::ast::NodeId,
+        target: &str,
+    ) -> Option<pkl_analysis::ast::NodeId> {
+        if matches!(tree.kind(id), NodeKind::UnqualifiedAccessExpr) && tree.name(id) == Some(target)
+        {
+            return Some(id);
+        }
+        for &child in tree.children(id) {
+            if let Some(hit) = go(tree, child, target) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+    go(tree, tree.root(), target)
+}
+
+#[test]
 fn if_expr_unions_its_branches() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x = if (true) 1 else "two""#, |ctx| {
@@ -131,9 +173,6 @@ fn if_expr_unions_its_branches() {
         let bindings = TypeBindings::new();
         let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
 
-        // Should be Int | "two" (or Int | String — depends on whether you keep
-        // the literal type for the else branch). Whichever you choose, both
-        // sub-types must be subtypes of the inferred type.
         assert!(ctx.base.int_type().is_subtype_of(&ty, ctx));
     });
 }

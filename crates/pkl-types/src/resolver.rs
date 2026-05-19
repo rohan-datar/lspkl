@@ -80,7 +80,7 @@ pub fn find_member_on_type(
     name: &str,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
-) -> Option<Type> {
+) -> Option<(NodeRef, Type)> {
     match ty {
         Type::Class {
             class_node,
@@ -96,13 +96,16 @@ pub fn find_member_on_type(
                 .iter()
                 .find(|&&n| tree.name(n) == Some(name))
             {
-                let type_annotation =
-                    tree.child(class_member, |k| matches!(k, NodeKind::TypeAnnotation))?;
-                Some(to_type(
-                    NodeRef::new(class_node.file_id, type_annotation),
-                    &member_bindings,
-                    ctx,
-                ))
+                let annotation =
+                    tree.child(class_member, |k| matches!(k, NodeKind::TypeAnnotation));
+                let ty = annotation
+                    .map(|ann| {
+                        to_type(NodeRef::new(class_node.file_id, ann), &member_bindings, ctx)
+                    })
+                    .unwrap_or(Type::Unknown);
+                let member_ref = NodeRef::new(class_node.file_id, class_member);
+
+                Some((member_ref, ty))
             } else {
                 let extends_target = tree.class_extends_target(class_node.node_id)?;
                 let super_type_name = tree.qualified_identifier_segments(extends_target);
@@ -130,13 +133,13 @@ pub fn find_member_on_type(
                 .iter()
                 .find(|&&n| tree.name(n) == Some(name))
             {
-                let type_annotation =
-                    tree.child(module_member, |k| matches!(k, NodeKind::TypeAnnotation))?;
-                Some(to_type(
-                    NodeRef::new(module_node.file_id, type_annotation),
-                    bindings,
-                    ctx,
-                ))
+                let annotation =
+                    tree.child(module_member, |k| matches!(k, NodeKind::TypeAnnotation));
+                let ty = annotation
+                    .map(|ann| to_type(NodeRef::new(module_node.file_id, ann), bindings, ctx))
+                    .unwrap_or(Type::Unknown);
+                let member_ref = NodeRef::new(module_node.file_id, module_member);
+                Some((member_ref, ty))
             } else {
                 let _super_module = tree.module_extends_or_amends_target()?;
                 todo!("open the parent module and recurse")
@@ -145,17 +148,18 @@ pub fn find_member_on_type(
         Type::Alias { .. } => find_member_on_type(&ty.unaliased(ctx), name, bindings, ctx),
         Type::Union { left, right, .. } => {
             let left_member = find_member_on_type(left, name, bindings, ctx);
-            let Some(right_member) = find_member_on_type(right, name, bindings, ctx) else {
-                return left_member;
-            };
-            if let Some(left_member) = left_member {
-                Some(Type::Union {
-                    left: Box::new(left_member),
-                    right: Box::new(right_member),
-                    constraints: vec![],
-                })
-            } else {
-                Some(right_member)
+            let right_member = find_member_on_type(right, name, bindings, ctx);
+            match (left_member, right_member) {
+                (Some((l_ref, l_ty)), Some((_, r_ty))) => Some((
+                    l_ref,
+                    Type::Union {
+                        left: Box::new(l_ty),
+                        right: Box::new(r_ty),
+                        constraints: vec![],
+                    },
+                )),
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (None, None) => None,
             }
         }
         _ => None,
@@ -171,66 +175,89 @@ pub fn resolve_local_binding(
 ) -> Option<Type> {
     let mut current = ctx.tree.parent(node);
     while let Some(id) = current {
-        match ctx.tree.kind(id) {
-            NodeKind::LetExpr => {
-                let typed_identifier = ctx
-                    .tree
-                    .child(id, |k| matches!(k, NodeKind::TypedIdentifier))?;
-                if ctx.tree.name(typed_identifier) != Some(name) {
-                    current = ctx.tree.parent(id);
-                    continue;
-                }
-                if let Some(explicit_anotation) = ctx
-                    .tree
-                    .child(typed_identifier, |k| matches!(k, NodeKind::TypedIdentifier))
-                {
-                    let type_node = ctx.tree.child(explicit_anotation, |k| k.is_type_node())?;
-                    return Some(to_type(NodeRef::new(ctx.file_id, type_node), bindings, ctx));
-                } else {
-                    let expr = ctx.tree.child(typed_identifier, |k| k.is_expr_node())?;
-                    return Some(compute_expr_type(expr, bindings, ctx));
-                };
-            }
+        let hit = match ctx.tree.kind(id) {
+            NodeKind::LetExpr => match_let_binding(id, name, bindings, ctx),
             NodeKind::FunctionLiteralExpr => {
-                let param_list = ctx
-                    .tree
-                    .child(id, |k| matches!(k, NodeKind::ParameterList))?;
-                let &typed_identifier = ctx
-                    .tree
-                    .children_matching(param_list, |k| matches!(k, NodeKind::TypedIdentifier))
-                    .iter()
-                    .find(|&&n| ctx.tree.name(n) == Some(name))?;
-                let annotation = ctx
-                    .tree
-                    .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))?;
-                let type_node = ctx.tree.child(annotation, |k| k.is_type_node())?;
-                return Some(to_type(NodeRef::new(ctx.file_id, type_node), bindings, ctx));
+                let param_list = ctx.tree.child(id, |k| matches!(k, NodeKind::ParameterList));
+                param_list.and_then(|pl| match_param(pl, name, bindings, ctx))
             }
             NodeKind::ClassMethod => {
-                let method_header = ctx
-                    .tree
-                    .child(id, |k| matches!(k, NodeKind::MethodHeader))?;
                 let param_list = ctx
                     .tree
-                    .child(method_header, |k| matches!(k, NodeKind::ParameterList))?;
-                let &typed_identifier = ctx
-                    .tree
-                    .children_matching(param_list, |k| matches!(k, NodeKind::TypedIdentifier))
-                    .iter()
-                    .find(|&&n| ctx.tree.name(n) == Some(name))?;
-                let annotation = ctx
-                    .tree
-                    .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))?;
-                let type_node = ctx.tree.child(annotation, |k| k.is_type_node())?;
-                return Some(to_type(NodeRef::new(ctx.file_id, type_node), bindings, ctx));
+                    .child(id, |k| matches!(k, NodeKind::MethodHeader))
+                    .and_then(|mh| ctx.tree.child(mh, |k| matches!(k, NodeKind::ParameterList)));
+                param_list.and_then(|pl| match_param(pl, name, bindings, ctx))
             }
-            _ => {
-                current = ctx.tree.parent(id);
-            }
+            _ => None,
+        };
+        if hit.is_some() {
+            return hit;
         }
+        current = ctx.tree.parent(id);
+    }
+    None
+}
+
+/// If `let_node`'s TypedIdentifier matches `name`, return its type; otherwise
+/// `None`.
+fn match_let_binding(
+    let_node: NodeId,
+    name: &str,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Option<Type> {
+    let typed_identifier = ctx
+        .tree
+        .child(let_node, |k| matches!(k, NodeKind::TypedIdentifier))?;
+    if ctx.tree.name(typed_identifier) != Some(name) {
+        return None;
     }
 
-    None
+    // Prefer the explicit annotation, fall back to inferring from the
+    // initializer (LetExpr's first expr child), else Unknown.
+    let ty_from_annotation = ctx
+        .tree
+        .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))
+        .and_then(|ann| ctx.tree.child(ann, |k| k.is_type_node()))
+        .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx));
+
+    if let Some(ty) = ty_from_annotation {
+        return Some(ty);
+    }
+
+    let initializer = ctx
+        .tree
+        .children_matching(let_node, |k| k.is_expr_node())
+        .first()
+        .copied();
+    Some(
+        initializer
+            .map(|expr| compute_expr_type(expr, bindings, ctx))
+            .unwrap_or(Type::Unknown),
+    )
+}
+
+/// If any `TypedIdentifier` child of `param_list` matches `name`, return its
+/// declared type (or `Type::Unknown` if the param has no annotation).
+fn match_param(
+    param_list: NodeId,
+    name: &str,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Option<Type> {
+    let typed_identifier = ctx
+        .tree
+        .children_matching(param_list, |k| matches!(k, NodeKind::TypedIdentifier))
+        .into_iter()
+        .find(|&n| ctx.tree.name(n) == Some(name))?;
+
+    let ty = ctx
+        .tree
+        .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))
+        .and_then(|ann| ctx.tree.child(ann, |k| k.is_type_node()))
+        .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx))
+        .unwrap_or(Type::Unknown);
+    Some(ty)
 }
 
 pub fn class_member_bindings(
