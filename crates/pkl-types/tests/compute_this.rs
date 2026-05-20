@@ -43,20 +43,21 @@ fn this_type_inside_class_is_that_class() {
 }
 
 #[test]
-fn this_type_inside_typealias_body_is_unknown() {
+fn this_type_inside_constrained_type_is_inner_type() {
     let base = harness::load_test_base();
-    // A typealias body is a type-syntax position; `this` has no useful type.
-    // A-level returns Unknown.
+    // Inside `Int(this > 0)`, `this` should resolve to the type being
+    // constrained — `Int` — not to the enclosing module/typealias.
+    // (This was previously asserting `Unknown` in the A-level subset.)
     harness::with_snippet(&base, "typealias Bar = Int(this > 0)", |ctx| {
-        // Find the `this` reference inside the constraint. ThisExpr is the
-        // cleanest target; fall back to a literal if your grammar doesn't
-        // surface it that way.
         let inner = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::ThisExpr));
         let bindings = TypeBindings::new();
         let ty = compute_expr::compute_this_type(inner, &bindings, ctx);
 
-        // A-level: returns Unknown because TypeAlias is one of the bailout cases.
-        assert_eq!(ty, Type::Unknown);
+        // Should be Type::Class pointing at Int (which lives in pkl:base).
+        assert!(
+            ty.class_equals(ctx.base.int_type()),
+            "expected Type::Class for Int, got {ty:?}"
+        );
     });
 }
 

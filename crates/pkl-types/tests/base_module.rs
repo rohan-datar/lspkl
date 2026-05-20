@@ -42,7 +42,11 @@ fn well_known_types_are_distinct() {
         ("string vs int", base.string_type(), base.int_type()),
         ("int vs float", base.int_type(), base.float_type()),
         ("any vs null", base.any_type(), base.null_type()),
-        ("listing vs mapping", base.listing_type(), base.mapping_type()),
+        (
+            "listing vs mapping",
+            base.listing_type(),
+            base.mapping_type(),
+        ),
     ];
     for (label, a, b) in pairs {
         assert_ne!(a, b, "{label}: accessors must return distinct types");

@@ -2,11 +2,11 @@
 
 use pkl_analysis::ast::{NodeId, NodeKind, TokenType};
 
+use crate::NodeRef;
 use crate::context::AnalysisContext;
-use crate::resolver::{find_member_on_type, resolve_local_binding, resolve_type_name_in_module};
+use crate::resolver::{find_member_on_type, resolve_unqualified_access};
 use crate::to_type::to_type;
 use crate::ty::{Type, TypeBindings};
-use crate::{FileId, NodeRef};
 
 /// Infer the [`Type`] of an expression node.
 ///
@@ -81,41 +81,15 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 return Type::Unknown;
             };
             let reciever_type = compute_expr_type(reciever, bindings, ctx);
-            find_member_on_type(&reciever_type, name, bindings, ctx)
-                .map_or(Type::Unknown, |(_, ty)| ty)
+            find_member_on_type(&reciever_type, name, bindings, ctx).map_or(Type::Unknown, |r| r.ty)
         }
         NodeKind::UnqualifiedAccessExpr => {
             let Some(name) = ctx.tree.name(node) else {
                 return Type::Unknown;
             };
-            if let Some(local_type) = resolve_local_binding(node, name, bindings, ctx) {
-                return local_type;
-            };
-            if let Some(this_type) =
-                find_member_on_type(&compute_this_type(node, bindings, ctx), name, bindings, ctx)
-                    .map(|(_, ty)| ty)
-            {
-                return this_type;
-            };
-            if let Some(module_type) = find_member_on_type(
-                &Type::Module {
-                    module_node: NodeRef::new(ctx.file_id, ctx.tree.root()),
-                    reference_name: "".to_string(), // this is probably fine, we don't really care about the module name
-                    constraints: vec![],
-                },
-                name,
-                bindings,
-                ctx,
-            )
-            .map(|(_, ty)| ty)
-            {
-                return module_type;
-            };
-            if let Some(base_type) = resolve_type_name_in_module(ctx.base.tree(), name) {
-                return to_type(NodeRef::new(FileId::BASE, base_type), bindings, ctx);
-            };
-
-            Type::Unknown
+            resolve_unqualified_access(node, name, bindings, ctx)
+                .map(|r| r.ty)
+                .unwrap_or(Type::Unknown)
         }
         _ => Type::Unknown,
     }
@@ -135,6 +109,12 @@ pub fn compute_this_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 };
             }
             NodeKind::Class => return Type::class(NodeRef::new(ctx.file_id, id)),
+            NodeKind::ConstrainedType => {
+                let Some(inner) = ctx.tree.child(id, |k| k.is_type_node()) else {
+                    return Type::Unknown;
+                };
+                return to_type(NodeRef::new(ctx.file_id, inner), bindings, ctx);
+            }
             NodeKind::TypeAlias => return Type::Unknown,
             NodeKind::AmendExpr | NodeKind::NewExpr | NodeKind::ObjectBody => return Type::Unknown, // TODO properly handle these cases
             _ => current = ctx.tree.parent(id),

@@ -207,6 +207,21 @@ impl NodeKind {
         )
     }
 
+    pub fn is_container(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::Class
+                | NodeKind::ClassMethod
+                | NodeKind::ClassProperty
+                | NodeKind::ObjectProperty
+                | NodeKind::ObjectEntry
+                | NodeKind::ObjectElement
+                | NodeKind::ObjectMethod
+                | NodeKind::MemberPredicate
+                | NodeKind::FunctionLiteralExpr
+        )
+    }
+
     pub fn is_type_node(&self) -> bool {
         matches!(
             self,
@@ -479,7 +494,13 @@ impl SyntaxTree {
     }
 
     pub fn modifiers(&self, id: NodeId) -> Vec<TokenType> {
-        self.children(id)
+        let holder = match self.kind(id) {
+            NodeKind::ClassMethod | NodeKind::ObjectMethod => self
+                .child(id, |k| matches!(k, NodeKind::MethodHeader))
+                .unwrap_or(id),
+            _ => id,
+        };
+        self.children(holder)
             .iter()
             .copied()
             .filter_map(|c| match self.kind(c) {
@@ -494,9 +515,12 @@ impl SyntaxTree {
     }
 
     pub fn is_amend(&self) -> bool {
-        let Some(header_clause) = self.child(self.root(), |c| {
-            matches!(c, NodeKind::ModuleExtendsAmendsClause)
-        }) else {
+        let Some(header) = self.child(self.root(), |c| matches!(c, NodeKind::ModuleHeader)) else {
+            return false;
+        };
+        let Some(header_clause) =
+            self.child(header, |c| matches!(c, NodeKind::ModuleExtendsAmendsClause))
+        else {
             return false;
         };
 

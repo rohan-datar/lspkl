@@ -170,8 +170,8 @@ fn get_or_load_reads_from_disk() {
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "foo = 1").unwrap();
     // tempfile paths on Unix are ASCII-only so no percent-encoding is needed.
-    let url = Uri::parse(format!("file://{}", tmp.path().display()))
-        .expect("tempfile path must convert");
+    let url =
+        Uri::parse(format!("file://{}", tmp.path().display())).expect("tempfile path must convert");
 
     let mgr = FileManager::new();
     let file = mgr

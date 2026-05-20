@@ -13,8 +13,8 @@ use std::sync::Arc;
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc};
 
-use tracing::{error, info};
 use fluent_uri::Uri;
+use tracing::{error, info};
 
 use crate::state::ServerState;
 

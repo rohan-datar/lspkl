@@ -83,11 +83,17 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
                 _ => Type::Unknown,
             }
         }
-        ParenthesizedType | DefaultUnionType => {
-            to_type(node.with_node(tree.children(node.node_id)[0]), bindings, ctx)
-        }
-        NullableType => to_type(node.with_node(tree.children(node.node_id)[0]), bindings, ctx)
-            .nullable(ctx),
+        ParenthesizedType | DefaultUnionType => to_type(
+            node.with_node(tree.children(node.node_id)[0]),
+            bindings,
+            ctx,
+        ),
+        NullableType => to_type(
+            node.with_node(tree.children(node.node_id)[0]),
+            bindings,
+            ctx,
+        )
+        .nullable(ctx),
         ConstrainedType => {
             let Some(inner) = tree.child(node.node_id, |c| c.is_type_node()) else {
                 return Type::Unknown;
