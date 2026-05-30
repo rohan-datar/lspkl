@@ -323,7 +323,7 @@ impl Type {
 
     /// True when `Null` is a subtype of `self` (i.e., the value can be null).
     pub fn is_nullable(&self, ctx: &AnalysisContext) -> bool {
-        self.is_subtype_of(ctx.base.null_type(), ctx)
+        ctx.base.null_type().is_subtype_of(self, ctx)
     }
 
     /// Strip `Null` out of a union. Returns `self` if not nullable.

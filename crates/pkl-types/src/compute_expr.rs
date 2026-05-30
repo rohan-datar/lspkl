@@ -72,16 +72,29 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
             let Some(reciever) = ctx.tree.child(node, |k| k.is_expr_node()) else {
                 return Type::Unknown;
             };
-            let Some(accessor) = ctx.tree.child(node, |k| {
-                matches!(k, NodeKind::Terminal(TokenType::Identifier))
-            }) else {
-                return Type::Unknown;
-            };
-            let Some(name) = ctx.tree.name(accessor) else {
+            let Some(name) = ctx.tree.name(node) else {
                 return Type::Unknown;
             };
             let reciever_type = compute_expr_type(reciever, bindings, ctx);
-            find_member_on_type(&reciever_type, name, bindings, ctx).map_or(Type::Unknown, |r| r.ty)
+
+            let is_null_safe = ctx
+                .tree
+                .child(node, |k| {
+                    matches!(k, NodeKind::Terminal(TokenType::Identifier))
+                })
+                .map(|accessor| {
+                    let between = ctx.tree.span(reciever).end_byte as usize
+                        ..ctx.tree.span(accessor).begin_byte as usize;
+                    ctx.tree.source()[between].contains("?.")
+                })
+                .unwrap_or(false);
+            let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx)
+                .map_or(Type::Unknown, |r| r.ty);
+            if is_null_safe {
+                member_ty.nullable(ctx)
+            } else {
+                member_ty
+            }
         }
         NodeKind::UnqualifiedAccessExpr => {
             let Some(name) = ctx.tree.name(node) else {
@@ -91,6 +104,16 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 .map(|r| r.ty)
                 .unwrap_or(Type::Unknown)
         }
+        NodeKind::ModuleExpr => Type::Module {
+            module_node: NodeRef::new(ctx.file_id, ctx.tree.root()),
+            reference_name: "".to_string(),
+            constraints: vec![],
+        },
+        NodeKind::NewExpr => ctx
+            .tree
+            .child(node, |k| k.is_type_node())
+            .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx))
+            .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
 }

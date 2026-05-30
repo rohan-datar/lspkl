@@ -5,7 +5,7 @@
 mod harness;
 
 use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::resolver::{find_member_on_type, resolve_unqualified_access};
+use pkl_types::resolver::{find_member_on_type, resolve_declared_type, resolve_unqualified_access};
 use pkl_types::{NodeRef, Type, TypeBindings};
 
 #[test]
@@ -62,6 +62,60 @@ class MyPerson extends Person {
             resolved.ty
         );
     });
+}
+
+#[test]
+fn type_parameter_resolves_inside_typealias_body() {
+    let base = harness::load_test_base();
+    // `T` appears as a type-name reference inside the typealias body. It
+    // should resolve to the `TypeParameter` declaration on the enclosing
+    // typealias, NOT fall through to module/base lookup.
+    let src = "typealias MyAlias<T> = Listing<T>";
+
+    harness::with_snippet(&base, src, |ctx| {
+        // Find the inner `T` — the DeclaredType inside Listing's TypeArgumentList.
+        let inner_t = find_declared_type_named(ctx.tree, "T")
+            .expect("expected a DeclaredType named `T` inside the typealias body");
+
+        let resolved = resolve_declared_type(ctx, NodeRef::new(ctx.file_id, inner_t))
+            .expect("expected `T` to resolve via the enclosing typealias's TypeParameterList");
+
+        // The resolved NodeRef should point at a TypeParameter node — that's
+        // the binding site for `T` on the typealias.
+        let target_tree = ctx
+            .tree_for(resolved.file_id)
+            .expect("resolved NodeRef should be in a known file");
+        assert!(
+            matches!(target_tree.kind(resolved.node_id), NodeKind::TypeParameter),
+            "expected resolved kind TypeParameter, got {:?}",
+            target_tree.kind(resolved.node_id),
+        );
+        assert_eq!(
+            target_tree.name(resolved.node_id),
+            Some("T"),
+            "resolved TypeParameter should be named `T`",
+        );
+    });
+}
+
+fn find_declared_type_named(tree: &SyntaxTree, target: &str) -> Option<NodeId> {
+    fn go(tree: &SyntaxTree, id: NodeId, target: &str) -> Option<NodeId> {
+        if matches!(tree.kind(id), NodeKind::DeclaredType) {
+            let segments = tree.qualified_identifier_segments(
+                tree.child(id, |k| matches!(k, NodeKind::QualifiedIdentifier))?,
+            );
+            if segments.last().copied() == Some(target) && segments.len() == 1 {
+                return Some(id);
+            }
+        }
+        for &child in tree.children(id) {
+            if let Some(hit) = go(tree, child, target) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+    go(tree, tree.root(), target)
 }
 
 fn find_class_named(tree: &SyntaxTree, target: &str) -> Option<NodeId> {

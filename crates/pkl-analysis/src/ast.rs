@@ -460,9 +460,32 @@ impl SyntaxTree {
 
     /// Identifier terminal child (for class/property/method name lookups).
     pub fn identifier(&self, id: NodeId) -> Option<NodeId> {
-        self.child(id, |k| {
+        let holder = match self.kind(id) {
+            NodeKind::ClassMethod | NodeKind::ObjectMethod => self
+                .child(id, |k| matches!(k, NodeKind::MethodHeader))
+                .unwrap_or(id),
+            _ => id,
+        };
+        self.child(holder, |k| {
             matches!(k, NodeKind::Terminal(TokenType::Identifier))
         })
+    }
+
+    pub fn modifiers(&self, id: NodeId) -> Vec<TokenType> {
+        let holder = match self.kind(id) {
+            NodeKind::ClassMethod | NodeKind::ObjectMethod => self
+                .child(id, |k| matches!(k, NodeKind::MethodHeader))
+                .unwrap_or(id),
+            _ => id,
+        };
+        self.children(holder)
+            .iter()
+            .copied()
+            .filter_map(|c| match self.kind(c) {
+                NodeKind::Terminal(tt) if tt.is_modifier() => Some(*tt),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn name(&self, id: NodeId) -> Option<&str> {
@@ -491,23 +514,6 @@ impl SyntaxTree {
         .iter()
         .map(|&n| unquote_identifier(self.text(n)))
         .collect()
-    }
-
-    pub fn modifiers(&self, id: NodeId) -> Vec<TokenType> {
-        let holder = match self.kind(id) {
-            NodeKind::ClassMethod | NodeKind::ObjectMethod => self
-                .child(id, |k| matches!(k, NodeKind::MethodHeader))
-                .unwrap_or(id),
-            _ => id,
-        };
-        self.children(holder)
-            .iter()
-            .copied()
-            .filter_map(|c| match self.kind(c) {
-                NodeKind::Terminal(tt) if tt.is_modifier() => Some(*tt),
-                _ => None,
-            })
-            .collect()
     }
 
     pub fn has_modifier(&self, id: NodeId, modifier: TokenType) -> bool {

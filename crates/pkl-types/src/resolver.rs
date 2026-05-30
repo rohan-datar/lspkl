@@ -37,12 +37,21 @@ pub fn resolve_type_name_in_module(tree: &SyntaxTree, name: &str) -> Option<Node
 pub fn resolve_declared_type(ctx: &AnalysisContext, node: NodeRef) -> Option<NodeRef> {
     let tree = ctx.tree_for(node.file_id)?;
     let name_parts = tree.declared_type_parts(node.node_id);
-    resolve_type_name(ctx, &name_parts)
+    resolve_type_name(ctx, &name_parts, node)
 }
 
 // TODO: properly support qualified identifiers
-pub fn resolve_type_name(ctx: &AnalysisContext, name_parts: &[&str]) -> Option<NodeRef> {
+pub fn resolve_type_name(
+    ctx: &AnalysisContext,
+    name_parts: &[&str],
+    node: NodeRef,
+) -> Option<NodeRef> {
     let simple_name = name_parts.last()?;
+    if name_parts.len() == 1 {
+        if let Some(tp) = resolve_local_type_parameter(node, simple_name, ctx) {
+            return Some(tp);
+        }
+    }
     if let Some(type_def) = resolve_type_name_in_module(ctx.tree, simple_name) {
         return Some(NodeRef {
             file_id: ctx.file_id,
@@ -74,7 +83,11 @@ pub fn is_subclass(a: NodeRef, b: NodeRef, ctx: &AnalysisContext) -> bool {
 
     let super_type_name = a_tree.qualified_identifier_segments(extends_target);
 
-    let Some(super_type_node) = resolve_type_name(ctx, &super_type_name) else {
+    let Some(super_type_node) = resolve_type_name(
+        ctx,
+        &super_type_name,
+        NodeRef::new(a.file_id, extends_target),
+    ) else {
         return false;
     };
 
@@ -83,6 +96,17 @@ pub fn is_subclass(a: NodeRef, b: NodeRef, ctx: &AnalysisContext) -> bool {
 
 fn kind_is_class_or_alias(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Class | NodeKind::TypeAlias)
+}
+
+/// Find the `TypeAnnotation` child of a class/object member declaration.
+fn member_type_annotation(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
+    let holder = match tree.kind(member) {
+        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
+            .child(member, |k| matches!(k, NodeKind::MethodHeader))
+            .unwrap_or(member),
+        _ => member,
+    };
+    tree.child(holder, |k| matches!(k, NodeKind::TypeAnnotation))
 }
 
 /// Look up a member by name on a type. Returns the member's resolved type if
@@ -112,8 +136,7 @@ pub fn find_member_on_type(
                 .iter()
                 .find(|&&n| tree.name(n) == Some(name))
             {
-                let annotation =
-                    tree.child(class_member, |k| matches!(k, NodeKind::TypeAnnotation));
+                let annotation = member_type_annotation(tree, class_member);
                 let ty = annotation
                     .and_then(|ann| tree.child(ann, |k| k.is_type_node()))
                     .map(|ann| {
@@ -126,7 +149,11 @@ pub fn find_member_on_type(
             } else {
                 let extends_target = tree.class_extends_target(class_node.node_id)?;
                 let super_type_name = tree.qualified_identifier_segments(extends_target);
-                let super_type_node = resolve_type_name(ctx, &super_type_name)?;
+                let super_type_node = resolve_type_name(
+                    ctx,
+                    &super_type_name,
+                    NodeRef::new(class_node.file_id, extends_target),
+                )?;
 
                 find_member_on_type(&Type::class(super_type_node), name, &member_bindings, ctx)
             }
@@ -146,8 +173,7 @@ pub fn find_member_on_type(
                 .iter()
                 .find(|&&n| tree.name(n) == Some(name))
             {
-                let annotation =
-                    tree.child(module_member, |k| matches!(k, NodeKind::TypeAnnotation));
+                let annotation = member_type_annotation(tree, module_member);
                 let ty = annotation
                     .and_then(|ann| tree.child(ann, |k| k.is_type_node()))
                     .map(|ann| to_type(NodeRef::new(module_node.file_id, ann), bindings, ctx))
@@ -214,6 +240,45 @@ pub fn resolve_local_binding(
             return hit;
         }
         current = ctx.tree.parent(id);
+    }
+    None
+}
+
+fn resolve_local_type_parameter(
+    node: NodeRef,
+    name: &str,
+    ctx: &AnalysisContext,
+) -> Option<NodeRef> {
+    // Walk ancestors in the file the `node` lives in — NOT `ctx.tree`. The
+    // resolver can be invoked across files when find_member_on_type follows
+    // an extends chain into pkl:base, so the use-site tree differs from the
+    // user's tree.
+    let tree = ctx.tree_for(node.file_id)?;
+    let mut current = tree.parent(node.node_id);
+    while let Some(id) = current {
+        if matches!(
+            tree.kind(id),
+            NodeKind::Class | NodeKind::TypeAlias | NodeKind::ClassMethod
+        ) {
+            let holder = if matches!(tree.kind(id), NodeKind::ClassMethod) {
+                tree.child(id, |k| matches!(k, NodeKind::MethodHeader))
+                    .unwrap_or(id)
+            } else {
+                id
+            };
+            if let Some(param_list) =
+                tree.child(holder, |k| matches!(k, NodeKind::TypeParameterList))
+            {
+                if let Some(tp) = tree
+                    .children_matching(param_list, |k| matches!(k, NodeKind::TypeParameter))
+                    .into_iter()
+                    .find(|&n| tree.name(n) == Some(name))
+                {
+                    return Some(NodeRef::new(node.file_id, tp));
+                }
+            }
+        }
+        current = tree.parent(id);
     }
     None
 }
