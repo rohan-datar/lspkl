@@ -1,0 +1,10 @@
+---
+source: crates/pkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+3:17 error: unresolved reference: Baz
+5:17 error: unresolved reference: Baz
+9:8 error: unresolved reference: Baz
+11:8 error: unresolved reference: Baz
+15:1 error: could not find annotation: Baz
+18:1 error: could not find annotation: Bar.Baz

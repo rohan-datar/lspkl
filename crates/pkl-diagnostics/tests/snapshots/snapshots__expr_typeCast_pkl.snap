@@ -1,0 +1,6 @@
+---
+source: crates/pkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:8 error: type cast cannot succeed
+3:8 error: type cast is redundant

@@ -1,0 +1,10 @@
+---
+source: crates/pkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+2:3 error: modifier `open` is not applicable for object properties
+  fix: delete `open`
+    replace 2:3-2:7 with ""
+4:3 error: modifier `open` is not applicable for object methods
+  fix: delete `open`
+    replace 4:3-4:7 with ""

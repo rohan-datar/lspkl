@@ -1,0 +1,7 @@
+---
+source: crates/pkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+4:15 warning: Nullability mismatch. Expected: String. Actual: String?
+7:15 warning: Nullability mismatch. Expected: String. Actual: String?
+10:17 warning: Nullability mismatch. Expected: String. Actual: String?
