@@ -47,10 +47,10 @@ pub fn resolve_type_name(
     node: NodeRef,
 ) -> Option<NodeRef> {
     let simple_name = name_parts.last()?;
-    if name_parts.len() == 1 {
-        if let Some(tp) = resolve_local_type_parameter(node, simple_name, ctx) {
-            return Some(tp);
-        }
+    if name_parts.len() == 1
+        && let Some(tp) = resolve_local_type_parameter(node, simple_name, ctx)
+    {
+        return Some(tp);
     }
     if let Some(type_def) = resolve_type_name_in_module(ctx.tree, simple_name) {
         return Some(NodeRef {
@@ -268,14 +268,12 @@ fn resolve_local_type_parameter(
             };
             if let Some(param_list) =
                 tree.child(holder, |k| matches!(k, NodeKind::TypeParameterList))
-            {
-                if let Some(tp) = tree
+                && let Some(tp) = tree
                     .children_matching(param_list, |k| matches!(k, NodeKind::TypeParameter))
                     .into_iter()
                     .find(|&n| tree.name(n) == Some(name))
-                {
-                    return Some(NodeRef::new(node.file_id, tp));
-                }
+            {
+                return Some(NodeRef::new(node.file_id, tp));
             }
         }
         current = tree.parent(id);
@@ -403,4 +401,68 @@ pub fn class_member_bindings(
         }
     };
     member_bindings
+}
+
+/// Compute the type of the receiver of an access expression.
+pub fn access_receiver_type(
+    access: NodeId,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Option<Type> {
+    match ctx.tree.kind(access) {
+        NodeKind::UnqualifiedAccessExpr => Some(compute_this_type(access, bindings, ctx)),
+        NodeKind::QualifiedAccessExpr => {
+            let receiver = ctx.tree.child(access, |k| k.is_expr_node())?;
+            Some(compute_expr_type(receiver, bindings, ctx))
+        }
+        // TODO: once SuperAccessExpr resolution lands, return
+        // the parent class of compute_this_type via class_extends_target +
+        // resolve_type_name.
+        NodeKind::SuperAccessExpr => Some(Type::Unknown),
+        _ => None,
+    }
+}
+
+/// Return the key type of a container-shaped class type at this position.
+///
+/// - `Listing<E>` / `List<E>` → `Int` (indices)
+/// - `Mapping<K,V>` / `Map<K,V>` → `K`
+/// - Anything else → `None`
+pub fn container_key_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
+    let Type::Class { type_args, .. } = ty else {
+        return None;
+    };
+    if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)
+    {
+        type_args.first().cloned()
+    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx)
+        || ty.is_subtype_of(ctx.base.list_type(), ctx)
+    {
+        Some(ctx.base.int_type().clone())
+    } else {
+        None
+    }
+}
+
+/// Return the value (element) type of a container-shaped class type at this
+/// position.
+///
+/// - `Listing<E>` / `List<E>` / `Set<E>` → `E`
+/// - `Mapping<K,V>` / `Map<K,V>` → `V`
+/// - Anything else → `None`
+pub fn container_value_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
+    let Type::Class { type_args, .. } = ty else {
+        return None;
+    };
+    if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)
+    {
+        type_args.get(1).cloned()
+    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx)
+        || ty.is_subtype_of(ctx.base.list_type(), ctx)
+        || ty.is_subtype_of(ctx.base.set_type(), ctx)
+    {
+        type_args.first().cloned()
+    } else {
+        None
+    }
 }

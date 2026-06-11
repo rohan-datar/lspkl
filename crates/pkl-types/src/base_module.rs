@@ -44,8 +44,11 @@ pub struct BaseModule {
     boolean_type: Type,
     int_type: Type,
     float_type: Type,
+    duration_type: Type,
+    data_size_type: Type,
     number_type: Type,
     string_type: Type,
+    collection_type: Type,
     listing_type: Type,
     list_type: Type,
     set_type: Type,
@@ -59,6 +62,7 @@ pub struct BaseModule {
 
     // typealiases
     non_null_type: Type,
+    comparable_type: Type,
 
     // methods
     listing_to_list_method: NodeRef,
@@ -100,9 +104,12 @@ impl BaseModule {
             boolean_type: find_class(tree.clone(), &classes, "Boolean")?,
             int_type: find_class(tree.clone(), &classes, "Int")?,
             float_type: find_class(tree.clone(), &classes, "Float")?,
+            duration_type: find_class(tree.clone(), &classes, "Duration")?,
+            data_size_type: find_class(tree.clone(), &classes, "DataSize")?,
             number_type: find_class(tree.clone(), &classes, "Number")?,
             string_type: find_class(tree.clone(), &classes, "String")?,
             bytes_type: find_class(tree.clone(), &classes, "Bytes")?,
+            collection_type: find_class(tree.clone(), &classes, "Collection")?,
             listing_type: find_class(tree.clone(), &classes, "Listing")?,
             list_type: find_class(tree.clone(), &classes, "List")?,
             set_type: find_class(tree.clone(), &classes, "Set")?,
@@ -112,6 +119,7 @@ impl BaseModule {
             module_type: find_class(tree.clone(), &classes, "Module")?,
             function_type: find_class(tree.clone(), &classes, "Function")?,
             non_null_type: find_alias(tree.clone(), &aliases, "NonNull")?,
+            comparable_type: find_alias(tree.clone(), &aliases, "Comparable")?,
             varargs_type: find_class(tree.clone(), &classes, "VarArgs")?,
 
             // conversion methods
@@ -215,11 +223,20 @@ impl BaseModule {
     pub fn float_type(&self) -> &Type {
         &self.float_type
     }
+    pub fn duration_type(&self) -> &Type {
+        &self.duration_type
+    }
+    pub fn data_size_type(&self) -> &Type {
+        &self.data_size_type
+    }
     pub fn number_type(&self) -> &Type {
         &self.number_type
     }
     pub fn string_type(&self) -> &Type {
         &self.string_type
+    }
+    pub fn collection_type(&self) -> &Type {
+        &self.collection_type
     }
     pub fn listing_type(&self) -> &Type {
         &self.listing_type
@@ -249,8 +266,13 @@ impl BaseModule {
         &self.varargs_type
     }
 
+    // Type Aliases
     pub fn non_null_type(&self) -> &Type {
         &self.non_null_type
+    }
+
+    pub fn comparable_type(&self) -> &Type {
+        &self.comparable_type
     }
 
     // Specific class members
