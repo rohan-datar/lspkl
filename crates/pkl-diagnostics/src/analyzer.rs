@@ -1,6 +1,6 @@
 //! `Analyzer` trait + the recursive walker that drives it.
 
-use pkl_analysis::ast::NodeId;
+use pkl_syntax::ast::NodeId;
 use pkl_types::AnalysisContext;
 
 use crate::holder::DiagnosticsHolder;

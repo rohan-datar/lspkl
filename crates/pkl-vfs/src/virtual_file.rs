@@ -4,7 +4,7 @@
 use std::sync::{Arc, RwLock};
 
 use fluent_uri::Uri;
-use pkl_analysis::ast::SyntaxTree;
+use pkl_syntax::ast::SyntaxTree;
 
 /// Where the contents of a file came from.
 #[derive(Clone, Debug, PartialEq, Eq)]

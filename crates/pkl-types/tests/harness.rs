@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::{AnalysisContext, BaseModule, FileId};
 
 /// Path of the vendored `base.pkl` fixture. See `tests/fixtures/README.md`.
@@ -45,7 +45,7 @@ pub fn with_snippet<R>(
     source: &str,
     f: impl FnOnce(&AnalysisContext) -> R,
 ) -> R {
-    let tree = pkl_analysis::parse(source).expect("snippet should parse");
+    let tree = pkl_syntax::parse(source).expect("snippet should parse");
     let ctx = AnalysisContext::new(&tree, FileId(1), base);
     f(&ctx)
 }

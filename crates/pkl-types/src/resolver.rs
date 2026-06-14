@@ -1,6 +1,6 @@
 //! Name resolution and class hierarchy queries.
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
 use crate::FileId;
 use crate::compute_expr::{compute_expr_type, compute_this_type};

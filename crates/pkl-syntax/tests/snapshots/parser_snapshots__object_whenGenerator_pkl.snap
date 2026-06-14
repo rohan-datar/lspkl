@@ -1,5 +1,5 @@
 ---
-source: crates/pkl-analysis/tests/parser_snapshots.rs
+source: crates/pkl-syntax/tests/parser_snapshots.rs
 expression: rendered
 ---
 Module

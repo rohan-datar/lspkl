@@ -2,7 +2,7 @@ mod harness;
 
 use std::fs;
 
-use pkl_analysis::parse;
+use pkl_syntax::parse;
 
 #[test]
 fn parser_snapshot_tests() {

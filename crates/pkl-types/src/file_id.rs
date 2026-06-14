@@ -5,7 +5,7 @@
 //! AST is index-based, a `NodeId` alone is meaningless without knowing which
 //! `SyntaxTree` it indexes into. [`NodeRef`] pairs the two.
 
-use pkl_analysis::ast::NodeId;
+use pkl_syntax::ast::NodeId;
 
 /// Opaque identifier for a parsed file. The mapping from `FileId` to a
 /// concrete `SyntaxTree` (or URL) is maintained outside this crate

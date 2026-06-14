@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree, unquote_identifier};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, unquote_identifier};
 use thiserror::Error;
 
 use crate::file_id::{FileId, NodeRef};
@@ -11,7 +11,7 @@ use crate::ty::Type;
 #[derive(Debug, Error)]
 pub enum BaseModuleError {
     #[error("failed to parse base.pkl: {0}")]
-    Parse(#[from] pkl_analysis::ParseError),
+    Parse(#[from] pkl_syntax::ParseError),
 
     #[error("base.pkl is missing the required class `{0}`")]
     MissingClass(String),
@@ -87,7 +87,7 @@ pub struct BaseModule {
 impl BaseModule {
     /// Parse `base.pkl` from a source string and resolve well-known types.
     pub fn load(source: &str) -> Result<Self, BaseModuleError> {
-        let tree = Arc::new(pkl_analysis::parse(source)?);
+        let tree = Arc::new(pkl_syntax::parse(source)?);
         let classes = tree.children_matching(tree.root(), |kind| *kind == NodeKind::Class);
 
         let aliases = tree.children_matching(tree.root(), |kind| *kind == NodeKind::TypeAlias);

@@ -58,7 +58,7 @@ fn int_extends_number() {
     // Sanity-check that subtyping over the base hierarchy works at all.
     // Requires Type::is_subtype_of to be implemented.
     let base = harness::load_test_base();
-    let dummy_tree = pkl_analysis::parse("").expect("empty parse");
+    let dummy_tree = pkl_syntax::parse("").expect("empty parse");
     let ctx = pkl_types::AnalysisContext::new(&dummy_tree, FileId(1), &base);
 
     assert!(

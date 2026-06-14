@@ -1,7 +1,7 @@
 mod harness;
 
-use pkl_analysis::ast::NodeKind;
-use pkl_analysis::parse;
+use pkl_syntax::ast::NodeKind;
+use pkl_syntax::parse;
 
 #[test]
 fn name_finds_identifier_inside_method_header() {

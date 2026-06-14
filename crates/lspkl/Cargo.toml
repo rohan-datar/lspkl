@@ -11,7 +11,7 @@ name = "lspkl"
 path = "src/main.rs"
 
 [dependencies]
-pkl-analysis.workspace = true
+pkl-syntax.workspace = true
 pkl-vfs.workspace = true
 tower-lsp-server.workspace = true
 tokio = { workspace = true, features = ["full"] }

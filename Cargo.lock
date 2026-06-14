@@ -595,7 +595,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fluent-uri 0.4.1",
- "pkl-analysis",
+ "pkl-syntax",
  "pkl-vfs",
  "serde_json",
  "tokio",
@@ -687,7 +687,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pkl-analysis"
+name = "pkl-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "insta",
+ "pkl-syntax",
+ "pkl-types",
+ "semver",
+]
+
+[[package]]
+name = "pkl-syntax"
 version = "0.1.0"
 dependencies = [
  "insta",
@@ -698,21 +709,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "pkl-diagnostics"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "insta",
- "pkl-analysis",
- "pkl-types",
- "semver",
-]
-
-[[package]]
 name = "pkl-types"
 version = "0.1.0"
 dependencies = [
- "pkl-analysis",
+ "pkl-syntax",
  "thiserror",
 ]
 
@@ -722,7 +722,7 @@ version = "0.1.0"
 dependencies = [
  "dashmap",
  "fluent-uri 0.4.1",
- "pkl-analysis",
+ "pkl-syntax",
  "tempfile",
  "thiserror",
  "tokio",

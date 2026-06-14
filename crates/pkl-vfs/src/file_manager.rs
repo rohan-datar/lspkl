@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use fluent_uri::Uri;
-use pkl_analysis::ast::SyntaxTree;
-use pkl_analysis::parse;
+use pkl_syntax::ast::SyntaxTree;
+use pkl_syntax::parse;
 use thiserror::Error;
 use url;
 
@@ -30,7 +30,7 @@ pub enum FileError {
     },
 
     #[error("parse error: {0}")]
-    Parse(#[from] pkl_analysis::ParseError),
+    Parse(#[from] pkl_syntax::ParseError),
 
     #[error("file is not open: {0}")]
     NotOpen(Uri<String>),

@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use pkl_analysis::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
 use pkl_types::AnalysisContext;
 use semver::Version;
 

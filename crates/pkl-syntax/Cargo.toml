@@ -1,5 +1,5 @@
 [package]
-name = "pkl-analysis"
+name = "pkl-syntax"
 version = "0.1.0"
 edition = "2024"
 

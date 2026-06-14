@@ -24,7 +24,7 @@ fn diagnostic_snapshots() {
             .expect("input path must be under fixtures root");
 
         let source = fs::read_to_string(&input_path).expect("fixture should be readable");
-        let tree = pkl_analysis::parse(&source)
+        let tree = pkl_syntax::parse(&source)
             .unwrap_or_else(|err| panic!("parse failed for {}: {err}", relative.display()));
         let ctx = harness::make_ctx(&tree, &base);
 

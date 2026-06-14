@@ -1,6 +1,6 @@
 //! Validates type expressions
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::to_type::to_type;
 use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
 

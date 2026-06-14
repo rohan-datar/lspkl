@@ -1,7 +1,7 @@
 //! Infer the *expected* type of an expression from its surrounding AST
 //! context.
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 
 use crate::compute_expr::{compute_expr_type, compute_this_type};
 use crate::context::AnalysisContext;

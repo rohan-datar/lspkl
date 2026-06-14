@@ -1,7 +1,7 @@
 //! Validates modifier combinations on classes, methods, properties, and type
 //! aliases.
 
-use pkl_analysis::ast::{NodeId, NodeKind, Span, SyntaxTree, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, Span, SyntaxTree, TokenType};
 use pkl_types::AnalysisContext;
 use semver::Version;
 

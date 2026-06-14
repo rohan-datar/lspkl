@@ -1,7 +1,7 @@
 //! Validates `import` and `amends` URIs
 
 use fluent_uri::UriRef;
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::AnalysisContext;
 
 use crate::analyzer::Analyzer;
@@ -67,7 +67,7 @@ impl ModuleUriAnalyzer {
             let scheme = scheme.as_str();
             if scheme == "pkl" || scheme == "http" || scheme == "https" {
                 holder.add_warning(uri_span, "scheme is not globbable");
-                return;
+                // return;
             }
         }
 

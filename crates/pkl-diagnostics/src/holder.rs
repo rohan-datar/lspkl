@@ -1,6 +1,6 @@
 //! Collects diagnostics emitted by analyzers during a single tree walk.
 
-use pkl_analysis::ast::Span;
+use pkl_syntax::ast::Span;
 
 use crate::diagnostic::{Diagnostic, QuickFix, Severity};
 

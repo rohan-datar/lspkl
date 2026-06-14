@@ -2,7 +2,7 @@
 
 mod harness;
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::{Type, TypeBindings, infer_expr_type::infer_expr_type_from_context};
 
 /// Find the *nth* node whose kind satisfies `predicate`. Useful when a snippet

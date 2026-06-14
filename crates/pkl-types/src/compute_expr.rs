@@ -1,6 +1,6 @@
 //! Type inference for expressions.
 
-use pkl_analysis::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
 
 use crate::NodeRef;
 use crate::context::AnalysisContext;

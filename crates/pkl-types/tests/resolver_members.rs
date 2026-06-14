@@ -4,7 +4,7 @@
 
 mod harness;
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::resolver::{find_member_on_type, resolve_declared_type, resolve_unqualified_access};
 use pkl_types::{NodeRef, Type, TypeBindings};
 

@@ -5,7 +5,7 @@
 use crate::analyzer::Analyzer;
 use crate::effective_pkl_version;
 use crate::holder::DiagnosticsHolder;
-use pkl_analysis::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
 use pkl_types::compute_expr::{compute_expr_type, compute_this_type};
 use pkl_types::resolver::{
     ResolvedType, find_member_on_type, resolve_type_name, resolve_unqualified_access,

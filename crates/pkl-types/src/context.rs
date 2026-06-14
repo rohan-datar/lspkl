@@ -1,6 +1,6 @@
 //! Bundled context passed to type-system functions.
 
-use pkl_analysis::ast::SyntaxTree;
+use pkl_syntax::ast::SyntaxTree;
 
 use crate::base_module::BaseModule;
 use crate::file_id::FileId;

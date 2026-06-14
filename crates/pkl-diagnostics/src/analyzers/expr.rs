@@ -1,7 +1,7 @@
 //! Expression-level checks: always-true / always-false conditions, redundant
 //! type casts, redundant null-safe access, etc.
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::to_type::to_type;
 use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};

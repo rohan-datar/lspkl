@@ -1,6 +1,6 @@
 //! Convert AST `PklType` syntax nodes into resolved [`Type`] values.
 
-use pkl_analysis::ast::NodeKind;
+use pkl_syntax::ast::NodeKind;
 
 use crate::ConstraintExpr;
 

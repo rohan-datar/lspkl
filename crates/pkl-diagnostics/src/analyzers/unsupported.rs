@@ -1,6 +1,6 @@
 //! Flags Pkl features that aren't supported in the target Pkl version.
 
-use pkl_analysis::ast::NodeId;
+use pkl_syntax::ast::NodeId;
 use pkl_types::AnalysisContext;
 
 use crate::analyzer::Analyzer;

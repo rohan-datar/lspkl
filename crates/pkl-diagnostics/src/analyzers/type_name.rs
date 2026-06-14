@@ -1,6 +1,6 @@
 //! Validates type names
 
-use pkl_analysis::ast::NodeId;
+use pkl_syntax::ast::NodeId;
 use pkl_types::{AnalysisContext, NodeRef};
 
 use crate::analyzer::Analyzer;

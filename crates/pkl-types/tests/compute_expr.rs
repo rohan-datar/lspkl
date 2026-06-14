@@ -5,7 +5,7 @@
 
 mod harness;
 
-use pkl_analysis::ast::NodeKind;
+use pkl_syntax::ast::NodeKind;
 use pkl_types::{TypeBindings, compute_expr};
 
 #[test]
@@ -143,14 +143,14 @@ fn let_binding_resolves_through_inner_function() {
 }
 
 fn find_unqualified_access_named(
-    tree: &pkl_analysis::ast::SyntaxTree,
+    tree: &pkl_syntax::ast::SyntaxTree,
     target: &str,
-) -> Option<pkl_analysis::ast::NodeId> {
+) -> Option<pkl_syntax::ast::NodeId> {
     fn go(
-        tree: &pkl_analysis::ast::SyntaxTree,
-        id: pkl_analysis::ast::NodeId,
+        tree: &pkl_syntax::ast::SyntaxTree,
+        id: pkl_syntax::ast::NodeId,
         target: &str,
-    ) -> Option<pkl_analysis::ast::NodeId> {
+    ) -> Option<pkl_syntax::ast::NodeId> {
         if matches!(tree.kind(id), NodeKind::UnqualifiedAccessExpr) && tree.name(id) == Some(target)
         {
             return Some(id);

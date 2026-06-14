@@ -12,7 +12,7 @@
 //!
 //! Fixtures: `tests/snapshots/diagnostics/inputs/typecheck/*.pkl`.
 
-use pkl_analysis::ast::NodeId;
+use pkl_syntax::ast::NodeId;
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::infer_expr_type::infer_expr_type_from_context;
 use pkl_types::{AnalysisContext, Type, TypeBindings};

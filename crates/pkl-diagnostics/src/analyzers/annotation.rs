@@ -1,6 +1,6 @@
 //! Validates `@Annotation` usage
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::{AnalysisContext, NodeRef, Type, resolver};
 
 use crate::analyzer::Analyzer;

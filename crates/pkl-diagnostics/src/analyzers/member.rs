@@ -1,7 +1,7 @@
 //! Validates class/object members — duplicate-name checks, override
 //! correctness, abstract members in concrete classes, etc.
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::{AnalysisContext, Type, TypeBindings};
 
 use pkl_types::compute_expr::compute_this_type;

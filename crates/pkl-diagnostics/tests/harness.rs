@@ -1,12 +1,10 @@
 //! Shared utilities for the diagnostics test suite.
-//!
-//! Fixtures are reused from `pkl-analysis` so they live in one place.
 #![allow(dead_code)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pkl_analysis::ast::SyntaxTree;
+use pkl_syntax::ast::SyntaxTree;
 use pkl_types::{AnalysisContext, BaseModule, FileId};
 
 pub fn crate_root() -> PathBuf {
@@ -15,9 +13,10 @@ pub fn crate_root() -> PathBuf {
         .expect("CARGO_MANIFEST_DIR must be reachable")
 }
 
-/// Diagnostic-fixture root, reused from `pkl-analysis`'s tests folder.
+/// Root of the diagnostic input fixtures (`.pkl` files exercising each
+/// analyzer).
 pub fn fixtures_root() -> PathBuf {
-    crate_root().join("../pkl-analysis/tests/snapshots/diagnostics/inputs")
+    crate_root().join("tests/fixtures/diagnostics/inputs")
 }
 
 pub fn base_pkl_path() -> PathBuf {

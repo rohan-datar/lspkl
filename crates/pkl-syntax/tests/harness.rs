@@ -3,9 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pkl_analysis::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
-/// Root of the `pkl-analysis` crate (where fixtures live, under `tests/snapshots/`).
+/// Root of the `pkl-syntax` crate (where fixtures live, under `tests/snapshots/`).
 pub fn crate_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .canonicalize()
@@ -23,10 +23,6 @@ pub fn parser_snapshot_output_dir() -> PathBuf {
     crate_root().join("tests/snapshots/parser/outputs")
 }
 
-pub fn diagnostics_input_dir() -> PathBuf {
-    crate_root().join("tests/snapshots/diagnostics/inputs")
-}
-
 pub fn collect_pkl_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_pkl_files_recursive(root, &mut files);
@@ -42,10 +38,6 @@ pub fn skip_if_missing_parser_fixtures() -> bool {
     let input_dir = parser_snapshot_input_dir();
     let output_dir = parser_snapshot_output_dir();
     !input_dir.exists() || !output_dir.exists()
-}
-
-pub fn skip_if_missing_diagnostics_inputs() -> bool {
-    !diagnostics_input_dir().exists()
 }
 
 fn collect_pkl_files_recursive(root: &Path, files: &mut Vec<PathBuf>) {

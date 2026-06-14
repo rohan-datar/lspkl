@@ -1,6 +1,6 @@
 //! Single diagnostic emitted by an analyzer
 
-use pkl_analysis::ast::Span;
+use pkl_syntax::ast::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {

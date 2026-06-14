@@ -2,7 +2,7 @@
 
 mod harness;
 
-use pkl_analysis::ast::NodeKind;
+use pkl_syntax::ast::NodeKind;
 use pkl_types::{Type, TypeBindings, compute_expr};
 
 #[test]

@@ -1,6 +1,6 @@
 //! Surfaces parser errors and missing nodes as diagnostics.
 
-use pkl_analysis::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::AnalysisContext;
 
 use crate::analyzer::Analyzer;

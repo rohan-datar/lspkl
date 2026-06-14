@@ -7,7 +7,6 @@ insta = "1.43.2"
 tree-sitter = "0.25"
 tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl" }
 
-# Phase 2: VFS + LSP skeleton
 dashmap = "6"
 url = "2"
 fluent-uri = "0.4.1"
@@ -21,7 +20,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = "1"
 
 # Path deps
-pkl-analysis = { path = "crates/pkl-analysis" }
+pkl-syntax = { path = "crates/pkl-syntax" }
 pkl-vfs = { path = "crates/pkl-vfs" }
 pkl-types = { path = "crates/pkl-types" }
 pkl-diagnostics = { path = "crates/pkl-diagnostics" }

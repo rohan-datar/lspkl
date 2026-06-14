@@ -6,7 +6,7 @@ use pkl_types::{AnalysisContext, FileId, Type};
 
 fn ctx<'a>(
     base: &'a pkl_types::BaseModule,
-    dummy: &'a pkl_analysis::ast::SyntaxTree,
+    dummy: &'a pkl_syntax::ast::SyntaxTree,
 ) -> AnalysisContext<'a> {
     AnalysisContext::new(dummy, FileId(1), base)
 }
@@ -14,7 +14,7 @@ fn ctx<'a>(
 #[test]
 fn unknown_is_subtype_of_anything() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(Type::Unknown.is_subtype_of(base.string_type(), &ctx));
@@ -25,7 +25,7 @@ fn unknown_is_subtype_of_anything() {
 #[test]
 fn anything_is_subtype_of_unknown() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(base.string_type().is_subtype_of(&Type::Unknown, &ctx));
@@ -35,7 +35,7 @@ fn anything_is_subtype_of_unknown() {
 #[test]
 fn nothing_is_subtype_of_anything() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(Type::Nothing.is_subtype_of(base.string_type(), &ctx));
@@ -45,7 +45,7 @@ fn nothing_is_subtype_of_anything() {
 #[test]
 fn string_is_subtype_of_any_but_not_int() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(base.string_type().is_subtype_of(base.any_type(), &ctx));
@@ -55,7 +55,7 @@ fn string_is_subtype_of_any_but_not_int() {
 #[test]
 fn string_literal_is_subtype_of_string() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let lit = Type::string_literal("hello");
@@ -67,7 +67,7 @@ fn string_literal_is_subtype_of_string() {
 #[test]
 fn union_subtype_iff_each_component_is() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     // (Int | String) <: Any : both Int and String are subtypes of Any.
@@ -85,7 +85,7 @@ fn union_subtype_iff_each_component_is() {
 #[test]
 fn member_is_subtype_of_a_union_containing_it() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let int_or_string = Type::Union {
@@ -101,7 +101,7 @@ fn member_is_subtype_of_a_union_containing_it() {
 #[test]
 fn type_is_subtype_of_itself() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(base.string_type().is_subtype_of(base.string_type(), &ctx));

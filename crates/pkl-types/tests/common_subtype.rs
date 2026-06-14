@@ -6,7 +6,7 @@ use pkl_types::{AnalysisContext, FileId, Type};
 
 fn ctx<'a>(
     base: &'a pkl_types::BaseModule,
-    dummy: &'a pkl_analysis::ast::SyntaxTree,
+    dummy: &'a pkl_syntax::ast::SyntaxTree,
 ) -> AnalysisContext<'a> {
     AnalysisContext::new(dummy, FileId(1), base)
 }
@@ -14,7 +14,7 @@ fn ctx<'a>(
 #[test]
 fn unknown_has_no_common_subtype_with_anything() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(!Type::Unknown.has_common_subtype_with(base.string_type(), &ctx));
@@ -24,7 +24,7 @@ fn unknown_has_no_common_subtype_with_anything() {
 #[test]
 fn anything_has_no_common_subtype_with_unknown() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
@@ -42,7 +42,7 @@ fn anything_has_no_common_subtype_with_unknown() {
 #[test]
 fn nothing_has_no_common_subtype_with_anything() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(!Type::Nothing.has_common_subtype_with(base.int_type(), &ctx));
@@ -56,7 +56,7 @@ fn nothing_has_no_common_subtype_with_anything() {
 #[test]
 fn int_and_string_are_disjoint() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
@@ -74,7 +74,7 @@ fn int_and_string_are_disjoint() {
 #[test]
 fn int_and_boolean_are_disjoint() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
@@ -89,7 +89,7 @@ fn int_and_float_are_disjoint() {
     // Int and Float are concrete sibling classes under Number — neither is a
     // subclass of the other and no class in base.pkl extends both.
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
@@ -102,7 +102,7 @@ fn int_and_float_are_disjoint() {
 #[test]
 fn int_and_number_overlap() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
@@ -118,7 +118,7 @@ fn int_and_number_overlap() {
 #[test]
 fn union_overlaps_if_one_branch_does() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let int_or_string = Type::Union {
@@ -139,7 +139,7 @@ fn union_overlaps_if_one_branch_does() {
 #[test]
 fn union_is_disjoint_when_no_branch_overlaps() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let int_or_string = Type::Union {
@@ -160,7 +160,7 @@ fn union_is_disjoint_when_no_branch_overlaps() {
 #[test]
 fn union_of_unions_propagates_correctly() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     // (Int | String) | Boolean  vs  Boolean  → true, via the right branch.
@@ -181,7 +181,7 @@ fn union_of_unions_propagates_correctly() {
 #[test]
 fn distinct_string_literals_are_disjoint() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let a = Type::string_literal("a");
@@ -193,7 +193,7 @@ fn distinct_string_literals_are_disjoint() {
 #[test]
 fn string_literal_is_disjoint_from_int() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let hello = Type::string_literal("hello");
@@ -204,7 +204,7 @@ fn string_literal_is_disjoint_from_int() {
 #[test]
 fn symmetric_on_disjoint_pairs() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     let pairs: Vec<(&Type, &Type)> = vec![
@@ -227,7 +227,7 @@ fn symmetric_on_disjoint_pairs() {
 #[test]
 fn non_null_alias_overlaps_with_int() {
     let base = harness::load_test_base();
-    let dummy = pkl_analysis::parse("").unwrap();
+    let dummy = pkl_syntax::parse("").unwrap();
     let ctx = ctx(&base, &dummy);
 
     assert!(
