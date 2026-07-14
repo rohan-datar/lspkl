@@ -98,6 +98,61 @@ fn kind_is_class_or_alias(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Class | NodeKind::TypeAlias)
 }
 
+/// Resolve the reference under the cursor at `(line, col)`.
+///
+/// Returns the declaration `node` refers to, or `None` if there's nothing
+/// to resolve at that position (cursor is on whitespace, a keyword, a
+/// literal, etc.). The returned `NodeRef` may live in a different file than
+/// `node` — `String` in a user file resolves to a class in `pkl:base`, an
+/// imported identifier resolves into the imported module.
+pub fn resolve_reference(
+    node: NodeRef,
+    line: u32,
+    col: u32,
+    ctx: &AnalysisContext,
+) -> Option<NodeRef> {
+    // Reserved for arms that need position checks (Import / Property)
+    let _ = (line, col);
+
+    let tree = ctx.tree_for(node.file_id)?;
+
+    // We don't want to find terminals, so we go up to the first non-terminal node
+    let mut node_id = node.node_id;
+    while tree.kind(node_id).is_terminal() {
+        node_id = tree.parent(node_id)?;
+    }
+
+    let bindings = TypeBindings::new();
+    match tree.kind(node_id) {
+        NodeKind::UnqualifiedAccessExpr => {
+            let name = tree.name(node_id)?;
+            resolve_unqualified_access(node_id, name, &bindings, ctx).map(|r| r.node)
+        }
+        NodeKind::QualifiedAccessExpr => {
+            let name = tree.name(node_id)?;
+            let receiver_ty = access_receiver_type(node_id, &bindings, ctx)?;
+            find_member_on_type(&receiver_ty, name, &bindings, ctx).map(|r| r.node)
+        }
+        NodeKind::DeclaredType => resolve_declared_type(ctx, node.with_node(node_id)),
+        NodeKind::QualifiedIdentifier => {
+            let parent = tree.parent(node_id)?;
+            match tree.kind(parent) {
+                NodeKind::DeclaredType => resolve_declared_type(ctx, node.with_node(parent)),
+                NodeKind::ClassExtendsClause => {
+                    let segments = tree.qualified_identifier_segments(node_id);
+                    resolve_type_name(ctx, &segments, node.with_node(node_id))
+                }
+                _ => None,
+            }
+        }
+        // TODO(import-resolution)
+        NodeKind::Import | NodeKind::ImportGlob => None,
+        // TODO(property-self-resolve)
+        // TODO(doc-comment-links)
+        _ => None,
+    }
+}
+
 /// Find the `TypeAnnotation` child of a class/object member declaration.
 fn member_type_annotation(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
     let holder = match tree.kind(member) {

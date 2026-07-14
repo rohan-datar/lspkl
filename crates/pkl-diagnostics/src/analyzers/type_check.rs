@@ -1,16 +1,6 @@
 //! Type checking — checks expression types against declared types,
 //! property defaults, function return types, parameter types, etc. The
 //! workhorse analyzer.
-//!
-//! Mirrors `TypeCheckAnalyzer.kt`. Needs the full type-system stack:
-//!   - `to_type` for converting `PklType` annotations to resolved `Type`
-//!   - `compute_expr_type` for inferring expression types
-//!   - `is_subtype_of` (full version, with subclass walk) for the assignability check
-//!
-//! The analyzer of last resort — implement after every other analyzer is in
-//! place, because the type-system gaps it surfaces are rabbit-holes.
-//!
-//! Fixtures: `tests/snapshots/diagnostics/inputs/typecheck/*.pkl`.
 
 use pkl_syntax::ast::NodeId;
 use pkl_types::compute_expr::compute_expr_type;
