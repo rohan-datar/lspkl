@@ -520,6 +520,15 @@ impl SyntaxTree {
         self.modifiers(id).contains(&modifier)
     }
 
+    pub fn doc_comments(&self, id: NodeId) -> Vec<&str> {
+        self.children_matching(id, |k| {
+            matches!(k, NodeKind::Terminal(TokenType::DocComment))
+        })
+        .iter()
+        .map(|&c| self.text(c))
+        .collect()
+    }
+
     pub fn is_amend(&self) -> bool {
         let Some(header) = self.child(self.root(), |c| matches!(c, NodeKind::ModuleHeader)) else {
             return false;

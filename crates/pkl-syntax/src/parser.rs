@@ -66,11 +66,17 @@ impl TreeBuilder {
 
         let mut child_ids: SmallVec<[NodeId; 6]> = SmallVec::new();
         let mut cursor = ts_node.walk();
-        for child in ts_node.children(&mut cursor) {
-            if !should_keep_child(&child) {
-                continue;
+        if cursor.goto_first_child() {
+            loop {
+                let child = cursor.node();
+                let is_operator = cursor.field_name() == Some("operator");
+                if should_keep_child(&child, is_operator) {
+                    child_ids.push(self.visit(child, Some(id)));
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
             }
-            child_ids.push(self.visit(child, Some(id)));
         }
         self.nodes[id.index()].children = child_ids;
         id
@@ -82,8 +88,8 @@ impl TreeBuilder {
 ///
 /// TODO: refine — comments belong in the AST (LineComment/BlockComment), but
 /// pure whitespace does not. For now we keep all named nodes plus ERROR.
-fn should_keep_child(ts_node: &TsNode<'_>) -> bool {
-    ts_node.is_named() || ts_node.is_error() || ts_node.is_missing()
+fn should_keep_child(ts_node: &TsNode<'_>, is_fielded_operator: bool) -> bool {
+    is_fielded_operator || ts_node.is_named() || ts_node.is_error() || ts_node.is_missing()
 }
 
 /// Convert a tree-sitter node to its [`NodeKind`].
@@ -198,6 +204,15 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
         "modifier" => NodeKind::Terminal(modifier_token(ts_node)),
         "slStringLiteralPart" => NodeKind::Terminal(TokenType::StringLiteral),
 
+        // ---- Fielded anonymous operator tokens ----
+        // These have no grammar name; match on their literal text.
+        "+" | "-" | "*" | "/" | "~/" | "%" => NodeKind::Terminal(operator_token(raw)),
+
+        // Comparisons, logic, pipes, type tests/casts — consumers match on
+        // the text via `SyntaxTree::text`, so classify them uniformly.
+        "<" | "<=" | ">" | ">=" | "==" | "!=" | "&&" | "||" | "??" | "**" | "|>" | "is" | "as" => {
+            NodeKind::Terminal(TokenType::Other)
+        }
         // Unknown — log via the snapshot output.
         other => NodeKind::Unmapped(other.to_string()),
     }
@@ -222,6 +237,19 @@ fn modifier_token(ts_node: &TsNode<'_>) -> TokenType {
         Some("open") => TokenType::Open,
         Some("fixed") => TokenType::Fixed,
         Some("const") => TokenType::Const,
+        _ => TokenType::Other,
+    }
+}
+
+/// Map an arithmetic operator token to its [`TokenType`] variant.
+fn operator_token(raw: &str) -> TokenType {
+    match raw {
+        "+" => TokenType::Plus,
+        "-" => TokenType::Minus,
+        "*" => TokenType::Star,
+        "/" => TokenType::Slash,
+        "~/" => TokenType::IntDiv,
+        "%" => TokenType::Mod,
         _ => TokenType::Other,
     }
 }

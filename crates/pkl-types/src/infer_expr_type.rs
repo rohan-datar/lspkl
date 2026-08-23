@@ -151,11 +151,11 @@ pub fn infer_expr_type_from_context(
 
         // `a * b`, `a / b`, `a ~/ b`, `a % b` — Number-ish.
         NodeKind::MultiplicativeExpr => {
-            let children = ctx.tree.children(parent);
-            let other = if node == children[0] {
-                children[1]
+            let operands = operand_siblings(ctx, parent);
+            let other = if node == operands[0] {
+                operands[1]
             } else {
-                children[0]
+                operands[0]
             };
             let other_type = compute_expr_type(other, bindings, ctx);
             if other_type.is_subtype_of(ctx.base.duration_type(), ctx) {
@@ -179,11 +179,11 @@ pub fn infer_expr_type_from_context(
         // `a + b`, `a - b` — Number, String, Bytes, List, Set, or Map
         // depending on the *other* operand's type.
         NodeKind::AdditiveExpr => {
-            let children = ctx.tree.children(parent);
-            let other = if node == children[0] {
-                children[1]
+            let operands = operand_siblings(ctx, parent);
+            let other = if node == operands[0] {
+                operands[1]
             } else {
-                children[0]
+                operands[0]
             };
             compute_expr_type(other, bindings, ctx)
         }
@@ -196,11 +196,11 @@ pub fn infer_expr_type_from_context(
 
         // `a |> b` — pipe. `b` must be a `(typeof(a)) -> R` function.
         //   - If `node` is the left side: Unknown (no constraint on input).
-        //   - If `node` is the right side: Function1<typeof(a), Any>.
         NodeKind::PipeExpr => {
-            let pos = ctx.tree.children(parent).iter().position(|&c| c == node);
+            let operands = operand_siblings(ctx, parent);
+            let pos = operands.iter().position(|&c| c == node);
             if Some(1) == pos {
-                let input_type = compute_expr_type(ctx.tree.children(parent)[0], bindings, ctx);
+                let input_type = compute_expr_type(operands[0], bindings, ctx);
                 let Some(fn1_type) = ctx.base.function_n_type(1) else {
                     return Type::Unknown;
                 };
@@ -294,12 +294,17 @@ pub fn infer_expr_type_from_context(
     }
 }
 
+/// The operand expressions of a binary-expression `parent`, in source order.
+fn operand_siblings(ctx: &AnalysisContext, parent: NodeId) -> Vec<NodeId> {
+    ctx.tree
+        .children(parent)
+        .iter()
+        .copied()
+        .filter(|&c| !matches!(ctx.tree.kind(c), NodeKind::Terminal(_)))
+        .collect()
+}
+
 /// Find the type annotation attached to a *member-like* parent
-/// (`ClassProperty`, `ObjectProperty`, `ClassMethod`, `ObjectMethod`) and
-/// resolve it via [`to_type`].
-///
-/// Returns `None` if the parent doesn't carry a declared type. The caller
-/// should map that to [`Type::Unknown`].
 fn parent_declared_type(
     parent: NodeId,
     bindings: &TypeBindings,

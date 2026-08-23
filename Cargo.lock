@@ -577,6 +577,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "lsp-features"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "pkl-diagnostics",
+ "pkl-syntax",
+ "pkl-types",
+ "pkl-vfs",
+ "tower-lsp-server",
+]
+
+[[package]]
 name = "lsp-types"
 version = "0.97.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -595,7 +607,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fluent-uri 0.4.1",
+ "lsp-features",
+ "pkl-diagnostics",
  "pkl-syntax",
+ "pkl-types",
  "pkl-vfs",
  "serde_json",
  "tokio",
@@ -1232,8 +1247,8 @@ checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 
 [[package]]
 name = "tree-sitter-pkl"
-version = "0.20.0"
-source = "git+https://github.com/apple/tree-sitter-pkl#e800f06f06d461c4207867b44e76b0da1687a250"
+version = "0.21.0"
+source = "git+https://github.com/apple/tree-sitter-pkl?tag=v0.21.0#5893fb5dc832ea51a9bff3f84462528c766ecd7d"
 dependencies = [
  "cc",
  "tree-sitter-language",

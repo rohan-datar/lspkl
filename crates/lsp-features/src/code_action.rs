@@ -1,0 +1,61 @@
+//! CodeAction: turn diagnostics-attached quick fixes into LSP `CodeAction`s.
+
+use std::collections::HashMap;
+
+use tower_lsp_server::lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, TextEdit, WorkspaceEdit,
+};
+
+use pkl_diagnostics::Diagnostic;
+
+/// Materialize quick-fix actions for the diagnostics echoed in
+/// `params.context.diagnostics`.
+pub fn code_action(
+    params: &CodeActionParams,
+    diagnostics: &[Diagnostic],
+) -> Vec<CodeActionOrCommand> {
+    let uri = params.text_document.uri.clone();
+    let mut actions = Vec::new();
+
+    for echoed in &params.context.diagnostics {
+        // Match on (range, message) — the two fields the client echoes
+        // verbatim from our publish (see doc above for why there is no id).
+        let Some(matched) = diagnostics
+            .iter()
+            .find(|d| d.message == echoed.message && crate::span_to_range(&d.span) == echoed.range)
+        else {
+            continue;
+        };
+
+        for fix in &matched.quick_fixes {
+            // `lsp_types::Uri` has interior mutability (clippy::mutable_key_type),
+            // but `WorkspaceEdit.changes` requires exactly this map shape.
+            #[allow(clippy::mutable_key_type)]
+            let mut changes = HashMap::new();
+            changes.insert(
+                uri.clone(),
+                fix.edits
+                    .iter()
+                    .map(|e| TextEdit {
+                        range: crate::span_to_range(&e.span),
+                        new_text: e.new_text.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            );
+
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: fix.title.clone(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![echoed.clone()]),
+                is_preferred: Some(true),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+    }
+
+    actions
+}
