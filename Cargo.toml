@@ -8,6 +8,7 @@ tree-sitter = "0.25"
 tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl", tag = "v0.21.0" }
 
 dashmap = "6"
+parking_lot = "0.12"
 url = "2"
 fluent-uri = "0.4.1"
 thiserror = "2"
@@ -24,5 +25,5 @@ pkl-syntax = { path = "crates/pkl-syntax" }
 pkl-vfs = { path = "crates/pkl-vfs" }
 pkl-types = { path = "crates/pkl-types" }
 pkl-diagnostics = { path = "crates/pkl-diagnostics" }
+pkl-project = { path = "crates/pkl-project" }
 lsp-features = { path = "crates/lsp-features" }
-lspkl = { path = "crates/lspkl" }

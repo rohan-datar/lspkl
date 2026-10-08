@@ -1,5 +1,7 @@
 //! Lifecycle tests: initialize → didOpen → didChange → didClose → shutdown.
 
+use std::path::PathBuf;
+
 use lspkl::PklBackend;
 use tower_lsp_server::LanguageServer;
 use tower_lsp_server::lsp_types::*;
@@ -36,6 +38,44 @@ async fn initialize_advertises_text_document_sync_full() {
         TextDocumentSyncCapability::Options(opts) => opts.change.expect("change kind"),
     };
     assert_eq!(kind, TextDocumentSyncKind::FULL);
+}
+
+#[tokio::test]
+async fn initialize_sets_file_workspace_folders() {
+    let backend = PklBackend::for_testing();
+    let params = InitializeParams {
+        workspace_folders: Some(vec![
+            WorkspaceFolder {
+                uri: "file:///tmp/lspkl%20workspace".parse().unwrap(),
+                name: "project".into(),
+            },
+            WorkspaceFolder {
+                uri: "https://example.com/not-local".parse().unwrap(),
+                name: "remote".into(),
+            },
+        ]),
+        ..InitializeParams::default()
+    };
+    backend.initialize(params).await.unwrap();
+    assert_eq!(
+        backend.state.project_manager.lock().workspace_folders(),
+        [PathBuf::from("/tmp/lspkl workspace")]
+    );
+}
+
+#[tokio::test]
+async fn initialize_falls_back_to_root_uri() {
+    let backend = PklBackend::for_testing();
+    let mut params = InitializeParams::default();
+    #[allow(deprecated)]
+    {
+        params.root_uri = Some("file:///tmp/lspkl-root".parse().unwrap());
+    }
+    backend.initialize(params).await.unwrap();
+    assert_eq!(
+        backend.state.project_manager.lock().workspace_folders(),
+        [PathBuf::from("/tmp/lspkl-root")]
+    );
 }
 
 #[tokio::test]

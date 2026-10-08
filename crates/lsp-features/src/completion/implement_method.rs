@@ -9,9 +9,6 @@ use pkl_types::{AnalysisContext, NodeRef};
 
 pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<CompletionItem> {
     let tree = ctx.tree;
-    // The cursor must sit directly on the class body itself (blank line /
-    // whitespace position) or one step inside it — deeper nesting means the
-    // cursor is inside a member body, not at member-definition position.
     let body = if matches!(tree.kind(node), NodeKind::ClassBody) {
         node
     } else {
@@ -87,8 +84,6 @@ fn is_abstract(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -> bool {
         .is_empty()
 }
 
-/// `function name(param: T, ...) : Ret` — mirrors upstream's
-/// `renderCompletionText`.
 fn render_method_signature(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -> String {
     let header = tree.child(method, |k| matches!(k, NodeKind::MethodHeader));
     let name = tree.name(method).unwrap_or("");

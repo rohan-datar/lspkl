@@ -608,15 +608,19 @@ dependencies = [
  "clap",
  "fluent-uri 0.4.1",
  "lsp-features",
+ "parking_lot",
  "pkl-diagnostics",
+ "pkl-project",
  "pkl-syntax",
  "pkl-types",
  "pkl-vfs",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower-lsp-server",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -710,6 +714,21 @@ dependencies = [
  "pkl-syntax",
  "pkl-types",
  "semver",
+]
+
+[[package]]
+name = "pkl-project"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "pkl-vfs",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -869,6 +888,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"

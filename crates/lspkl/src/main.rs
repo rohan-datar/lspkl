@@ -34,6 +34,10 @@ async fn main() {
     let state = Arc::new(ServerState::new());
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| PklBackend::new(state, Some(client)));
+    // Custom `pkl/*` RPC methods
+    let (service, socket) = LspService::build(|client| PklBackend::new(state, Some(client)))
+        .custom_method("pkl/syncProjects", PklBackend::sync_projects)
+        .custom_method("pkl/downloadPackage", PklBackend::download_package)
+        .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }

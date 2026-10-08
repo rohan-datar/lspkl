@@ -10,6 +10,7 @@ use tower_lsp_server::{Client, LanguageServer, jsonrpc};
 use fluent_uri::Uri;
 use tracing::{error, info};
 
+use pkl_project::dto::PackageUri;
 use pkl_syntax::ast::SyntaxTree;
 use pkl_types::{AnalysisContext, FileId};
 
@@ -119,7 +120,34 @@ fn to_lsp_diagnostic(diag: &pkl_diagnostics::Diagnostic) -> Diagnostic {
 
 impl LanguageServer for PklBackend {
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
-        info!(?params.client_info, "initilize");
+        info!(?params.client_info, "initialize");
+        let uris: Vec<_> = match params.workspace_folders {
+            Some(folders) => folders.into_iter().map(|folder| folder.uri).collect(),
+            None => {
+                #[allow(deprecated)]
+                let root_uri = params.root_uri;
+                root_uri.into_iter().collect()
+            }
+        };
+
+        let folders: Vec<_> = uris
+            .into_iter()
+            .filter_map(|uri| {
+                let parsed = Uri::parse(uri.as_str().to_owned())
+                    .map_err(|err| {
+                        error!(?err, "unable to parse workspace root uri");
+                    })
+                    .ok()?;
+                pkl_vfs::file_manager::url_to_path(&parsed)
+                    .map_err(|err| {
+                        error!(?err, "unable to convert {parsed} to file path");
+                    })
+                    .ok()
+            })
+            .collect();
+
+        self.state.project_manager.lock().initialize(folders);
+
         Ok(InitializeResult {
             server_info: None,
             capabilities: ServerCapabilities {
@@ -347,6 +375,79 @@ impl LanguageServer for PklBackend {
             Err(err) => {
                 error!(uri = uri_str, ?err, "formatter panicked");
                 Ok(None)
+            }
+        }
+    }
+}
+
+impl PklBackend {
+    // ---- Custom `pkl/*` RPC methods ----
+
+    pub async fn sync_projects(&self) -> jsonrpc::Result<()> {
+        let state = Arc::clone(&self.state);
+        let sync = spawn_blocking(move || state.project_manager.lock().sync_projects()).await;
+        match sync {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => {
+                error!(?err, "syncProjects failed");
+                Err(jsonrpc::Error {
+                    code: jsonrpc::ErrorCode::InternalError,
+                    message: err.to_string().into(),
+                    data: None,
+                })
+            }
+            Err(err) => {
+                error!(?err, "syncProjects panicked");
+                Err(jsonrpc::Error {
+                    code: jsonrpc::ErrorCode::InternalError,
+                    message: err.to_string().into(),
+                    data: None,
+                })
+            }
+        }
+    }
+
+    /// Client asks us to download a package by URI string.
+    pub async fn download_package(&self, uri: String) -> jsonrpc::Result<()> {
+        let package_uri = PackageUri::create(&uri).map_err(|err| jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InvalidParams,
+            message: err.to_string().into(),
+            data: None,
+        })?;
+        let cache_dir = self
+            .state
+            .package_cache_dir
+            .clone()
+            .ok_or_else(|| jsonrpc::Error {
+                code: jsonrpc::ErrorCode::InternalError,
+                message: "cannot locate home directory for the Pkl package cache".into(),
+                data: None,
+            })?;
+        let state = Arc::clone(&self.state);
+        let download = spawn_blocking(move || {
+            state
+                .package_manager
+                .lock()
+                .download_package(&package_uri, &cache_dir)
+        })
+        .await;
+        match download {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => {
+                error!(?err, "downloadPackage failed");
+                Err(jsonrpc::Error {
+                    code: jsonrpc::ErrorCode::InternalError,
+                    message: err.to_string().into(),
+                    data: None,
+                })
+            }
+            Err(err) => {
+                error!(?err, "downloadPackage panicked");
+                Err(jsonrpc::Error {
+                    code: jsonrpc::ErrorCode::InternalError,
+                    message: err.to_string().into(),
+                    data: None,
+                })
             }
         }
     }

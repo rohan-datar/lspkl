@@ -15,8 +15,10 @@ pkl-diagnostics.workspace = true
 pkl-syntax.workspace = true
 pkl-types.workspace = true
 pkl-vfs.workspace = true
+pkl-project.workspace = true
 lsp-features.workspace = true
 tower-lsp-server.workspace = true
+parking_lot.workspace = true
 tokio = { workspace = true, features = ["full"] }
 clap.workspace = true
 tracing.workspace = true
@@ -27,3 +29,5 @@ fluent-uri.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 fluent-uri.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+url.workspace = true

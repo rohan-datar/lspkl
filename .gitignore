@@ -1,3 +1,5 @@
 target/
+.direnv/
 .dir-locals.el
 base.pkl
+.lspkl/

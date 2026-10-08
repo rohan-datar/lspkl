@@ -1,8 +1,7 @@
 //! Concurrent registry of files the language server knows about.
-//!
-//! Mirrors `VirtualFileManager.kt` in pkl-lsp.
 
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -34,6 +33,12 @@ pub enum FileError {
 
     #[error("file is not open: {0}")]
     NotOpen(Uri<String>),
+
+    #[error("Path `{0}` could not be converted to a URL")]
+    InvalidUri(std::path::PathBuf),
+
+    #[error("unable to parse uri: {0}")]
+    UriParse(#[from] fluent_uri::ParseError),
 }
 
 /// Owns every `VirtualFile` the server is currently tracking.
@@ -106,14 +111,39 @@ impl FileManager {
         if let Some(file) = self.files.get(url) {
             return Ok(file.clone());
         };
-        let path = url_to_path(url)?;
-        match fs::read_to_string(path.clone()) {
-            Ok(contents) => {
-                let vf = self.open(url.clone(), contents, None);
-                Ok(vf)
+        match url.scheme().as_str() {
+            // TODO(stdlib-loader): `pkl:base`-style URIs resolve to vendored
+            // stdlib files. pkl-types already embeds base.pkl; generalize.
+            "pkl" => Err(FileError::UnsupportedScheme("pkl".into())),
+
+            // TODO(https-loader): fetch over HTTPS (needs an HTTP client
+            // dependency), cache under the module cache dir.
+            "https" => Err(FileError::UnsupportedScheme("https".into())),
+
+            // TODO(jar-loader): open the archive, read the member. Needs a
+            // zip reader dependency.
+            "jar" | "classpath" => Err(FileError::UnsupportedScheme(url.scheme().as_str().into())),
+
+            // TODO(modulepath-loader): route through the project's
+            // ModulepathResolver once pkl-project is wired into the server.
+            "modulepath" => Err(FileError::UnsupportedScheme("modulepath".into())),
+
+            _ => {
+                let path = url_to_path(url)?;
+                match fs::read_to_string(path.clone()) {
+                    Ok(contents) => Ok(self.open(url.clone(), contents, None)),
+                    Err(err) => Err(FileError::Io { path, source: err }),
+                }
             }
-            Err(err) => Err(FileError::Io { path, source: err }),
         }
+    }
+
+    /// Fetch a file from a modulepath directory or JAR entry.
+    pub fn get_modulepath_file(&self, path: &Path) -> Result<Arc<VirtualFile>, FileError> {
+        let url =
+            url::Url::from_file_path(path).map_err(|_| FileError::InvalidUri(path.to_owned()))?;
+        let uri = Uri::parse(url.to_string()).map_err(|(err, _)| FileError::UriParse(err))?;
+        self.get_or_load(&uri)
     }
 
     /// Parse a file (cached). Returns the cached tree if one is present;
