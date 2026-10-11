@@ -8,11 +8,6 @@ mod harness;
 use pkl_types::{FileId, Type};
 
 #[test]
-fn loads_without_panicking() {
-    let _base = harness::load_test_base();
-}
-
-#[test]
 fn file_id_is_base() {
     let base = harness::load_test_base();
     assert_eq!(base.file_id(), FileId::BASE);

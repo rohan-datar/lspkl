@@ -17,7 +17,7 @@ fn owners(tree: &SyntaxTree, node: NodeId, found: &mut Vec<NodeId>) {
 
 fn analyze(source: &str, resolution: Option<ImportResolution>) -> Vec<Diagnostic> {
     let tree = pkl_syntax::parse(source).unwrap();
-    let base = BaseModule::load_vendored().unwrap();
+    let base = BaseModule::load_embedded().unwrap();
     let mut nodes = Vec::new();
     owners(&tree, tree.root(), &mut nodes);
     assert!(!nodes.is_empty());

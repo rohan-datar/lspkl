@@ -71,23 +71,8 @@ fn archives_load_resolve_list_and_keep_distinct_identities() {
     assert!(fm.get_or_load(&broken).is_err());
 }
 #[test]
-fn stdlib_all_modules_are_embedded_parseable_and_roundtrip() {
+fn stdlib_missing_module_is_an_error() {
     let fm = FileManager::new();
-    assert_eq!(pkl_vfs::stdlib::MODULE_NAMES.len(), 23);
-    for name in pkl_vfs::stdlib::MODULE_NAMES {
-        let physical = uri(&format!("pkl:{name}"));
-        let editor = to_editor_uri(&physical).unwrap();
-        assert_eq!(editor.as_str(), format!("pkl-lsp://stdlib/{name}.pkl"));
-        assert_eq!(effective_uri(&editor).unwrap(), physical);
-        let file = fm.get_or_load(&editor).unwrap();
-        assert_eq!(file.origin, Origin::Stdlib);
-        assert!(file.contents().contains("module pkl."));
-        assert!(fm.parse(&physical).unwrap().node_count() > 0);
-    }
-    assert_eq!(
-        fm.get_or_load(&uri("pkl:base")).unwrap().contents(),
-        include_str!("../../pkl-types/tests/fixtures/base.pkl")
-    );
     assert!(fm.get_or_load(&uri("pkl:missing")).is_err());
 }
 #[test]

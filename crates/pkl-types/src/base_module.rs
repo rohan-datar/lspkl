@@ -21,9 +21,6 @@ pub enum BaseModuleError {
 
     #[error("base.pkl class `{class}` is missing the required member `{member}`")]
     MissingMember { class: String, member: String },
-
-    #[error("could not find pkl base module!")]
-    NotFound(#[from] std::io::Error),
 }
 
 /// Resolved view of `pkl:base`.
@@ -165,15 +162,9 @@ impl BaseModule {
         })
     }
 
-    /// Convenience: load from a path. Reads the file and delegates to [`Self::load`].
-    pub fn load_from_path(path: &std::path::Path) -> Result<Self, BaseModuleError> {
-        let text = std::fs::read_to_string(path)?;
-        Self::load(&text)
-    }
-
-    /// Load the vendored `base.pkl` embedded in the binary at compile time.
-    pub fn load_vendored() -> Result<Self, BaseModuleError> {
-        Self::load(include_str!("../tests/fixtures/base.pkl"))
+    /// Load `pkl:base` from the embedded standard-library artifact.
+    pub fn load_embedded() -> Result<Self, BaseModuleError> {
+        Self::load(pkl_stdlib::BASE)
     }
 
     pub fn tree(&self) -> &Arc<SyntaxTree> {

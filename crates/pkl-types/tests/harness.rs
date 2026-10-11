@@ -1,7 +1,7 @@
 //! Shared test utilities for `pkl-types` integration tests.
 //!
 //! Two responsibilities:
-//!   1. Locate and load the vendored `base.pkl` fixture (see `fixtures/README.md`).
+//!   1. Load the embedded `pkl:base` used by production analysis.
 //!   2. Provide a `find_first` helper for picking a specific node out of a
 //!      parsed `SyntaxTree` — most tests want the first occurrence of a
 //!      particular `NodeKind` and don't care about position.
@@ -9,7 +9,6 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
@@ -28,29 +27,9 @@ pub fn empty_imports() -> &'static HashMap<NodeRef, pkl_types::ImportResolution>
     &IMPORTS
 }
 
-/// Path of the vendored `base.pkl` fixture. See `tests/fixtures/README.md`.
-pub fn base_pkl_path() -> PathBuf {
-    crate_root().join("tests/fixtures/base.pkl")
-}
-
-pub fn crate_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .canonicalize()
-        .expect("CARGO_MANIFEST_DIR must be reachable")
-}
-
-/// Load the vendored `base.pkl` and return a `BaseModule`. Panics with a
-/// clear message if the fixture isn't present — that's the TDD signal to
-/// vendor it.
+/// Load the same `pkl:base` source used by production analysis.
 pub fn load_test_base() -> BaseModule {
-    let path = base_pkl_path();
-    assert!(
-        path.exists(),
-        "base.pkl fixture missing.\n\
-         Drop the canonical pkl:base source at:\n  {}",
-        path.display()
-    );
-    BaseModule::load_from_path(&path).expect("base.pkl should parse and resolve cleanly")
+    BaseModule::load_embedded().expect("embedded pkl:base must load")
 }
 
 /// Parse a small Pkl snippet and run `f` with an `AnalysisContext` over it.

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pkl-stdlib.workspace = true
 pkl-syntax.workspace = true
 dashmap.workspace = true
 url.workspace = true

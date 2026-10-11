@@ -26,6 +26,7 @@ sha2 = "0.10"
 percent-encoding = "2"
 
 # Path deps
+pkl-stdlib = { path = "crates/pkl-stdlib" }
 pkl-syntax = { path = "crates/pkl-syntax" }
 pkl-vfs = { path = "crates/pkl-vfs" }
 pkl-types = { path = "crates/pkl-types" }

@@ -21,19 +21,8 @@ pub fn fixtures_root() -> PathBuf {
     crate_root().join("tests/fixtures/diagnostics/inputs")
 }
 
-pub fn base_pkl_path() -> PathBuf {
-    crate_root().join("../pkl-types/tests/fixtures/base.pkl")
-}
-
 pub fn load_test_base() -> BaseModule {
-    let path = base_pkl_path();
-    assert!(
-        path.exists(),
-        "base.pkl fixture missing at {}.\n\
-         See crates/pkl-types/tests/fixtures/README.md.",
-        path.display()
-    );
-    BaseModule::load_from_path(&path).expect("base.pkl should parse and resolve cleanly")
+    BaseModule::load_embedded().expect("embedded pkl:base must load")
 }
 
 /// Recursively collect every `*.pkl` file under `root`, sorted for stable

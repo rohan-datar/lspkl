@@ -61,7 +61,7 @@ impl Default for ServerState {
             file_manager,
             file_registry: parking_lot::Mutex::new(FileRegistry::default()),
             base_module: LazyLock::new(|| {
-                BaseModule::load_vendored().expect("vendored base.pkl must load")
+                BaseModule::load_embedded().expect("embedded pkl:base must load")
             }),
             diagnostics: LazyLock::new(DiagnosticsEngine::default),
             project_manager: parking_lot::Mutex::new(Default::default()),
