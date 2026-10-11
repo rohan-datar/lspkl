@@ -25,6 +25,22 @@ fn write_candidate(cache: &Path, relative: &str) -> PathBuf {
     path
 }
 
+fn assert_root_points_to_zip(roots: &pkl_project::package_manager::PackageLibraryRoots) {
+    let archive = roots
+        .package_root
+        .as_str()
+        .strip_prefix("jar:")
+        .unwrap()
+        .strip_suffix("!/")
+        .unwrap();
+    let archive = fluent_uri::Uri::parse(archive.to_owned()).unwrap();
+    let path = pkl_vfs::url_to_path(&archive).unwrap();
+    assert_eq!(
+        path.canonicalize().unwrap(),
+        roots.zip_file.canonicalize().unwrap()
+    );
+}
+
 #[test]
 fn missing_metadata_or_zip_returns_none() {
     let cache = tempfile::tempdir().unwrap();
@@ -76,13 +92,7 @@ fn roots_prefer_package_2_when_both_versions_exist() {
         .unwrap();
     assert_eq!(roots.metadata_file, cache.path().join(&metadata[0]));
     assert_eq!(roots.zip_file, cache.path().join(&zips[0]));
-    assert_eq!(
-        roots.package_root.as_str(),
-        format!(
-            "jar:{}!/",
-            url::Url::from_file_path(&roots.zip_file).unwrap()
-        )
-    );
+    assert_root_points_to_zip(&roots);
 }
 
 #[test]
@@ -101,10 +111,7 @@ fn metadata_and_zip_choose_cache_versions_independently() {
         .unwrap();
     assert_eq!(roots.metadata_file, metadata_file);
     assert_eq!(roots.zip_file, zip_file);
-    assert_eq!(
-        roots.package_root.as_str(),
-        format!("jar:{}!/", url::Url::from_file_path(&zip_file).unwrap())
-    );
+    assert_root_points_to_zip(&roots);
 }
 
 fn write_metadata(cache: &Path, dependency: &PackageDependency, dependencies: serde_json::Value) {

@@ -215,10 +215,11 @@ Verify with `:checkhealth vim.lsp` and `:lua vim.print(vim.lsp.get_clients({ nam
 nix develop
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked -- --test-threads=1
+cargo nextest run --workspace --locked --test-threads=1 --no-fail-fast \
+  --failure-output immediate-final --status-level all
+cargo test --workspace --doc --locked
 ```
 
-CI runs native tests on Linux, macOS, and Windows. 
 
 
 Licensed under [Apache 2.0](LICENSE). See [NOTICE.txt](NOTICE.txt) and the SDK

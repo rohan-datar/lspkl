@@ -138,14 +138,14 @@ pub(crate) fn root_uri(path: &Path) -> Option<Uri<String>> {
 
 pub(crate) fn relative_uri(root: &Uri<String>, file: &Uri<String>) -> Option<String> {
     if root.scheme().as_str() == "file" && file.scheme().as_str() == "file" {
-        return Some(
-            url_to_path(file)
-                .ok()?
-                .strip_prefix(url_to_path(root).ok()?)
-                .ok()?
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let file = url_to_path(file).ok()?;
+        let root = url_to_path(root).ok()?;
+        let relative = file.strip_prefix(root).ok()?.to_string_lossy();
+        return Some(if cfg!(windows) {
+            relative.replace('\\', "/")
+        } else {
+            relative.into_owned()
+        });
     }
     let root = effective_uri(root).ok()?;
     let file = effective_uri(file).ok()?;
@@ -195,18 +195,29 @@ pub(crate) fn normalize_relative(path: &str) -> Option<String> {
     if path.starts_with('/') || path.contains('\0') || path.split('/').next()?.contains(':') {
         return None;
     }
-    let path = normalize_path(Path::new(path));
-    if path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+    // These are URI/glob paths, not native filesystem paths.
+    let mut normalized = String::with_capacity(path.len());
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if normalized.is_empty() {
+                    return None;
+                }
+                normalized.truncate(normalized.rfind('/').unwrap_or(0));
+            }
+            _ => {
+                if !normalized.is_empty() {
+                    normalized.push('/');
+                }
+                normalized.push_str(part);
+            }
+        }
+    }
+    if normalized.split('/').next()?.contains(':') {
         return None;
     }
-    if path
-        .components()
-        .next()
-        .is_some_and(|part| part.as_os_str().to_string_lossy().contains(':'))
-    {
-        return None;
-    }
-    Some(path.to_string_lossy().into_owned())
+    Some(normalized)
 }
 fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();

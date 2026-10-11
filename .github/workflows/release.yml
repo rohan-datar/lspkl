@@ -1,0 +1,101 @@
+name: Release publication
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Select release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Select tagged or merged-PR release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" == tag ]]; then
+            just release-version "$REF_NAME"
+            tag="$REF_NAME"
+          else
+            pull_requests=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")
+            publish=$(jq --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+              any(.[][];
+                .merged_at != null
+                and .base.ref == "main"
+                and .base.repo.full_name == $repo
+                and .merge_commit_sha == $sha
+                and any(.labels[]; .name == "release")
+              )
+            ' <<< "$pull_requests")
+            if [[ "$publish" != true ]]; then
+              echo "No merged release-labeled PR for this commit; skipping publication."
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            tag="v$(just release-version)"
+          fi
+          printf 'publish=true\ntag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish release
+    if: needs.release.outputs.publish == 'true'
+    needs: [release]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-${{ needs.release.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install release tools
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lspkl-*
+          path: target/release-artifacts
+          merge-multiple: true
+      - name: Validate tag and aggregate checksums
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          just release-version "$RELEASE_TAG"
+          just release-checksums
+      - name: Create release-PR tag at tested commit
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Creating a ref is atomic and fails if the version tag already exists.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
+      - name: Publish archives and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: >-
+          gh release create "$RELEASE_TAG"
+          target/release-artifacts/*.tar.gz
+          target/release-artifacts/*.zip
+          target/release-artifacts/SHA256SUMS
+          --verify-tag --title "lspkl $RELEASE_TAG" --generate-notes

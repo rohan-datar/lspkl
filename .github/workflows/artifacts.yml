@@ -1,0 +1,113 @@
+name: Release artifacts and measurements
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Release archive (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            cross: true
+          - os: macos-14
+            target: aarch64-apple-darwin
+            cross: false
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            cross: false
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            cross: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: extractions/setup-just@v3
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq file binutils tar zip unzip
+      - name: Install macOS packaging tools
+        if: runner.os == 'macOS'
+        run: brew install jq file zip unzip
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        id: msys2
+        with:
+          install: jq file zip unzip coreutils tar
+      - name: Validate release version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          if [[ -n "$MSYS2_LOCATION" ]]; then
+            msys_bin="$(cygpath -u "$MSYS2_LOCATION")/usr/bin"
+            PATH="$PATH:$msys_bin"
+            export PATH
+          fi
+          if [[ "$REF_TYPE" == tag ]]; then
+            just release-version "$REF_NAME"
+          else
+            just release-version
+          fi
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --version 0.2.5 --locked
+      - name: Build release target
+        run: just release-build '${{ matrix.target }}'
+      - name: Package and validate unpacked binary
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          if [[ -n "$MSYS2_LOCATION" ]]; then
+            msys_bin="$(cygpath -u "$MSYS2_LOCATION")/usr/bin"
+            PATH="$PATH:$msys_bin"
+            export PATH
+          fi
+          just release-package '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lspkl-${{ matrix.target }}
+          path: |
+            target/release-artifacts/*.tar.gz
+            target/release-artifacts/*.zip
+            target/release-artifacts/SHA256SUMS
+          if-no-files-found: error
+
+  benchmark:
+    name: Binary size and startup measurements
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark
+      - run: cargo build --release --locked -p lspkl --bin lspkl --example measure
+      - name: Measure real stdio initialization and first analysis
+        run: >-
+          cargo run --release --locked -p lspkl --example measure --
+          --binary target/release/lspkl --iterations 20 > target/measurements.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: performance-linux-x86_64
+          path: target/measurements.json
+          if-no-files-found: error

@@ -166,6 +166,9 @@ impl TlsService {
                     }
                     Err(e) => panic!("{e}"),
                 };
+                // macOS/Windows can inherit the listener's nonblocking mode.
+                // rustls::StreamOwned requires blocking I/O with these timeouts.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
