@@ -396,11 +396,14 @@ fn children(state: &ServerState, directory: &Uri<String>) -> Vec<(String, bool, 
     logical_children(files, "")
 }
 fn file_uri(path: &Path, directory: bool) -> Option<Uri<String>> {
-    let mut uri = format!("file://{}", encode_path(path.to_str()?));
-    if directory && !uri.ends_with('/') {
-        uri.push('/');
+    let uri = pkl_vfs::path_to_uri(path).ok()?;
+    if directory && !uri.as_str().ends_with('/') {
+        let mut value = uri.into_string();
+        value.push('/');
+        Uri::parse(value).ok()
+    } else {
+        Some(uri)
     }
-    Uri::parse(uri).ok()
 }
 fn encode_path(path: &str) -> String {
     use std::fmt::Write;

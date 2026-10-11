@@ -1,6 +1,4 @@
 //! A handle to a single source file the LSP knows about.
-//!
-//! Mirrors `VirtualFile.kt` in pkl-lsp.
 use std::sync::{Arc, RwLock};
 
 use fluent_uri::Uri;

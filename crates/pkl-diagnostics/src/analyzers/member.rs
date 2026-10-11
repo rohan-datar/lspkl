@@ -44,7 +44,7 @@ impl Analyzer for MemberAnalyzer {
         let bindings = TypeBindings::new();
         let this_type = compute_this_type(node, &bindings, ctx);
 
-        // Bail on Unknown / Dynamic / non-Object — same suppression rules as Kotlin.
+        // Unknown, Dynamic, and non-Object receivers have no analyzable members.
         if matches!(this_type, Type::Unknown) {
             return true;
         }

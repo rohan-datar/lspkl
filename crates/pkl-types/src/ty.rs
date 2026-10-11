@@ -249,7 +249,7 @@ impl Type {
     /// **Precondition:** callers should have already checked
     /// `!self.is_subtype_of(other, ctx)` — this method only matters in the
     /// "neither is a subtype of the other" middle case used by
-    /// `ExprAnalyzer`'s type-cast diagnostic. See `Types.kt:195`.
+    /// `ExprAnalyzer`'s type-cast diagnostic.
     pub fn has_common_subtype_with(&self, other: &Type, ctx: &AnalysisContext) -> bool {
         match (self, other) {
             (Type::Unknown, _) | (_, Type::Unknown) | (Type::Nothing, _) | (_, Type::Nothing) => {

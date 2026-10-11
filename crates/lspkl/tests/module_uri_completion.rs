@@ -181,10 +181,18 @@ fn local_names_directories_utf16_raw_delimiters_and_lazy_target_docs() {
 fn glob_completions_resolve_literal_metacharacters() {
     let temp = tempfile::tempdir().unwrap();
     let name = "literal[*{.pkl";
-    fs::write(temp.path().join(name), "module glob.target\nx=1").unwrap();
-    fs::write(temp.path().join("literalOther.pkl"), "x=2").unwrap();
+    let archive_path = temp.path().join("modules.zip");
+    archive(
+        &archive_path,
+        &[
+            (name, "module glob.target\nx=1"),
+            ("literalOther.pkl", "x=2"),
+        ],
+    );
     let state = ServerState::new();
-    let source_uri = uri(&temp.path().join("main.pkl"));
+    let root = Uri::parse(format!("jar:{}!/", uri(&archive_path))).unwrap();
+    let source_uri = state.file_manager.resolve_uri(&root, "main.pkl").unwrap();
+    let target_uri = state.file_manager.resolve_uri(&root, name).unwrap();
     for marked in ["import* \"lit|\"", "x = import*(#\"lit|\"#)"] {
         let items = candidates(&state, source_uri.clone(), marked).unwrap();
         let item = items.iter().find(|item| item.label == name).unwrap();
@@ -198,10 +206,7 @@ fn glob_completions_resolve_literal_metacharacters() {
         let resolution = analysis.imports.values().next().unwrap();
         match resolution {
             pkl_types::ImportResolution::Glob(targets) => {
-                let expected = state
-                    .file_registry
-                    .lock()
-                    .register(&uri(&temp.path().join(name)));
+                let expected = state.file_registry.lock().register(&target_uri);
                 assert_eq!(
                     targets,
                     &vec![pkl_types::NodeRef::new(
@@ -213,6 +218,34 @@ fn glob_completions_resolve_literal_metacharacters() {
             _ => panic!("glob expected"),
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn filesystem_completion_keeps_sources_under_non_utf8_parent_paths() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join(OsStr::from_bytes(b"directory-\xff"));
+    fs::create_dir(&parent).unwrap();
+    let library = parent.join("library.pkl");
+    fs::write(
+        &library,
+        "/// Native directory documentation.\nmodule library\nx = 1\n",
+    )
+    .unwrap();
+    let state = ServerState::new();
+    let items = candidates(&state, uri(&parent.join("main.pkl")), "import \"lib|\"").unwrap();
+    let item = items
+        .into_iter()
+        .find(|item| item.label == "library.pkl")
+        .expect("valid UTF-8 filenames remain visible under native non-UTF-8 parents");
+    assert_eq!(
+        item.data.as_ref().unwrap()["targetUri"],
+        uri(&library).as_str()
+    );
+    assert!(docs(resolve(&state, item)).contains("Native directory documentation."));
 }
 
 #[test]

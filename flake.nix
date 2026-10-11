@@ -1,5 +1,5 @@
 {
-  description = "Development flake for lspkl";
+  description = "lspkl packages and development environment";
 
   inputs = {
     nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1"; # unstable Nixpkgs
@@ -16,6 +16,7 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-darwin"
+        "x86_64-darwin"
         "aarch64-linux"
       ];
       forEachSupportedSystem =
@@ -49,6 +50,43 @@
           );
       };
 
+      packages = forEachSupportedSystem (
+        { pkgs, ... }:
+        let
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = pkgs.rustToolchain;
+            rustc = pkgs.rustToolchain;
+          };
+          lspkl = pkgs.callPackage ./nix/package.nix { inherit rustPlatform; };
+        in
+        {
+          inherit lspkl;
+          default = lspkl;
+        }
+      );
+
+      checks = forEachSupportedSystem (
+        { system, ... }:
+        {
+          lspkl = self.packages.${system}.lspkl;
+        }
+      );
+
+      apps = forEachSupportedSystem (
+        { system, ... }:
+        let
+          lspkl = {
+            type = "app";
+            program = "${self.packages.${system}.lspkl}/bin/lspkl";
+            meta = self.packages.${system}.lspkl.meta;
+          };
+        in
+        {
+          inherit lspkl;
+          default = lspkl;
+        }
+      );
+
       devShells = forEachSupportedSystem (
         { pkgs, system }:
         {
@@ -64,6 +102,13 @@
               cargo-insta
               cargo-nextest
               rust-analyzer
+              just
+              jq
+              zip
+              unzip
+              file
+              binutils
+              curl
               self.formatter.${system}
             ];
 

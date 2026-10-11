@@ -34,6 +34,7 @@ impl ArchiveLayout {
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=PKL_STDLIB_URL");
+    println!("cargo:rerun-if-env-changed=PKL_STDLIB_ARCHIVE");
     println!("cargo:rerun-if-env-changed=SSL_CERT_FILE");
     println!("cargo:rerun-if-env-changed=SSL_CERT_DIR");
     let out_dir =
@@ -102,6 +103,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn load_archive(out_dir: &Path) -> Result<(Vec<u8>, ArchiveLayout), Box<dyn Error>> {
+    if let Some(path) = std::env::var_os("PKL_STDLIB_ARCHIVE") {
+        let path = Path::new(&path);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let bytes = fs::read(path).map_err(|error| {
+            format!("could not read stdlib archive {}: {error}", path.display())
+        })?;
+        let layout = verify_archive(&bytes)?;
+        return Ok((bytes, layout));
+    }
     let path = out_dir.join(format!("pkl-stdlib-{VERSION}.zip"));
     match fs::read(&path) {
         Ok(bytes) => {

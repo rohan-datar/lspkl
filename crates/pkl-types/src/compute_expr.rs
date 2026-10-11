@@ -189,7 +189,7 @@ fn additive_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
 
         // Numeric arithmetic — both `+` and `-` are valid.
         (Int, _, Int) => ctx.base.int_type().clone(),
-        (Int, _, Boolean) => ctx.base.boolean_type().clone(), // matches pkl-lsp
+        (Int, _, Boolean) => ctx.base.boolean_type().clone(),
         (Float, _, Int | Float) => ctx.base.float_type().clone(),
 
         // Concatenation forms — only `+`.

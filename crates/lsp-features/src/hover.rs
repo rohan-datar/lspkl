@@ -57,8 +57,7 @@ pub fn render_markdown(
     original: NodeRef,
     ctx: &AnalysisContext,
 ) -> Option<String> {
-    // `original` is only needed by the type-parameter-substitution paths
-    // (renderTypeAnnotation in toMarkdown.kt:159), which aren't ported yet.
+    // The original cursor node is reserved for type-parameter substitution.
     let _ = original;
 
     // `resolved` may live in another file (e.g. pkl:base), so look up its
@@ -98,10 +97,7 @@ pub fn render_markdown(
         _ => return None,
     };
 
-    // Mirror `showDocCommentAndModule` (toMarkdown.kt:212): the fenced
-    // signature block first, then a `---` rule and the doc comment.
-    // (Upstream also appends an enclosing-module line; lspkl has no
-    // module-name/URI machinery yet, so that part is omitted.)
+    // Place documentation after the fenced declaration signature.
     let mut md = format!("```pkl\n{signature}\n```");
     if let Some(docs) = doc_comment_text(tree, node_id) {
         md.push_str("\n\n---\n\n");
@@ -139,9 +135,7 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
     None
 }
 
-/// Render a method's full signature: `function name<T>(params): Ret`,
-/// mirroring the `PklMethodHeader` arm of `doRenderMarkdown`
-/// (toMarkdown.kt:60).
+/// Render a method's full signature: `function name<T>(params): Ret`.
 fn method_signature(
     tree: &SyntaxTree,
     node_id: NodeId,
@@ -254,8 +248,7 @@ fn annotation_text(
     }
 }
 
-/// Modifier keywords (`hidden`, `fixed`, ...) as a trailing-space prefix,
-/// mirroring `modifiers.render()` in toMarkdown.kt.
+/// Modifier keywords (`hidden`, `fixed`, ...) as a trailing-space prefix.
 fn modifiers_prefix(tree: &SyntaxTree, node_id: NodeId) -> String {
     // For methods the modifiers live on the MethodHeader, matching
     // `SyntaxTree::modifiers`.

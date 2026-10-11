@@ -238,7 +238,6 @@ pub struct RemoteDependency {
 // ---------------------------------------------------------------------------
 
 /// JSON metadata stored in the Pkl package cache.
-/// Kotlin reference: `packages/dto/PackageMetadata.kt`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageMetadata {
@@ -349,8 +348,7 @@ pub struct ProjectDeps {
 }
 
 impl ProjectDeps {
-    /// Find the resolved dependency whose key is a prefix of `package_uri`
-    /// (Kotlin `ProjectDeps.getResolvedDependency`).
+    /// Find the resolved dependency whose key is a prefix of `package_uri`.
     pub fn get_resolved_dependency(&self, package_uri: &str) -> Option<&ResolvedDependency> {
         self.resolved_dependencies
             .iter()
@@ -395,7 +393,7 @@ impl PklProject {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace state persistence (services/PklProjectState.kt)
+// Workspace state persistence
 // ---------------------------------------------------------------------------
 
 /// What gets persisted so projects survive server restarts without re-running

@@ -1,10 +1,10 @@
-//! Kotlin-compatible editor URIs and archive-safe resolution.
+//! Native editor URIs and archive-safe resolution.
 use crate::FileError;
 use fluent_uri::Uri;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 pub fn effective_uri(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
-    if uri.scheme().as_str() != "pkl-lsp" {
+    if uri.scheme().as_str() != "lspkl" {
         return canonical(uri);
     }
     let parsed =
@@ -32,9 +32,9 @@ pub fn to_editor_uri(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
     let uri = effective_uri(uri)?;
     let value = match uri.scheme().as_str() {
         "file" => return Ok(uri),
-        "pkl" => format!("pkl-lsp://stdlib/{}.pkl", uri.path().as_str()),
+        "pkl" => format!("lspkl://stdlib/{}.pkl", uri.path().as_str()),
         scheme @ ("https" | "jar") => {
-            // Java URLEncoder uses form encoding: spaces become '+'; '*' stays literal.
+            // Form encoding: spaces become '+'; '*' stays literal.
             let encoded = utf8_percent_encode(uri.as_str(), NON_ALPHANUMERIC)
                 .to_string()
                 .replace("%20", "+")
@@ -42,7 +42,7 @@ pub fn to_editor_uri(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
                 .replace("%2D", "-")
                 .replace("%2E", ".")
                 .replace("%5F", "_");
-            format!("pkl-lsp://{scheme}/{encoded}")
+            format!("lspkl://{scheme}/{encoded}")
         }
         scheme => return Err(FileError::UnsupportedScheme(scheme.to_owned())),
     };

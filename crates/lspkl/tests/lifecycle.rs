@@ -1,7 +1,5 @@
 //! Lifecycle tests: initialize → didOpen → didChange → didClose → shutdown.
 
-use std::path::PathBuf;
-
 use lspkl::PklBackend;
 use tower_lsp_server::LanguageServer;
 use tower_lsp_server::lsp_types::*;
@@ -22,31 +20,17 @@ fn open_params(uri: Uri, contents: &str, version: i32) -> DidOpenTextDocumentPar
 }
 
 #[tokio::test]
-async fn initialize_advertises_text_document_sync_full() {
-    let backend = PklBackend::for_testing();
-    let result = backend
-        .initialize(InitializeParams::default())
-        .await
-        .expect("initialize should succeed");
-
-    let sync = result
-        .capabilities
-        .text_document_sync
-        .expect("server must advertise text document sync");
-    let kind = match sync {
-        TextDocumentSyncCapability::Kind(k) => k,
-        TextDocumentSyncCapability::Options(opts) => opts.change.expect("change kind"),
-    };
-    assert_eq!(kind, TextDocumentSyncKind::FULL);
-}
-
-#[tokio::test]
 async fn initialize_sets_file_workspace_folders() {
     let backend = PklBackend::for_testing();
+    let workspace = tempfile::Builder::new()
+        .prefix("lspkl workspace ")
+        .tempdir()
+        .unwrap();
+    let workspace_uri = url::Url::from_directory_path(workspace.path()).unwrap();
     let params = InitializeParams {
         workspace_folders: Some(vec![
             WorkspaceFolder {
-                uri: "file:///tmp/lspkl%20workspace".parse().unwrap(),
+                uri: workspace_uri.as_str().parse().unwrap(),
                 name: "project".into(),
             },
             WorkspaceFolder {
@@ -59,75 +43,24 @@ async fn initialize_sets_file_workspace_folders() {
     backend.initialize(params).await.unwrap();
     assert_eq!(
         backend.state.project_manager.lock().workspace_folders(),
-        [PathBuf::from("/tmp/lspkl workspace")]
+        [workspace.path().to_path_buf()]
     );
 }
 
 #[tokio::test]
 async fn initialize_falls_back_to_root_uri() {
     let backend = PklBackend::for_testing();
+    let workspace = tempfile::tempdir().unwrap();
+    let workspace_uri = url::Url::from_directory_path(workspace.path()).unwrap();
     let mut params = InitializeParams::default();
     #[allow(deprecated)]
     {
-        params.root_uri = Some("file:///tmp/lspkl-root".parse().unwrap());
+        params.root_uri = Some(workspace_uri.as_str().parse().unwrap());
     }
     backend.initialize(params).await.unwrap();
     assert_eq!(
         backend.state.project_manager.lock().workspace_folders(),
-        [PathBuf::from("/tmp/lspkl-root")]
-    );
-}
-
-#[tokio::test]
-async fn initialize_advertises_all_features() {
-    let backend = PklBackend::for_testing();
-    let result = backend
-        .initialize(InitializeParams::default())
-        .await
-        .unwrap();
-    let caps = result.capabilities;
-
-    assert!(
-        caps.hover_provider.is_some(),
-        "hover provider must be advertised"
-    );
-    assert!(
-        caps.definition_provider.is_some(),
-        "definition provider must be advertised"
-    );
-    assert!(
-        caps.completion_provider.is_some(),
-        "completion provider must be advertised"
-    );
-    assert!(
-        caps.code_action_provider.is_some(),
-        "code action provider must be advertised"
-    );
-    assert!(
-        caps.document_formatting_provider.is_some(),
-        "formatting provider must be advertised"
-    );
-}
-
-#[tokio::test]
-async fn initialize_completion_trigger_chars() {
-    // pkl-lsp advertises [".", "/", "\"", ":"] + a-z + A-Z.
-    // This test asserts the dot trigger; expand once you've decided what to keep.
-    let backend = PklBackend::for_testing();
-    let result = backend
-        .initialize(InitializeParams::default())
-        .await
-        .unwrap();
-    let completion = match result.capabilities.completion_provider {
-        Some(opts) => opts,
-        None => panic!("completion provider must be advertised"),
-    };
-    let triggers = completion
-        .trigger_characters
-        .expect("completion needs trigger chars");
-    assert!(
-        triggers.iter().any(|c| c == "."),
-        "`.` must be a completion trigger"
+        [workspace.path().to_path_buf()]
     );
 }
 

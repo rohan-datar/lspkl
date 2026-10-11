@@ -157,9 +157,11 @@ fn url_to_path_rejects_non_file_scheme() {
 #[test]
 fn url_to_path_accepts_file_scheme() {
     use pkl_vfs::file_manager::url_to_path;
-    let url = Uri::parse(String::from("file:///tmp/foo.pkl")).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let expected = workspace.path().join("space and λ.pkl");
+    let url = pkl_vfs::path_to_uri(&expected).unwrap();
     let path = url_to_path(&url).expect("file:// URLs must convert to a path");
-    assert_eq!(path.to_str(), Some("/tmp/foo.pkl"));
+    assert_eq!(path, expected);
 }
 
 #[test]
@@ -169,9 +171,7 @@ fn get_or_load_reads_from_disk() {
 
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "foo = 1").unwrap();
-    // tempfile paths on Unix are ASCII-only so no percent-encoding is needed.
-    let url =
-        Uri::parse(format!("file://{}", tmp.path().display())).expect("tempfile path must convert");
+    let url = pkl_vfs::path_to_uri(tmp.path()).expect("tempfile path must convert");
 
     let mgr = FileManager::new();
     let file = mgr

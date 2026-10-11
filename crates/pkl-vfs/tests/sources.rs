@@ -104,10 +104,10 @@ fn editor_uri_roundtrips_and_registry_uses_one_identity() {
         to_editor_uri(&uri("https://example.com/a.pkl"))
             .unwrap()
             .as_str(),
-        "pkl-lsp://https/https%3A%2F%2Fexample.com%2Fa.pkl"
+        "lspkl://https/https%3A%2F%2Fexample.com%2Fa.pkl"
     );
-    assert!(effective_uri(&uri("pkl-lsp://unknown/a")).is_err());
-    assert!(effective_uri(&uri("pkl-lsp://https/http%3A%2F%2Fexample.com")).is_err());
+    assert!(effective_uri(&uri("lspkl://unknown/a")).is_err());
+    assert!(effective_uri(&uri("lspkl://https/http%3A%2F%2Fexample.com")).is_err());
 }
 #[test]
 fn filesystem_listing_is_recursive_and_component_safe() {

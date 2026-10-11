@@ -60,7 +60,7 @@ fn stdlib_target_uses_uri_callback() {
             character: 3,
         };
 
-        let uri = Uri::from_str("pkl-lsp://stdlib/base.pkl").unwrap();
+        let uri = Uri::from_str("lspkl://stdlib/base.pkl").unwrap();
         let result = goto_definition(ctx, position, |id| {
             (id == pkl_types::FileId::BASE).then(|| uri.clone())
         })

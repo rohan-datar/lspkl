@@ -6,11 +6,6 @@ use pkl_syntax::parse;
 
 #[test]
 fn parser_snapshot_tests() {
-    if harness::skip_if_missing_parser_fixtures() {
-        eprintln!("parser snapshot fixtures are not present yet; skipping skeleton harness");
-        return;
-    }
-
     let input_dir = harness::parser_snapshot_input_dir();
     let files = harness::collect_pkl_files(&input_dir);
     assert!(

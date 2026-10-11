@@ -276,7 +276,7 @@ async fn cached_transitive_packages_and_stdlib_return_editor_openable_definition
     let main = uri(&temp.path().join("main.pkl"));
     open(&backend, &main, &source).await;
     let imported = scalar(definition(&backend, &main, position(&source, "value")).await);
-    assert!(imported.uri.as_str().starts_with("pkl-lsp://jar/"));
+    assert!(imported.uri.as_str().starts_with("lspkl://jar/"));
     assert_eq!(imported.range.start, Position::new(1, 0));
     let hover = backend
         .hover(HoverParams {
@@ -294,5 +294,5 @@ async fn cached_transitive_packages_and_stdlib_return_editor_openable_definition
     };
     assert!(contents.value.contains("value: Int"), "{}", contents.value);
     let stdlib = scalar(definition(&backend, &main, position(&source, "String")).await);
-    assert_eq!(stdlib.uri.as_str(), "pkl-lsp://stdlib/base.pkl");
+    assert_eq!(stdlib.uri.as_str(), "lspkl://stdlib/base.pkl");
 }

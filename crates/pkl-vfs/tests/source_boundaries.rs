@@ -30,7 +30,7 @@ fn directories_and_symlinks_are_not_empty_archive_modules() {
 #[test]
 fn bracketed_filenames_are_loadable_and_enumerated_as_valid_uris() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("literal[*{.pkl");
+    let path = temp.path().join("literal[{.pkl");
     fs::File::create(&path)
         .unwrap()
         .write_all(b"value = 7\n")

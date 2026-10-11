@@ -22,8 +22,7 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext, col: u32) -> Vec<
         return collector;
     }
 
-    // Definition positions: inside a class body / object body / at the top
-    // level of a module (`UnqualifiedAccessCompletionProvider.kt:55-72`).
+    // Definition positions: class bodies, object bodies, and module top level.
     let parent_is_object_element = tree
         .parent(node)
         .map(|p| matches!(tree.kind(p), NodeKind::ObjectElement))
@@ -249,7 +248,7 @@ fn add_mapping_completions(
     ));
 }
 
-/// `Listing<E>` body completions: `default` plus `new {…}` elements (kt:418).
+/// `Listing<E>` body completions: `default` plus `new {…}` elements.
 fn add_listing_completions(
     already_defined: &[String],
     listing: &Type,

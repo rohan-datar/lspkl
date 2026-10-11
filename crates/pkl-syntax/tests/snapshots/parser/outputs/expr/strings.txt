@@ -1,5 +1,0 @@
-PklModuleImpl
-  PklClassPropertyImpl
-    PklSingleLineStringLiteralImpl
-  PklClassPropertyImpl
-    PklSingleLineStringLiteralImpl

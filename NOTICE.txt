@@ -7,9 +7,9 @@ under the terms of the Apache License, Version 2.0.
 This project contains libraries that may be distributed under a different license
 
 ---
-pkl-lsp - https://github.com/apple/pkl-lsp
+Pkl language tooling
 
-Apache License 2.0 - https://github.com/apple/pkl-lsp/blob/main/LICENSE.txt
+Apache License 2.0 - https://www.apache.org/licenses/LICENSE-2.0
 
 Copyright © 2024-2026 Apple Inc. and the Pkl project authors. All rights
 reserved.

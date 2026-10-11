@@ -33,3 +33,8 @@ pkl-types = { path = "crates/pkl-types" }
 pkl-diagnostics = { path = "crates/pkl-diagnostics" }
 pkl-project = { path = "crates/pkl-project" }
 lsp-features = { path = "crates/lsp-features" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -258,7 +258,7 @@ fn span_of(ts_node: &TsNode<'_>) -> Span {
     let start = ts_node.start_position();
     let end = ts_node.end_position();
     Span {
-        // tree-sitter rows/columns are 0-indexed; Kotlin Span is 1-indexed.
+        // tree-sitter coordinates are 0-indexed; public Span coordinates are 1-indexed.
         begin_line: (start.row as u32).saturating_add(1),
         begin_col: (start.column as u32).saturating_add(1),
         end_line: (end.row as u32).saturating_add(1),

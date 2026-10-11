@@ -50,7 +50,7 @@ pub struct ProjectManager {
 
 static SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
 
-/// Store state at `<workspace>/.lspkl/projects.json` (Kotlin uses `.pkl-lsp`).
+/// Store state at `<workspace>/.lspkl/projects.json`.
 /// Callers may also pass a state file directly inside the workspace.
 fn state_workspace_root(state_file: &Path) -> &Path {
     let parent = state_file.parent().unwrap_or_else(|| Path::new("."));
