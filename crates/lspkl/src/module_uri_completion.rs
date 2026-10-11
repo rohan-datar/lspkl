@@ -516,16 +516,19 @@ fn cached_packages(cache: &Path) -> BTreeSet<String> {
                 if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                     pending.push(entry.path());
                 } else if entry.path().extension().is_some_and(|e| e == "json") {
-                    let Ok(relative) = entry
-                        .path()
-                        .strip_prefix(&root)
-                        .map(|p| p.to_string_lossy().into_owned())
+                    let path = entry.path();
+                    let Some(relative) = path
+                        .parent()
+                        .and_then(|dir| dir.strip_prefix(&root).ok())
+                        .and_then(Path::to_str)
                     else {
                         continue;
                     };
-                    let Some(relative) = relative.rsplit_once('/').map(|(parent, _)| parent) else {
-                        continue;
-                    };
+                    // Cache paths are native filesystem paths; package URIs use `/`.
+                    #[cfg(windows)]
+                    let normalized = relative.replace('\\', "/");
+                    #[cfg(windows)]
+                    let relative = normalized.as_str();
                     let Some(relative) = decode_cache_path(relative, layout == "package-2") else {
                         continue;
                     };

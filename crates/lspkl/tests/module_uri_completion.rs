@@ -220,7 +220,8 @@ fn glob_completions_resolve_literal_metacharacters() {
     }
 }
 
-#[cfg(unix)]
+// APFS rejects invalid UTF-8 names before the completion code can run.
+#[cfg(target_os = "linux")]
 #[test]
 fn filesystem_completion_keeps_sources_under_non_utf8_parent_paths() {
     use std::ffi::OsStr;

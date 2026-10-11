@@ -218,6 +218,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked -- --test-threads=1
 ```
 
+CI runs native tests on Linux, macOS, and Windows. 
+
 
 Licensed under [Apache 2.0](LICENSE). See [NOTICE.txt](NOTICE.txt) and the SDK
 license/notice files for applicable attributions.
