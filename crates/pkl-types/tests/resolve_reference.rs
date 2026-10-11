@@ -1,14 +1,12 @@
-//! `resolve_reference` tests.
-//!
-//! These will panic on `todo!()` until you port the dispatch from
-//! `PklNode.resolveReference` (Extensions.kt:400). The first to pass is
-//! likely `unqualified_access_to_local_property` since it's the smallest
-//! end-to-end loop (scope lookup of one identifier in one module).
+//! Local, base, and imported references.
 
 mod harness;
 
-use pkl_syntax::ast::NodeKind;
-use pkl_types::{FileId, NodeRef, resolver::resolve_reference};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_types::{AnalysisContext, FileId, NodeRef, resolver::resolve_reference};
 
 /// Snippet:
 ///   x = 1
@@ -85,4 +83,110 @@ fn cursor_on_whitespace_returns_none() {
             "no reference at this position; should return None",
         );
     });
+}
+
+fn with_import_context(f: impl FnOnce(&AnalysisContext)) {
+    let base = harness::load_test_base();
+    let current = Arc::new(pkl_syntax::parse("import \"one.pkl\" as dep\n").unwrap());
+    let other = Arc::new(pkl_syntax::parse("import \"two.pkl\" as dep\n").unwrap());
+    let current_import = harness::find_first(&current, |kind| matches!(kind, NodeKind::Import));
+    let other_import = harness::find_first(&other, |kind| matches!(kind, NodeKind::Import));
+    let trees = HashMap::from([
+        (FileId(1), current.clone()),
+        (
+            FileId(2),
+            Arc::new(pkl_syntax::parse("oneValue = 1\n").unwrap()),
+        ),
+        (FileId(3), other),
+        (
+            FileId(4),
+            Arc::new(pkl_syntax::parse("twoValue = 2\n").unwrap()),
+        ),
+    ]);
+    let imports = HashMap::from([
+        (
+            NodeRef::new(FileId(1), current_import),
+            pkl_types::ImportResolution::Single(NodeRef::new(FileId(2), NodeId::ROOT)),
+        ),
+        (
+            NodeRef::new(FileId(3), other_import),
+            pkl_types::ImportResolution::Single(NodeRef::new(FileId(4), NodeId::ROOT)),
+        ),
+    ]);
+    let ctx = AnalysisContext::new(&current, FileId(1), &base, &trees, &imports);
+    f(&ctx);
+}
+
+#[test]
+fn import_alias_in_an_imported_file_resolves_with_its_own_file_id() {
+    with_import_context(|ctx| {
+        let tree = ctx.tree_for(FileId(3)).unwrap();
+        let import = harness::find_first(tree, |kind| matches!(kind, NodeKind::Import));
+        let alias = tree.identifier(import).unwrap();
+        let span = tree.span(alias);
+        assert_eq!(
+            resolve_reference(
+                NodeRef::new(FileId(3), alias),
+                span.begin_line,
+                span.begin_col,
+                ctx
+            ),
+            Some(NodeRef::new(FileId(4), NodeId::ROOT)),
+        );
+    });
+}
+
+#[test]
+fn import_uri_cursor_resolves_to_the_target_module_root() {
+    with_import_context(|ctx| {
+        let cursor = ctx.tree.find_at(1, 10).unwrap();
+        assert_eq!(
+            resolve_reference(NodeRef::new(ctx.file_id, cursor), 1, 10, ctx),
+            Some(NodeRef::new(FileId(2), NodeId::ROOT)),
+        );
+    });
+}
+
+#[test]
+fn import_declaration_does_not_resolve_outside_its_alias() {
+    with_import_context(|ctx| {
+        let import = harness::find_first(ctx.tree, |kind| matches!(kind, NodeKind::Import));
+        assert_eq!(
+            resolve_reference(NodeRef::new(ctx.file_id, import), 1, 1, ctx),
+            None
+        );
+    });
+}
+
+#[test]
+fn unresolved_and_glob_imports_and_unrelated_strings_have_no_target() {
+    let base = harness::load_test_base();
+    harness::with_snippet(
+        &base,
+        "import \"missing.pkl\" as dep\nimport* \"*.pkl\" as all\nvalue = \"plain\"\n",
+        |ctx| {
+            for &import in
+                ctx.tree.children(ctx.tree.root()).iter().filter(|&&id| {
+                    matches!(ctx.tree.kind(id), NodeKind::Import | NodeKind::ImportGlob)
+                })
+            {
+                let alias = ctx.tree.identifier(import).unwrap();
+                let span = ctx.tree.span(alias);
+                assert_eq!(
+                    resolve_reference(
+                        NodeRef::new(ctx.file_id, alias),
+                        span.begin_line,
+                        span.begin_col,
+                        ctx
+                    ),
+                    None
+                );
+            }
+            let cursor = ctx.tree.find_at(3, 11).unwrap();
+            assert_eq!(
+                resolve_reference(NodeRef::new(ctx.file_id, cursor), 3, 11, ctx),
+                None
+            );
+        },
+    );
 }

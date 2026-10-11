@@ -14,6 +14,17 @@ use crate::ty::{Type, TypeBindings};
 /// Returns [`Type::Unknown`] for kinds the inferencer can't yet handle, so
 /// callers don't have to special-case missing arms during early development.
 pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    thread_local! { static ACTIVE: std::cell::RefCell<std::collections::HashSet<NodeRef>> = std::cell::RefCell::new(std::collections::HashSet::new()); }
+    let key = NodeRef::new(ctx.file_id, node);
+    if !ACTIVE.with(|a| a.borrow_mut().insert(key)) {
+        return Type::Unknown;
+    }
+    let result = compute_expr_inner(node, bindings, ctx);
+    ACTIVE.with(|a| a.borrow_mut().remove(&key));
+    result
+}
+
+fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
     match ctx.tree.kind(node) {
         // boolean expressions
         NodeKind::TrueLiteralExpr
@@ -38,11 +49,10 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
             {
                 ctx.base.string_type().clone()
             } else {
-                let escaped = ctx
-                    .tree
+                ctx.tree
                     .escaped_string_literal(node)
-                    .expect("unable to escape string literal");
-                Type::string_literal(escaped)
+                    .map(Type::string_literal)
+                    .unwrap_or(Type::Unknown)
             }
         }
         NodeKind::ParenthesizedExpr | NodeKind::TraceExpr => {
@@ -104,6 +114,22 @@ pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
                 .map(|r| r.ty)
                 .unwrap_or(Type::Unknown)
         }
+        NodeKind::ImportExpr => crate::resolver::import_type(NodeRef::new(ctx.file_id, node), ctx),
+        NodeKind::ThisExpr => compute_this_type(node, bindings, ctx),
+        NodeKind::SuperAccessExpr => crate::resolver::access_receiver_type(node, bindings, ctx)
+            .and_then(|t| {
+                ctx.tree
+                    .name(node)
+                    .and_then(|n| find_member_on_type(&t, n, bindings, ctx))
+            })
+            .map(|r| r.ty)
+            .unwrap_or(Type::Unknown),
+        NodeKind::SubscriptExpr => ctx
+            .tree
+            .child(node, |k| k.is_expr_node())
+            .map(|e| compute_expr_type(e, bindings, ctx))
+            .and_then(|t| crate::resolver::container_value_type(&t, ctx))
+            .unwrap_or(Type::Unknown),
         NodeKind::ModuleExpr => Type::Module {
             module_node: NodeRef::new(ctx.file_id, ctx.tree.root()),
             reference_name: "".to_string(),

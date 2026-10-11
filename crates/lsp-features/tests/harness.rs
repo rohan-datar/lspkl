@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use pkl_syntax::ast::SyntaxTree;
@@ -34,6 +35,8 @@ pub fn with_snippet<R>(
     f: impl FnOnce(&SyntaxTree, &AnalysisContext) -> R,
 ) -> R {
     let tree = pkl_syntax::parse(source).expect("snippet should parse");
-    let ctx = AnalysisContext::new(&tree, FileId(1), base);
+    let trees = HashMap::new();
+    let imports = HashMap::new();
+    let ctx = AnalysisContext::new(&tree, FileId(1), base, &trees, &imports);
     f(&tree, &ctx)
 }

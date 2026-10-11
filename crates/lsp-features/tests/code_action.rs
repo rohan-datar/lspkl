@@ -177,3 +177,22 @@ fn unmatched_echoed_diagnostics_are_skipped() {
         "no internal diagnostic matches the echoed one; got {result:?}"
     );
 }
+
+#[test]
+fn package_download_action_has_command_and_no_workspace_edit() {
+    let package = "package://example.com/library@1.2.3";
+    let mut diagnostic = annotated_diagnostic();
+    diagnostic.quick_fixes = vec![QuickFix::download_package(package.into())];
+    let echoed = [to_lsp(&diagnostic)];
+    let result = code_action(&params_for(&echoed), &[diagnostic]);
+    assert_eq!(result.len(), 1);
+    let CodeActionOrCommand::CodeAction(action) = &result[0] else {
+        panic!("expected code action")
+    };
+    assert!(action.edit.is_none());
+    let command = action.command.as_ref().unwrap();
+    assert_eq!(command.command, "pkl.downloadPackage");
+    let arguments = command.arguments.as_ref().unwrap();
+    assert_eq!(arguments.len(), 1);
+    assert_eq!(arguments[0].as_str(), Some(package));
+}

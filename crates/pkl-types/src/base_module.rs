@@ -172,8 +172,6 @@ impl BaseModule {
     }
 
     /// Load the vendored `base.pkl` embedded in the binary at compile time.
-    ///
-    /// TODO(stdlib): register custom uri scheme for stdlib goto-definition
     pub fn load_vendored() -> Result<Self, BaseModuleError> {
         Self::load(include_str!("../tests/fixtures/base.pkl"))
     }

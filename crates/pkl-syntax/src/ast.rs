@@ -572,14 +572,7 @@ impl SyntaxTree {
             return None;
         }
 
-        let lit = self.text(string_node);
-
-        Some(
-            lit.trim_matches('"')
-                .chars()
-                .flat_map(char::escape_default)
-                .collect(),
-        )
+        decode_string_literal(self.text(string_node))
     }
 
     pub fn is_glob_import(&self, node: NodeId) -> bool {
@@ -610,6 +603,50 @@ impl SyntaxTree {
         self.child(node, |k| matches!(k, NodeKind::ArgumentList))
             .is_none()
     }
+}
+
+/// Decode a complete Pkl string token without constructing a syntax tree.
+pub fn decode_string_literal(literal: &str) -> Option<String> {
+    let hashes = literal.bytes().take_while(|&b| b == b'#').count();
+    let quoted = &literal[hashes..];
+    let quotes = if quoted.starts_with("\"\"\"") { 3 } else { 1 };
+    let end = literal.len().checked_sub(hashes + quotes)?;
+    if !quoted.starts_with('"')
+        || literal.get(end..end + quotes)?.bytes().any(|b| b != b'"')
+        || literal[end + quotes..].bytes().any(|b| b != b'#')
+    {
+        return None;
+    }
+    let body = literal.get(hashes + quotes..end)?;
+    let escape = "\\######".get(..hashes + 1)?;
+    let mut result = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(index) = rest.find(escape) {
+        result.push_str(&rest[..index]);
+        rest = &rest[index + escape.len()..];
+        let ch = rest.chars().next()?;
+        rest = &rest[ch.len_utf8()..];
+        match ch {
+            'n' => result.push('\n'),
+            'r' => result.push('\r'),
+            't' => result.push('\t'),
+            '"' => result.push('"'),
+            '\\' => result.push('\\'),
+            'u' => {
+                rest = rest.strip_prefix('{')?;
+                let close = rest.find('}')?;
+                let digits = &rest[..close];
+                if digits.is_empty() || digits.len() > 6 {
+                    return None;
+                }
+                result.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
+                rest = &rest[close + 1..];
+            }
+            _ => return None,
+        }
+    }
+    result.push_str(rest);
+    Some(result)
 }
 
 /// Long-name list used by `NodeKind::name`.

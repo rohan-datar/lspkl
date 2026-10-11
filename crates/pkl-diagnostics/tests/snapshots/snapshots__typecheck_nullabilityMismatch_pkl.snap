@@ -2,4 +2,4 @@
 source: crates/pkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-8:16 error: Type mismatch. Expected: Collection. Actual: Listing?
+8:16 error: Type mismatch. Expected: Collection. Actual: Listing<String>?

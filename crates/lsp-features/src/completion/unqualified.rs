@@ -476,11 +476,13 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
 
     // Local scope walk (innermost first, so inner bindings shadow outer).
     let mut scopes: Vec<(String, CompletionItemKind)> = Vec::new();
+    let mut inherited_scopes = Vec::new();
     let mut current = Some(node);
     while let Some(id) = current {
         match tree.kind(id) {
             NodeKind::LetExpr => {
-                if let Some(binding) = tree.children(id).first()
+                if pkl_types::resolver::let_binding_is_visible(id, node, ctx)
+                    && let Some(binding) = tree.children(id).first()
                     && let Some(name) = tree.name(*binding)
                 {
                     scopes.push((name.to_string(), CompletionItemKind::VARIABLE));
@@ -514,25 +516,53 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
                         scopes.push((name.to_string(), kind));
                     }
                 }
+                if matches!(tree.kind(id), NodeKind::ClassBody)
+                    && let Some(class) = tree.parent(id)
+                {
+                    for member in members_of_type(
+                        &Type::class(pkl_types::NodeRef::new(ctx.file_id, class)),
+                        &TypeBindings::new(),
+                        ctx,
+                    ) {
+                        inherited_scopes.push((
+                            member.name,
+                            if matches!(member.kind, super::members::MemberKind::Method) {
+                                CompletionItemKind::METHOD
+                            } else {
+                                CompletionItemKind::PROPERTY
+                            },
+                        ));
+                    }
+                }
             }
             NodeKind::Module => {
-                for member in tree.children_matching(id, |k| {
-                    matches!(
-                        k,
-                        NodeKind::ClassProperty
-                            | NodeKind::ClassMethod
-                            | NodeKind::Class
-                            | NodeKind::TypeAlias
-                    )
-                }) {
-                    if let Some(name) = tree.name(member) {
-                        let kind = match tree.kind(member) {
-                            NodeKind::ClassMethod => CompletionItemKind::METHOD,
-                            NodeKind::ClassProperty => CompletionItemKind::PROPERTY,
-                            NodeKind::Class => CompletionItemKind::CLASS,
-                            _ => CompletionItemKind::STRUCT,
-                        };
-                        scopes.push((name.to_string(), kind));
+                for member in members_of_type(
+                    &pkl_types::resolver::module_type(
+                        pkl_types::NodeRef::new(ctx.file_id, id),
+                        ctx,
+                    ),
+                    &TypeBindings::new(),
+                    ctx,
+                ) {
+                    let kind = match member.kind {
+                        super::members::MemberKind::Method => CompletionItemKind::METHOD,
+                        super::members::MemberKind::Property => CompletionItemKind::PROPERTY,
+                        super::members::MemberKind::Class => CompletionItemKind::CLASS,
+                        super::members::MemberKind::TypeAlias => CompletionItemKind::STRUCT,
+                    };
+                    if member.node.file_id == ctx.file_id
+                        && tree.parent(member.node.node_id) == Some(id)
+                    {
+                        scopes.push((member.name, kind));
+                    } else {
+                        inherited_scopes.push((member.name, kind));
+                    }
+                }
+                for import in tree
+                    .children_matching(id, |k| matches!(k, NodeKind::Import | NodeKind::ImportGlob))
+                {
+                    if let Some(name) = pkl_types::resolver::import_name(tree, import) {
+                        scopes.push((name, CompletionItemKind::MODULE));
                     }
                 }
             }
@@ -540,7 +570,7 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
         }
         current = tree.parent(id);
     }
-
+    scopes.extend(inherited_scopes);
     // Base-module classes and typealiases (e.g. `String`, `List`).
     let base_tree = ctx.base.tree();
     for def in base_tree.children_matching(base_tree.root(), |k| {

@@ -38,6 +38,7 @@ async fn main() {
     let (service, socket) = LspService::build(|client| PklBackend::new(state, Some(client)))
         .custom_method("pkl/syncProjects", PklBackend::sync_projects)
         .custom_method("pkl/downloadPackage", PklBackend::download_package)
+        .custom_method("pkl/fileContents", PklBackend::file_contents)
         .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }

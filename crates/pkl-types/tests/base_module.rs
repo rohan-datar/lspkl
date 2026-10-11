@@ -59,7 +59,14 @@ fn int_extends_number() {
     // Requires Type::is_subtype_of to be implemented.
     let base = harness::load_test_base();
     let dummy_tree = pkl_syntax::parse("").expect("empty parse");
-    let ctx = pkl_types::AnalysisContext::new(&dummy_tree, FileId(1), &base);
+    let trees = std::collections::HashMap::new();
+    let ctx = pkl_types::AnalysisContext::new(
+        &dummy_tree,
+        FileId(1),
+        &base,
+        &trees,
+        harness::empty_imports(),
+    );
 
     assert!(
         base.int_type().is_subtype_of(base.number_type(), &ctx),

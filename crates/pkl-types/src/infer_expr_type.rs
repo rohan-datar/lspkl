@@ -344,8 +344,9 @@ fn infer_type_from_arg_list(
     let param_list = tree.child(header, |k| matches!(k, NodeKind::ParameterList))?;
     let &param_decl = tree.children(param_list).get(arg_index)?;
     let type_annotation = tree.child(param_decl, |k| matches!(k, NodeKind::TypeAnnotation))?;
+    let type_node = tree.child(type_annotation, |k| k.is_type_node())?;
     Some(to_type(
-        NodeRef::new(method.node.file_id, type_annotation),
+        NodeRef::new(method.node.file_id, type_node),
         bindings,
         ctx,
     ))

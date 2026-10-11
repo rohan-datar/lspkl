@@ -8,10 +8,25 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::{AnalysisContext, BaseModule, FileId};
+use pkl_types::{AnalysisContext, BaseModule, FileId, NodeRef};
+
+/// Shared empty registry for helpers that return a borrowed context.
+pub fn empty_trees() -> &'static HashMap<FileId, Arc<SyntaxTree>> {
+    static TREES: LazyLock<HashMap<FileId, Arc<SyntaxTree>>> = LazyLock::new(HashMap::new);
+    &TREES
+}
+
+/// Single-file tests have no import edges.
+pub fn empty_imports() -> &'static HashMap<NodeRef, pkl_types::ImportResolution> {
+    static IMPORTS: LazyLock<HashMap<NodeRef, pkl_types::ImportResolution>> =
+        LazyLock::new(HashMap::new);
+    &IMPORTS
+}
 
 /// Path of the vendored `base.pkl` fixture. See `tests/fixtures/README.md`.
 pub fn base_pkl_path() -> PathBuf {
@@ -46,7 +61,8 @@ pub fn with_snippet<R>(
     f: impl FnOnce(&AnalysisContext) -> R,
 ) -> R {
     let tree = pkl_syntax::parse(source).expect("snippet should parse");
-    let ctx = AnalysisContext::new(&tree, FileId(1), base);
+    let trees = HashMap::new();
+    let ctx = AnalysisContext::new(&tree, FileId(1), base, &trees, empty_imports());
     f(&ctx)
 }
 

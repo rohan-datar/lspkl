@@ -1,5 +1,4 @@
-//! Directory-backed `modulepath:` resolution. Archives and global settings
-//! are separate follow-up slices.
+//! Ordered directory-backed modulepath resolution tests.
 
 use std::collections::BTreeMap;
 use std::fs;

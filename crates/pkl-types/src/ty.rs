@@ -216,6 +216,25 @@ impl Type {
             }
             (Type::Alias { .. }, _) => self.unaliased(ctx).is_subtype_of(other, ctx),
             (_, Type::Alias { .. }) => self.is_subtype_of(&other.unaliased(ctx), ctx),
+            (Type::Module { module_node: a, .. }, Type::Module { module_node: b, .. }) => {
+                let mut current = Some(*a);
+                let mut seen = HashSet::new();
+                while let Some(node) = current {
+                    if node == *b {
+                        return true;
+                    }
+                    if !seen.insert(node) {
+                        break;
+                    }
+                    current = resolver::module_super(node, ctx);
+                }
+                false
+            }
+            (Type::Module { .. }, Type::Class { .. }) => {
+                other.class_equals(ctx.base.module_type())
+                    || other.class_equals(ctx.base.object_type())
+                    || other.class_equals(ctx.base.any_type())
+            }
             _ => false,
         }
     }
@@ -411,8 +430,8 @@ pub type TypeBindings = HashMap<NodeRef, Type>;
 fn render_resolved_type(
     ctx: &AnalysisContext,
     node: &NodeRef,
-    type_args: &Vec<Type>,
-    constraints: &Vec<ConstraintExpr>,
+    type_args: &[Type],
+    constraints: &[ConstraintExpr],
 ) -> String {
     let mut resolved = String::from(
         ctx.tree_for(node.file_id)
@@ -422,9 +441,11 @@ fn render_resolved_type(
     );
     if !type_args.is_empty() {
         resolved.push('<');
-        for arg in type_args {
+        for (index, arg) in type_args.iter().enumerate() {
+            if index > 0 {
+                resolved.push_str(", ");
+            }
             resolved.push_str(&arg.render(ctx));
-            resolved.push_str(", ");
         }
         resolved.push('>');
     }

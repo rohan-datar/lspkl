@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::resolver::{class_member_bindings, resolve_type_name};
-use pkl_types::to_type::to_type;
+use pkl_types::resolver::{definition_type, module_super, module_type};
 use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
 
 /// What kind of declaration a member is.
@@ -140,7 +140,34 @@ fn collect(
                     seen_names,
                 );
             }
+            if let Some(parent) = module_super(*module_node, ctx) {
+                collect(
+                    &module_type(parent, ctx),
+                    bindings,
+                    ctx,
+                    out,
+                    seen_names,
+                    seen_nodes,
+                );
+            } else {
+                collect(
+                    ctx.base.module_type(),
+                    bindings,
+                    ctx,
+                    out,
+                    seen_names,
+                    seen_nodes,
+                );
+            }
         }
+        Type::Alias { .. } => collect(
+            &ty.unaliased(ctx),
+            bindings,
+            ctx,
+            out,
+            seen_names,
+            seen_nodes,
+        ),
         Type::Union { left, right, .. } => {
             // Collect both sides independently, then keep left entries whose
             // name also exists on the right.
@@ -219,33 +246,11 @@ fn push_member(
         NodeKind::TypeAlias => MemberKind::TypeAlias,
         _ => return,
     };
-    let ty = declared_member_type(tree, file_id, member, bindings, ctx);
+    let ty = definition_type(NodeRef::new(file_id, member), bindings, ctx);
     out.push(MemberInfo {
         name: name.to_string(),
         node: NodeRef::new(file_id, member),
         ty,
         kind,
     });
-}
-
-/// Resolve a member's declared type from its type annotation, mirroring what
-/// `find_member_on_type` does for point lookups. Methods carry their
-/// annotation inside the `MethodHeader`.
-fn declared_member_type(
-    tree: &SyntaxTree,
-    file_id: pkl_types::FileId,
-    member: NodeId,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-) -> Type {
-    let holder = match tree.kind(member) {
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
-            .child(member, |k| matches!(k, NodeKind::MethodHeader))
-            .unwrap_or(member),
-        _ => member,
-    };
-    tree.child(holder, |k| matches!(k, NodeKind::TypeAnnotation))
-        .and_then(|ann| tree.child(ann, |k| k.is_type_node()))
-        .map(|type_node| to_type(NodeRef::new(file_id, type_node), bindings, ctx))
-        .unwrap_or(Type::Unknown)
 }

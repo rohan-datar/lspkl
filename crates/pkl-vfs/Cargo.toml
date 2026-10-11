@@ -9,7 +9,14 @@ dashmap.workspace = true
 url.workspace = true
 fluent-uri.workspace = true
 thiserror.workspace = true
+zip.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+percent-encoding.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.13"

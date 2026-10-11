@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::cli::PklCli;
 use crate::dto::{DerivedProjectMetadata, PklProject, PklWorkspaceState, ProjectDeps};
@@ -43,7 +44,8 @@ pub struct ProjectManager {
     /// folder changes).
     workspace_folders: Vec<PathBuf>,
     /// Discovered projects keyed by their `PklProject` file path.
-    projects: BTreeMap<PathBuf, PklProject>,
+    projects: BTreeMap<PathBuf, Arc<PklProject>>,
+    excluded_directories: Vec<String>,
 }
 
 static SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
@@ -66,6 +68,7 @@ fn state_workspace_root(state_file: &Path) -> &Path {
 fn walk_project_files(
     directory: &Path,
     project_files: &mut Vec<PathBuf>,
+    excluded_directories: &[String],
 ) -> Result<(), std::io::Error> {
     for dirent in directory.read_dir()? {
         let dirent = dirent?;
@@ -80,13 +83,16 @@ fn walk_project_files(
             continue;
         }
         let dirname = dirent.file_name();
-        if SKIPPED_DIRS.iter().any(|&name| dirname == OsStr::new(name)) {
+        if excluded_directories
+            .iter()
+            .any(|name| dirname == OsStr::new(name))
+        {
             continue;
         }
         if dirname.to_string_lossy().starts_with('.') {
             continue;
         }
-        walk_project_files(dirent.path().as_path(), project_files)?;
+        walk_project_files(dirent.path().as_path(), project_files, excluded_directories)?;
     }
     Ok(())
 }
@@ -103,7 +109,14 @@ impl ProjectManager {
             cli,
             workspace_folders: Vec::new(),
             projects: BTreeMap::new(),
+            excluded_directories: SKIPPED_DIRS.iter().map(|name| (*name).to_owned()).collect(),
         }
+    }
+
+    /// Apply settings without discarding synced project metadata.
+    pub fn configure(&mut self, cli: PklCli, excluded_directories: Vec<String>) {
+        self.cli = cli;
+        self.excluded_directories = excluded_directories;
     }
 
     /// Set the workspace roots
@@ -137,7 +150,11 @@ impl ProjectManager {
     pub fn discover_project_files(&self) -> Result<Vec<PathBuf>, ProjectError> {
         let mut project_files = Vec::new();
         for workspace_folder in &self.workspace_folders {
-            walk_project_files(workspace_folder, &mut project_files)?;
+            walk_project_files(
+                workspace_folder,
+                &mut project_files,
+                &self.excluded_directories,
+            )?;
         }
         project_files.sort();
         project_files.dedup();
@@ -176,7 +193,7 @@ impl ProjectManager {
                     let deps_json = std::fs::read_to_string(project_deps)?;
                     project.project_deps = Some(PklProject::load_project_deps(&deps_json)?);
                 }
-                synced.insert(project_file, project);
+                synced.insert(project_file, Arc::new(project));
             }
         }
         self.projects = synced;
@@ -198,7 +215,13 @@ impl ProjectManager {
 
     /// All discovered projects.
     pub fn projects(&self) -> impl Iterator<Item = &PklProject> {
-        self.projects.values()
+        self.projects.values().map(Arc::as_ref)
+    }
+
+    /// Pin project context before releasing the manager lock for file I/O.
+    pub fn get_pkl_project_shared(&self, file: &Path) -> Option<Arc<PklProject>> {
+        file.ancestors()
+            .find_map(|parent| self.projects.get(&parent.join("PklProject")).cloned())
     }
 
     /// Persist current state to `state_file` so restarts skip re-resolution.
@@ -282,10 +305,10 @@ impl ProjectManager {
             };
             projects.insert(
                 project_file,
-                PklProject {
+                Arc::new(PklProject {
                     metadata,
                     project_deps,
-                },
+                }),
             );
         }
         let replaced: Vec<_> = self

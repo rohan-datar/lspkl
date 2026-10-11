@@ -140,11 +140,13 @@ fn renders_method_modifiers_with_signature() {
 }
 
 #[test]
-fn returns_none_for_non_declarations() {
+fn renders_module_value_root() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = 1\n", |tree, ctx| {
-        // The module root itself is not a declaration we render.
         let node = NodeRef::new(FileId(1), tree.root());
-        assert_eq!(render_markdown(node, node, ctx), None);
+        assert_eq!(
+            render_markdown(node, node, ctx).as_deref(),
+            Some("```pkl\nmodule \n```")
+        );
     });
 }

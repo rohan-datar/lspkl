@@ -1,112 +1,219 @@
-//! `modulepath:` URI resolution.
+//! Ordered directory and archive-backed `modulepath:` resolution.
 
+use crate::dto::PklProject;
+use fluent_uri::Uri;
+use pkl_vfs::{FileManager, VirtualFile, effective_uri, url_to_path};
+use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use pkl_vfs::FileManager;
-use pkl_vfs::file_manager::url_to_path;
-
-use crate::dto::PklProject;
-
-/// Resolves `modulepath:` URIs against a project's modulepath entries.
-/// Fields come alive as the todo!() bodies are filled in.
-#[allow(dead_code)]
 pub struct ModulepathResolver<'a> {
     file_manager: &'a FileManager,
+    configured: &'a [PathBuf],
 }
 
 impl<'a> ModulepathResolver<'a> {
     pub fn new(file_manager: &'a FileManager) -> Self {
-        Self { file_manager }
+        Self::with_modulepaths(file_manager, &[])
     }
-
-    /// Effective directory roots for `context`. Archives and global settings
-    /// are not included in this first resolver slice.
+    pub fn with_modulepaths(file_manager: &'a FileManager, configured: &'a [PathBuf]) -> Self {
+        Self {
+            file_manager,
+            configured,
+        }
+    }
+    /// Project entries precede globally configured entries.
     pub fn module_paths(&self, context: Option<&PklProject>) -> Vec<PathBuf> {
         let mut paths = Vec::new();
-        let Some(ctx) = context else { return paths };
-        let Some(project_dir) = ctx.project_dir() else {
-            return paths;
-        };
-        let Some(evaluator_settings) = ctx.metadata.evaluator_settings.as_ref() else {
-            return paths;
-        };
-        let Some(module_paths) = evaluator_settings.module_path.as_ref() else {
-            return paths;
-        };
-
-        for module_path in module_paths {
-            paths.push(normalize_path(&project_dir.join(module_path)));
+        if let Some(ctx) = context
+            && let Some(dir) = ctx.project_dir()
+            && let Some(settings) = &ctx.metadata.evaluator_settings
+            && let Some(roots) = &settings.module_path
+        {
+            paths.extend(roots.iter().map(|root| normalize_path(&dir.join(root))));
         }
+        paths.extend(self.configured.iter().map(|root| {
+            normalize_path(&if root.is_absolute() {
+                root.clone()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(root)
+            })
+        }));
         paths
     }
-
-    /// Search directory roots in declaration order for a relative module path.
-    fn resolve_in_roots(
-        &self,
-        relative_path: &Path,
-        context: Option<&PklProject>,
-    ) -> Option<Arc<pkl_vfs::VirtualFile>> {
-        // Normalize before joining a root: `nested/../shared.pkl` should
-        // find a root-level file even if that root has no `nested/` directory.
-        if relative_path.is_absolute() {
-            return None;
-        }
-        let relative_path = normalize_path(relative_path);
-        self.module_paths(context).into_iter().find_map(|root| {
-            let candidate = root.join(&relative_path);
-            if !candidate.is_file() {
-                return None;
-            }
-            self.file_manager.get_modulepath_file(&candidate).ok()
-        })
+    pub fn roots(&self, context: Option<&PklProject>) -> Vec<Uri<String>> {
+        self.module_paths(context)
+            .iter()
+            .filter_map(|path| root_uri(path))
+            .collect()
     }
-
-    /// Resolve `path` (the part after `modulepath:`) against `context`'s
-    /// modulepath. Returns the first regular file found in declaration order.
-    /// Kotlin reference: `resolveAbsolute`.
+    pub fn relative_path(
+        &self,
+        file: &VirtualFile,
+        context: Option<&PklProject>,
+    ) -> Option<String> {
+        let uri = effective_uri(&file.url).ok()?;
+        self.roots(context)
+            .iter()
+            .find_map(|root| relative_uri(root, &uri))
+    }
     pub fn resolve_absolute(
         &self,
         path: &str,
         context: Option<&PklProject>,
-    ) -> Option<Arc<pkl_vfs::VirtualFile>> {
-        self.resolve_in_roots(Path::new(path.strip_prefix('/')?), context)
+    ) -> Option<Arc<VirtualFile>> {
+        let path = path.strip_prefix('/')?;
+        self.roots(context).iter().find_map(|root| {
+            let target = resolve_member(self.file_manager, root, path)?;
+            self.file_manager.get_or_load(&target).ok()
+        })
     }
-
-    /// Resolve `path` relative to an already-known modulepath `file`.
     pub fn resolve_relative(
         &self,
-        file: &pkl_vfs::VirtualFile,
+        file: &VirtualFile,
         path: &str,
         context: Option<&PklProject>,
-    ) -> Option<Arc<pkl_vfs::VirtualFile>> {
+    ) -> Option<Arc<VirtualFile>> {
         if path.starts_with('/') {
             return self.resolve_absolute(path, context);
         }
-        let file_path = url_to_path(&file.url).ok()?;
-        let roots = self.module_paths(context);
-        let relative_source = roots
-            .iter()
-            .find_map(|root| file_path.strip_prefix(root).ok())?;
-        let relative_target = relative_source.parent()?.join(path);
-        self.resolve_in_roots(&relative_target, context)
+        let relative = self.relative_path(file, context)?;
+        let parent = relative.rsplit_once('/').map_or("", |(parent, _)| parent);
+        self.resolve_absolute(
+            &format!(
+                "/{}",
+                if parent.is_empty() {
+                    path.to_owned()
+                } else {
+                    format!("{parent}/{path}")
+                }
+            ),
+            context,
+        )
     }
-
-    /// Is `file` reachable through any project's modulepath?
     pub fn is_on_module_path(&self, file: &Path, context: Option<&PklProject>) -> bool {
-        let roots = self.module_paths(context);
-        roots.iter().any(|root| file.starts_with(root))
+        self.module_paths(context)
+            .iter()
+            .any(|root| root.is_dir() && file.starts_with(root))
+    }
+    /// Merge by logical path, retaining the first root's file for shadowed entries.
+    pub fn files(&self, context: Option<&PklProject>) -> BTreeMap<String, Uri<String>> {
+        let mut files = BTreeMap::new();
+        for root in self.roots(context) {
+            if let Ok(entries) = self.file_manager.list_files(&root) {
+                for uri in entries {
+                    if let Some(path) = relative_uri(&root, &uri) {
+                        files.entry(path).or_insert(uri);
+                    }
+                }
+            }
+        }
+        files
     }
 }
 
-/// Lexically simplify a path without requiring intermediate directories to
-/// exist. Preserve leading `..` for relative imports, but never pop a root.
+pub(crate) fn root_uri(path: &Path) -> Option<Uri<String>> {
+    let mut url = pkl_vfs::path_to_uri(path).ok()?.into_string();
+    let archive = path.is_file()
+        && (matches!(
+            path.extension().and_then(|s| s.to_str()),
+            Some("zip" | "jar")
+        ) || {
+            let mut header = [0; 64];
+            std::fs::File::open(path)
+                .and_then(|mut f| f.read(&mut header))
+                .is_ok_and(|n| {
+                    header[..n].starts_with(b"PK\x03\x04")
+                        || header[..n].starts_with(b"#!/bin/sh\n      exec java  -jar $0 \"$@\"")
+                })
+        });
+    if archive {
+        url = format!("jar:{url}!/");
+    } else if !url.ends_with('/') {
+        url.push('/');
+    }
+    Uri::parse(url).ok()
+}
+
+pub(crate) fn relative_uri(root: &Uri<String>, file: &Uri<String>) -> Option<String> {
+    if root.scheme().as_str() == "file" && file.scheme().as_str() == "file" {
+        return Some(
+            url_to_path(file)
+                .ok()?
+                .strip_prefix(url_to_path(root).ok()?)
+                .ok()?
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    let root = effective_uri(root).ok()?;
+    let file = effective_uri(file).ok()?;
+    percent_encoding::percent_decode_str(file.as_str().strip_prefix(root.as_str())?)
+        .decode_utf8()
+        .ok()
+        .map(|s| s.into_owned())
+}
+
+/// Decode a URI path once; callers match logical filenames, never encoded bytes.
+pub(crate) fn decode_path(path: &str) -> Option<std::borrow::Cow<'_, str>> {
+    percent_encoding::percent_decode_str(path)
+        .decode_utf8()
+        .ok()
+}
+
+/// A dependency member is a confined path, never a URI reference. Prefixing
+/// its re-encoded normalized path prevents VFS scheme/authority dispatch and
+/// ensures literal percent signs are not decoded a second time.
+pub(crate) fn resolve_member(
+    files: &FileManager,
+    root: &Uri<String>,
+    path: &str,
+) -> Option<Uri<String>> {
+    let decoded = decode_path(path)?;
+    if decoded.contains(['\\', '\0']) {
+        return None;
+    }
+    let path = normalize_relative(&decoded)?;
+    use std::fmt::Write;
+    let mut encoded = String::from("./");
+    for (index, part) in path.split('/').enumerate() {
+        if index != 0 {
+            encoded.push('/');
+        }
+        write!(
+            encoded,
+            "{}",
+            percent_encoding::utf8_percent_encode(part, percent_encoding::NON_ALPHANUMERIC)
+        )
+        .ok()?;
+    }
+    files.resolve_uri(root, &encoded).ok()
+}
+
+pub(crate) fn normalize_relative(path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains('\0') || path.split('/').next()?.contains(':') {
+        return None;
+    }
+    let path = normalize_path(Path::new(path));
+    if path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    if path
+        .components()
+        .next()
+        .is_some_and(|part| part.as_os_str().to_string_lossy().contains(':'))
+    {
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
 fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
             Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
+                normalized.push(component.as_os_str())
             }
             Component::CurDir => {}
             Component::ParentDir => {

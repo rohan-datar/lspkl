@@ -185,7 +185,7 @@ fn get_or_load_reads_from_disk() {
 #[test]
 fn get_or_load_rejects_unsupported_scheme() {
     let mgr = FileManager::new();
-    let url = Uri::parse(String::from("https://example.com/foo.pkl")).unwrap();
+    let url = Uri::parse(String::from("http://example.com/foo.pkl")).unwrap();
     let result = mgr.get_or_load(&url);
     assert!(matches!(
         result,

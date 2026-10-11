@@ -31,6 +31,8 @@ pub enum PackageUriError {
 
     #[error("invalid checksum: `{0}` in package URI `{1}`")]
     BadChecksum(String, String),
+    #[error("package URI `{0}` has an invalid scheme or path")]
+    InvalidIdentity(String),
 }
 
 fn encode_path(path: &str) -> String {
@@ -67,6 +69,15 @@ impl PackageUri {
     /// Parse a package URI string.
     pub fn create(input: &str) -> Result<Self, PackageUriError> {
         let uri = Uri::parse(input).map_err(PackageUriError::ParseError)?;
+        if !matches!(uri.scheme().as_str(), "package" | "projectpackage")
+            || uri
+                .path()
+                .as_str()
+                .split('/')
+                .any(|part| matches!(part, "." | ".."))
+        {
+            return Err(PackageUriError::InvalidIdentity(input.to_owned()));
+        }
 
         let Some(authority) = uri.authority() else {
             return Err(PackageUriError::MissingAuthority(input.to_owned()));

@@ -1,8 +1,7 @@
 //! Concurrent registry of files the language server knows about.
 
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 use fluent_uri::Uri;
@@ -15,7 +14,7 @@ use crate::virtual_file::{Origin, VirtualFile};
 
 #[derive(Debug, Error)]
 pub enum FileError {
-    #[error("URL scheme `{0}` is not supported in this phase")]
+    #[error("URL scheme `{0}` is not supported")]
     UnsupportedScheme(String),
 
     #[error("URL `{0}` could not be converted to a filesystem path")]
@@ -39,18 +38,40 @@ pub enum FileError {
 
     #[error("unable to parse uri: {0}")]
     UriParse(#[from] fluent_uri::ParseError),
+    #[error("invalid source URI or contents: {0}")]
+    InvalidSource(String),
+    #[error("archive error: {0}")]
+    Archive(#[from] zip::result::ZipError),
+    #[error("HTTPS error: {0}")]
+    Https(#[from] reqwest::Error),
 }
 
 /// Owns every `VirtualFile` the server is currently tracking.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileManager {
     files: DashMap<Uri<String>, Arc<VirtualFile>>,
+    cache_dir: RwLock<PathBuf>,
+    client: RwLock<Option<reqwest::blocking::Client>>,
+}
+
+impl Default for FileManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<(fluent_uri::ParseError, String)> for FileError {
+    fn from((error, _): (fluent_uri::ParseError, String)) -> Self {
+        Self::UriParse(error)
+    }
 }
 
 impl FileManager {
     pub fn new() -> Self {
         Self {
             files: DashMap::new(),
+            cache_dir: RwLock::new(crate::sources::default_cache()),
+            client: RwLock::new(None),
         }
     }
 
@@ -63,10 +84,10 @@ impl FileManager {
         self.files.is_empty()
     }
 
-    /// Get the file for `url` if it has been opened or fetched. Does NOT read
-    /// from disk; use [`get_or_load`] for that.
+    /// Get a known file without disk or network access.
     pub fn get(&self, url: &Uri<String>) -> Option<Arc<VirtualFile>> {
-        self.files.get(url).map(|f| f.value().clone())
+        let url = crate::effective_uri(url).ok()?;
+        self.files.get(&url).map(|f| f.value().clone())
     }
 
     /// Register a file the editor just opened. Implements the `didOpen` flow.
@@ -76,6 +97,7 @@ impl FileManager {
         contents: String,
         version: Option<i32>,
     ) -> Arc<VirtualFile> {
+        let url = crate::effective_uri(&url).unwrap_or(url);
         let origin = Self::origin_for(&url);
         let file = Arc::new(VirtualFile::new(url.clone(), origin, contents, version));
         self.files.insert(url.clone(), file.clone());
@@ -92,8 +114,9 @@ impl FileManager {
         new_contents: String,
         new_version: Option<i32>,
     ) -> Result<Arc<VirtualFile>, FileError> {
-        let Some(file) = self.files.get(url) else {
-            return Err(FileError::NotOpen(url.clone()));
+        let url = crate::effective_uri(url)?;
+        let Some(file) = self.files.get(&url) else {
+            return Err(FileError::NotOpen(url));
         };
         file.set_contents(new_contents, new_version);
         Ok(file.clone())
@@ -102,47 +125,94 @@ impl FileManager {
     /// Remove a file from the registry. Implements the `didClose` flow.
     /// No-op if the file isn't tracked.
     pub fn close(&self, url: &Uri<String>) {
-        self.files.remove(url);
-    }
-
-    /// Read a file from disk if it's not already in the registry. Used when
-    /// resolving imports to files the editor never opened.
-    pub fn get_or_load(&self, url: &Uri<String>) -> Result<Arc<VirtualFile>, FileError> {
-        if let Some(file) = self.files.get(url) {
-            return Ok(file.clone());
-        };
-        match url.scheme().as_str() {
-            // TODO(stdlib-loader): `pkl:base`-style URIs resolve to vendored
-            // stdlib files. pkl-types already embeds base.pkl; generalize.
-            "pkl" => Err(FileError::UnsupportedScheme("pkl".into())),
-
-            // TODO(https-loader): fetch over HTTPS (needs an HTTP client
-            // dependency), cache under the module cache dir.
-            "https" => Err(FileError::UnsupportedScheme("https".into())),
-
-            // TODO(jar-loader): open the archive, read the member. Needs a
-            // zip reader dependency.
-            "jar" | "classpath" => Err(FileError::UnsupportedScheme(url.scheme().as_str().into())),
-
-            // TODO(modulepath-loader): route through the project's
-            // ModulepathResolver once pkl-project is wired into the server.
-            "modulepath" => Err(FileError::UnsupportedScheme("modulepath".into())),
-
-            _ => {
-                let path = url_to_path(url)?;
-                match fs::read_to_string(path.clone()) {
-                    Ok(contents) => Ok(self.open(url.clone(), contents, None)),
-                    Err(err) => Err(FileError::Io { path, source: err }),
-                }
-            }
+        if let Ok(url) = crate::effective_uri(url) {
+            self.files.remove(&url);
         }
     }
 
-    /// Fetch a file from a modulepath directory or JAR entry.
+    /// Load a source synchronously. Async callers must use a blocking worker.
+    pub fn get_or_load(&self, url: &Uri<String>) -> Result<Arc<VirtualFile>, FileError> {
+        let url = crate::effective_uri(url)?;
+        if let Some(file) = self.get(&url) {
+            return Ok(file);
+        }
+        let contents = match url.scheme().as_str() {
+            "pkl" => crate::stdlib::source(url.path().as_str())
+                .ok_or_else(|| FileError::InvalidSource(url.to_string()))?
+                .to_owned(),
+            "jar" => crate::sources::archive_contents(&url)?,
+            "https" => {
+                let client = self.http_client()?;
+                crate::sources::https_contents(&url, &client, &self.cache_dir.read().unwrap())?
+            }
+            "file" => {
+                let path = url_to_path(&url)?;
+                std::fs::read_to_string(&path).map_err(|source| FileError::Io { path, source })?
+            }
+            scheme => return Err(FileError::UnsupportedScheme(scheme.to_owned())),
+        };
+        // An editor buffer opened while loading always wins.
+        let file = Arc::new(VirtualFile::new(
+            url.clone(),
+            Self::origin_for(&url),
+            contents,
+            None,
+        ));
+        Ok(self.files.entry(url).or_insert(file).clone())
+    }
+
+    pub fn set_cache_dir(&self, path: PathBuf) {
+        *self.cache_dir.write().unwrap() = path;
+    }
+
+    pub fn cache_dir(&self) -> PathBuf {
+        self.cache_dir.read().unwrap().clone()
+    }
+
+    /// Add trusted roots without disabling certificate or hostname verification.
+    pub fn with_trusted_certificates(
+        certificates: Vec<reqwest::Certificate>,
+        timeout: std::time::Duration,
+    ) -> Result<Self, FileError> {
+        let mut builder = reqwest::blocking::Client::builder()
+            .https_only(true)
+            .timeout(timeout);
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+        let manager = Self::new();
+        *manager.client.write().unwrap() = Some(builder.build()?);
+        Ok(manager)
+    }
+
+    fn http_client(&self) -> Result<reqwest::blocking::Client, FileError> {
+        let mut client = self.client.write().unwrap();
+        if let Some(client) = client.as_ref() {
+            return Ok(client.clone());
+        }
+        let built = reqwest::blocking::Client::builder()
+            .https_only(true)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        *client = Some(built.clone());
+        Ok(built)
+    }
+
+    pub fn resolve_uri(
+        &self,
+        source: &Uri<String>,
+        reference: &str,
+    ) -> Result<Uri<String>, FileError> {
+        crate::uri::resolve(source, reference)
+    }
+
+    pub fn list_files(&self, root: &Uri<String>) -> Result<Vec<Uri<String>>, FileError> {
+        crate::sources::list(&crate::effective_uri(root)?)
+    }
+
+    /// Fetch a file by path, normalizing URI dot segments before registry lookup.
     pub fn get_modulepath_file(&self, path: &Path) -> Result<Arc<VirtualFile>, FileError> {
-        let url =
-            url::Url::from_file_path(path).map_err(|_| FileError::InvalidUri(path.to_owned()))?;
-        let uri = Uri::parse(url.to_string()).map_err(|(err, _)| FileError::UriParse(err))?;
+        let uri = path_to_uri(path)?.normalize();
         self.get_or_load(&uri)
     }
 
@@ -153,8 +223,9 @@ impl FileManager {
     /// contexts should wrap this in `tokio::task::spawn_blocking` — the
     /// FileManager itself stays sync to keep tests easy.
     pub fn parse(&self, url: &Uri<String>) -> Result<Arc<SyntaxTree>, FileError> {
-        let Some(file) = self.files.get(url) else {
-            return Err(FileError::NotOpen(url.clone()));
+        let url = crate::effective_uri(url)?;
+        let Some(file) = self.files.get(&url) else {
+            return Err(FileError::NotOpen(url));
         };
 
         match file.cached_tree() {
@@ -181,8 +252,25 @@ impl FileManager {
     }
 }
 
+/// Convert filesystem paths to RFC-compliant file URIs, including literal brackets.
+pub fn path_to_uri(path: &Path) -> Result<Uri<String>, FileError> {
+    let url = url::Url::from_file_path(path).map_err(|_| FileError::InvalidUri(path.to_owned()))?;
+    let value: String = url.into();
+    if !value.contains(['[', ']']) {
+        return Ok(Uri::parse(value)?);
+    }
+    let mut encoded = String::with_capacity(value.len() + 4);
+    for ch in value.chars() {
+        match ch {
+            '[' => encoded.push_str("%5B"),
+            ']' => encoded.push_str("%5D"),
+            _ => encoded.push(ch),
+        }
+    }
+    Ok(Uri::parse(encoded)?)
+}
+
 /// Helper for tests and `get_or_load`: convert a `file://` URL into a path.
-/// Pulled out for unit testing.
 pub fn url_to_path(url: &Uri<String>) -> Result<std::path::PathBuf, FileError> {
     let scheme = url.scheme().as_str();
     if scheme != "file" {

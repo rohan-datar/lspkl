@@ -351,19 +351,7 @@ fn const_scope(access: NodeId, ctx: &AnalysisContext) -> (bool, bool) {
 /// Resolve a `SuperAccessExpr` to the inherited member it refers to.
 fn resolve_super_access(access: NodeId, ctx: &AnalysisContext) -> Option<ResolvedType> {
     let name = ctx.tree.name(access)?;
-    let this_ty = compute_this_type(access, &TypeBindings::new(), ctx);
-    let Type::Class { class_node, .. } = this_ty else {
-        return None;
-    };
-    let tree = ctx.tree_for(class_node.file_id)?;
-    let extends_target = tree.class_extends_target(class_node.node_id)?;
-    let segments = tree.qualified_identifier_segments(extends_target);
-    let super_ref = resolve_type_name(
-        ctx,
-        &segments,
-        NodeRef::new(class_node.file_id, extends_target),
-    )?;
-    let super_ty = Type::class(super_ref);
+    let super_ty = pkl_types::resolver::access_receiver_type(access, &TypeBindings::new(), ctx)?;
     find_member_on_type(&super_ty, name, &TypeBindings::new(), ctx)
 }
 

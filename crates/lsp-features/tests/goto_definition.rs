@@ -1,9 +1,6 @@
 //! `goto_definition` tests.
 //!
-//! Same-file targets are the only ones that can produce a `Location` today:
-//! there is no `FileId → URI` mapping until Phase 6's `FileManager`, so
-//! cross-file targets (in practice: pkl:base) return `None` — see
-//! `TODO(stdlib-goto)` in the implementation.
+//! Locations use the caller-provided file identity to editor URI mapping.
 
 mod harness;
 
@@ -34,7 +31,7 @@ fn same_file_definition_returns_location_in_document() {
             character: 4,
         };
 
-        let result = goto_definition(ctx, position, &doc_uri())
+        let result = goto_definition(ctx, position, |_| Some(doc_uri()))
             .expect("`x` in `y = x` should resolve to a definition");
 
         let GotoDefinitionResponse::Scalar(location) = result else {
@@ -52,10 +49,9 @@ fn same_file_definition_returns_location_in_document() {
     });
 }
 
-/// `String` resolves into pkl:base. Until `TODO(stdlib-goto)` lands we
-/// return `None` rather than a URI the editor can't open.
+/// Standard library targets use the same URI callback as user files.
 #[test]
-fn stdlib_target_is_deferred_and_returns_none() {
+fn stdlib_target_uses_uri_callback() {
     let base = harness::load_test_base();
     let src = "x: String = \"\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
@@ -64,10 +60,16 @@ fn stdlib_target_is_deferred_and_returns_none() {
             character: 3,
         };
 
-        assert!(
-            goto_definition(ctx, position, &doc_uri()).is_none(),
-            "stdlib targets are deferred until a FileId → URI mapping exists",
-        );
+        let uri = Uri::from_str("pkl-lsp://stdlib/base.pkl").unwrap();
+        let result = goto_definition(ctx, position, |id| {
+            (id == pkl_types::FileId::BASE).then(|| uri.clone())
+        })
+        .unwrap();
+        let GotoDefinitionResponse::Scalar(location) = result else {
+            panic!("single location");
+        };
+        assert_eq!(location.uri, uri);
+        assert!(goto_definition(ctx, position, |_| None).is_none());
     });
 }
 
@@ -82,6 +84,6 @@ fn whitespace_returns_none() {
             character: 10,
         };
 
-        assert!(goto_definition(ctx, position, &doc_uri()).is_none());
+        assert!(goto_definition(ctx, position, |_| Some(doc_uri())).is_none());
     });
 }

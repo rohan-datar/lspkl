@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 
 use tower_lsp_server::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, TextEdit, WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, Command, TextEdit,
+    WorkspaceEdit,
 };
 
 use pkl_diagnostics::Diagnostic;
+use pkl_diagnostics::diagnostic::QuickFixCommand;
 
 /// Materialize quick-fix actions for the diagnostics echoed in
 /// `params.context.diagnostics`.
@@ -28,29 +30,38 @@ pub fn code_action(
         };
 
         for fix in &matched.quick_fixes {
-            // `lsp_types::Uri` has interior mutability (clippy::mutable_key_type),
-            // but `WorkspaceEdit.changes` requires exactly this map shape.
-            #[allow(clippy::mutable_key_type)]
-            let mut changes = HashMap::new();
-            changes.insert(
-                uri.clone(),
-                fix.edits
-                    .iter()
-                    .map(|e| TextEdit {
-                        range: crate::span_to_range(&e.span),
-                        new_text: e.new_text.clone(),
-                    })
-                    .collect::<Vec<_>>(),
-            );
+            let edit = (!fix.edits.is_empty()).then(|| {
+                // LSP URI keys have interior mutability, but the protocol requires this map.
+                #[allow(clippy::mutable_key_type)]
+                let mut changes = HashMap::new();
+                changes.insert(
+                    uri.clone(),
+                    fix.edits
+                        .iter()
+                        .map(|e| TextEdit {
+                            range: crate::span_to_range(&e.span),
+                            new_text: e.new_text.clone(),
+                        })
+                        .collect(),
+                );
+                WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }
+            });
 
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.title.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![echoed.clone()]),
                 is_preferred: Some(true),
-                edit: Some(WorkspaceEdit {
-                    changes: Some(changes),
-                    ..Default::default()
+                edit,
+                command: fix.command.as_ref().map(|command| match command {
+                    QuickFixCommand::DownloadPackage { uri } => Command {
+                        title: fix.title.clone(),
+                        command: "pkl.downloadPackage".into(),
+                        arguments: Some(vec![uri.clone().into()]),
+                    },
                 }),
                 ..Default::default()
             }));

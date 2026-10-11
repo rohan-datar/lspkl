@@ -8,7 +8,13 @@ fn ctx<'a>(
     base: &'a pkl_types::BaseModule,
     dummy: &'a pkl_syntax::ast::SyntaxTree,
 ) -> AnalysisContext<'a> {
-    AnalysisContext::new(dummy, FileId(1), base)
+    AnalysisContext::new(
+        dummy,
+        FileId(1),
+        base,
+        harness::empty_trees(),
+        harness::empty_imports(),
+    )
 }
 
 #[test]

@@ -67,6 +67,12 @@ pub fn render_markdown(
     let node_id = resolved.node_id;
 
     let signature = match tree.kind(node_id) {
+        NodeKind::Module => format!("module {}", tree.name(node_id).unwrap_or("")),
+        NodeKind::ImportGlob => format!(
+            "{}: {}",
+            pkl_types::resolver::import_name(tree, node_id)?,
+            pkl_types::resolver::import_type(resolved, ctx).render(ctx)
+        ),
         NodeKind::ClassProperty => {
             let name = tree.name(node_id)?;
             match property_type(tree, resolved, ctx) {
@@ -124,12 +130,11 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
     }
 
     // No annotation: infer from the initializer.
-    if property.file_id == ctx.file_id {
-        let expr = tree.child(property.node_id, |k| k.is_expr_node())?;
-        let ty = compute_expr_type(expr, &TypeBindings::new(), ctx);
-        if ty != Type::Unknown {
-            return Some(ty.render(ctx));
-        }
+    let local = AnalysisContext::new(tree, property.file_id, ctx.base, ctx.trees, ctx.imports);
+    let expr = tree.child(property.node_id, |k| k.is_expr_node())?;
+    let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
+    if ty != Type::Unknown {
+        return Some(ty.render(ctx));
     }
     None
 }
@@ -217,12 +222,9 @@ fn return_type_text(
     if let Some(ann) = tree.child(header, |k| matches!(k, NodeKind::TypeAnnotation)) {
         return annotation_text(tree, ann, file_id, ctx);
     }
-    // `compute_expr_type` reads `ctx.tree` directly, so it can only run on
-    // nodes from the currently-analyzed file.
-    if file_id == ctx.file_id
-        && let Some(expr) = tree.child(method_id, |k| k.is_expr_node())
-    {
-        let ty = compute_expr_type(expr, &TypeBindings::new(), ctx);
+    if let Some(expr) = tree.child(method_id, |k| k.is_expr_node()) {
+        let local = AnalysisContext::new(tree, file_id, ctx.base, ctx.trees, ctx.imports);
+        let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
         if ty != Type::Unknown {
             return ty.render(ctx);
         }

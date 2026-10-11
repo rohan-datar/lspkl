@@ -1,6 +1,7 @@
 //! `LanguageServer` trait implementation.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use tokio::task::spawn_blocking;
 
@@ -11,13 +12,10 @@ use fluent_uri::Uri;
 use tracing::{error, info};
 
 use pkl_project::dto::PackageUri;
-use pkl_syntax::ast::SyntaxTree;
-use pkl_types::{AnalysisContext, FileId};
+use pkl_types::AnalysisContext;
 
-use crate::state::ServerState;
-
-/// Placeholder id for the document a request is made against.
-const DOCUMENT_FILE_ID: FileId = FileId(1);
+use crate::settings::{GrammarVersion, WorkspaceSettings};
+use crate::state::{AnalysisSnapshot, ServerState};
 
 #[derive(Debug)]
 pub struct PklBackend {
@@ -39,28 +37,30 @@ impl PklBackend {
         }
     }
 
-    /// Look up `uri_str` in the file manager and parse its current contents.
+    /// Prepare request-pinned trees for an already-open document and its imports.
     ///
-    /// Returns `None` when the editor never sent a `didOpen` for the file or
-    /// the URI is malformed; parse *errors* still return a tree (tree-sitter
-    /// is error-tolerant), so `None` from the parser itself is unexpected
-    /// and logged.
+    /// Returns `None` for an unknown or malformed root URI. The root is not
+    /// loaded from disk; reachable imports may be. Syntax errors still produce
+    /// an error-tolerant tree, while preparation failures are logged.
     ///
-    /// TODO(caching): this re-parses on every request.
-    ///
-    /// TODO(blocking): parsing is sync CPU work on the async worker. Fine at
-    /// typical file sizes; wrap in `spawn_blocking` if it ever shows up in
-    /// request latency.
-    fn open_document_tree(&self, uri_str: &str) -> Option<SyntaxTree> {
-        let Ok(url) = Uri::parse(uri_str.to_string()) else {
-            error!(uri = uri_str, "failed to parse URI");
-            return None;
-        };
+    async fn open_document_analysis(&self, uri_str: &str) -> Option<AnalysisSnapshot> {
+        let url = Uri::parse(uri_str.to_owned()).ok()?;
         let file = self.state.file_manager.get(&url)?;
-        match pkl_syntax::parse(&file.contents()) {
-            Ok(tree) => Some(tree),
+        let state = Arc::clone(&self.state);
+        match spawn_blocking(move || {
+            state
+                .parse_module(file)
+                .and_then(|module| state.prepare_analysis(module))
+        })
+        .await
+        {
+            Ok(Ok(analysis)) => Some(analysis),
+            Ok(Err(err)) => {
+                error!(uri = uri_str, ?err, "analysis preparation failed");
+                None
+            }
             Err(err) => {
-                error!(uri = uri_str, ?err, "parse failed");
+                error!(uri = uri_str, ?err, "analysis worker failed");
                 None
             }
         }
@@ -72,9 +72,15 @@ impl PklBackend {
     /// Returns `None` when the file isn't open or can't be parsed; an
     /// unparseable-but-open file still yields whatever diagnostics the
     /// analyzers produce on the error-tolerant tree.
-    fn analyze_document(&self, uri_str: &str) -> Option<Vec<pkl_diagnostics::Diagnostic>> {
-        let tree = self.open_document_tree(uri_str)?;
-        let ctx = AnalysisContext::new(&tree, DOCUMENT_FILE_ID, self.state.base_module());
+    async fn analyze_document(&self, uri_str: &str) -> Option<Vec<pkl_diagnostics::Diagnostic>> {
+        let analysis = self.open_document_analysis(uri_str).await?;
+        let ctx = AnalysisContext::new(
+            &analysis.module.tree,
+            analysis.module.file_id,
+            self.state.base_module(),
+            &analysis.trees,
+            &analysis.imports,
+        );
         Some(self.state.diagnostics().analyze(&ctx))
     }
 
@@ -88,7 +94,7 @@ impl PklBackend {
             error!(uri = uri_str, "publish: failed to parse URI");
             return;
         };
-        let diags = self.analyze_document(uri_str).unwrap_or_default();
+        let diags = self.analyze_document(uri_str).await.unwrap_or_default();
         let lsp_diags = diags.iter().map(to_lsp_diagnostic).collect();
         client.publish_diagnostics(uri, lsp_diags, version).await;
     }
@@ -121,6 +127,15 @@ fn to_lsp_diagnostic(diag: &pkl_diagnostics::Diagnostic) -> Diagnostic {
 impl LanguageServer for PklBackend {
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
         info!(?params.client_info, "initialize");
+        self.state.client_configuration.store(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|caps| caps.configuration)
+                .unwrap_or(false),
+            Ordering::Relaxed,
+        );
         let uris: Vec<_> = match params.workspace_folders {
             Some(folders) => folders.into_iter().map(|folder| folder.uri).collect(),
             None => {
@@ -146,7 +161,13 @@ impl LanguageServer for PklBackend {
             })
             .collect();
 
-        self.state.project_manager.lock().initialize(folders);
+        self.restore_workspaces(folders).await;
+        if let Some(options) = params.initialization_options {
+            match WorkspaceSettings::parse(options) {
+                Ok(settings) => self.state.apply_settings(settings),
+                Err(err) => error!(?err, "invalid initialization settings"),
+            }
+        }
 
         Ok(InitializeResult {
             server_info: None,
@@ -200,8 +221,17 @@ impl LanguageServer for PklBackend {
                 color_provider: None,
                 folding_range_provider: None,
                 declaration_provider: None,
-                execute_command_provider: None,
-                workspace: None,
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec!["pkl.downloadPackage".into(), "pkl.syncProjects".into()],
+                    work_done_progress_options: Default::default(),
+                }),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
                 call_hierarchy_provider: None,
                 semantic_tokens_provider: None,
                 moniker_provider: None,
@@ -214,9 +244,58 @@ impl LanguageServer for PklBackend {
         })
     }
 
-    async fn initialized(&self, params: InitializedParams) {
-        let _ = params;
-        info!("server intialized")
+    async fn initialized(&self, _params: InitializedParams) {
+        info!("server initialized");
+        self.refresh_configuration().await;
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        if params.settings.is_null()
+            || params
+                .settings
+                .as_object()
+                .is_some_and(|settings| settings.is_empty())
+        {
+            self.refresh_configuration().await;
+        } else {
+            match WorkspaceSettings::parse(params.settings) {
+                Ok(settings) => self.state.apply_settings(settings),
+                Err(err) => error!(?err, "invalid workspace settings"),
+            }
+        }
+        self.publish_open_documents().await;
+    }
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        let mut folders = self
+            .state
+            .project_manager
+            .lock()
+            .workspace_folders()
+            .to_vec();
+        for folder in params.event.removed {
+            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
+                && let Ok(path) = pkl_vfs::url_to_path(&uri)
+            {
+                folders.retain(|existing| existing != &path);
+            }
+        }
+        for folder in params.event.added {
+            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
+                && let Ok(path) = pkl_vfs::url_to_path(&uri)
+                && !folders.contains(&path)
+            {
+                folders.push(path);
+            }
+        }
+        self.restore_workspaces(folders).await;
+        let settings = {
+            let current = Arc::clone(&self.state.settings.read());
+            current.rebind(self.state.project_manager.lock().workspace_folders())
+        };
+        self.state.apply_settings(settings);
+        self.refresh_configuration().await;
+        self.publish_open_documents().await;
     }
 
     async fn shutdown(&self) -> jsonrpc::Result<()> {
@@ -224,10 +303,41 @@ impl LanguageServer for PklBackend {
         Ok(())
     }
 
+    async fn execute_command(
+        &self,
+        mut params: ExecuteCommandParams,
+    ) -> jsonrpc::Result<Option<serde_json::Value>> {
+        match params.command.as_str() {
+            "pkl.downloadPackage" => {
+                if params.arguments.len() != 1 {
+                    return Err(jsonrpc::Error::invalid_params(
+                        "pkl.downloadPackage expects one package URI string",
+                    ));
+                }
+                let Some(serde_json::Value::String(uri)) = params.arguments.pop() else {
+                    return Err(jsonrpc::Error::invalid_params(
+                        "pkl.downloadPackage expects one package URI string",
+                    ));
+                };
+                self.download_package(uri).await?;
+            }
+            "pkl.syncProjects" => {
+                if !params.arguments.is_empty() {
+                    return Err(jsonrpc::Error::invalid_params(
+                        "pkl.syncProjects expects no arguments",
+                    ));
+                }
+                self.sync_projects().await?;
+            }
+            _ => return Err(jsonrpc::Error::invalid_params("unknown Pkl command")),
+        }
+        Ok(None)
+    }
+
     // ---- Text document lifecycle ----
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
+        let uri = params.text_document.uri;
         let uri_str = uri.as_str();
         info!(uri = %uri_str, "didOpen");
         let Ok(url) = Uri::parse(uri_str.to_string()) else {
@@ -236,14 +346,19 @@ impl LanguageServer for PklBackend {
         };
 
         let version = params.text_document.version;
-        self.state
+        let file = self
+            .state
             .file_manager
-            .open(url.clone(), params.text_document.text, Some(version));
-        self.publish(uri_str, Some(version)).await;
+            .open(url, params.text_document.text, Some(version));
+        self.state
+            .open_documents
+            .lock()
+            .insert(self.state.file_id(&file), Arc::new(uri));
+        self.publish_open_documents().await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
+        let uri = params.text_document.uri;
         let uri_str = uri.as_str();
         info!(uri = %uri_str, "didChange");
         let Ok(url) = Uri::parse(uri_str.to_string()) else {
@@ -252,14 +367,17 @@ impl LanguageServer for PklBackend {
         };
 
         let version = params.text_document.version;
-        match self.state.file_manager.update(
-            &url,
-            params.content_changes[0].text.clone(),
-            Some(version),
-        ) {
+        let mut changes = params.content_changes;
+        let Some(change) = changes.pop() else {
+            return;
+        };
+        match self
+            .state
+            .file_manager
+            .update(&url, change.text, Some(version))
+        {
             Ok(_) => {
-                // Re-publish on every change so stale diagnostics clear.
-                self.publish(uri_str, Some(version)).await;
+                self.publish_open_documents().await;
             }
             Err(err) => {
                 error!(uri = %uri_str, url = %url.clone(), err = ?err, "update failed!")
@@ -279,7 +397,14 @@ impl LanguageServer for PklBackend {
             return;
         };
 
+        if let Some(file) = self.state.file_manager.get(&url) {
+            self.state
+                .open_documents
+                .lock()
+                .remove(&self.state.file_id(&file));
+        }
         self.state.file_manager.close(&url);
+        self.publish_open_documents().await;
     }
 
     // ---- LSP features ----
@@ -289,10 +414,16 @@ impl LanguageServer for PklBackend {
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "hover");
 
-        let Some(tree) = self.open_document_tree(uri_str) else {
+        let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
-        let ctx = AnalysisContext::new(&tree, DOCUMENT_FILE_ID, self.state.base_module());
+        let ctx = AnalysisContext::new(
+            &analysis.module.tree,
+            analysis.module.file_id,
+            self.state.base_module(),
+            &analysis.trees,
+            &analysis.imports,
+        );
         Ok(lsp_features::hover::hover(&ctx, doc.position))
     }
 
@@ -304,14 +435,36 @@ impl LanguageServer for PklBackend {
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "gotoDefinition");
 
-        let Some(tree) = self.open_document_tree(uri_str) else {
+        let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
-        let ctx = AnalysisContext::new(&tree, DOCUMENT_FILE_ID, self.state.base_module());
+        let ctx = AnalysisContext::new(
+            &analysis.module.tree,
+            analysis.module.file_id,
+            self.state.base_module(),
+            &analysis.trees,
+            &analysis.imports,
+        );
         Ok(lsp_features::goto_definition::goto_definition(
             &ctx,
             doc.position,
-            &doc.text_document.uri,
+            |file_id| {
+                if file_id == pkl_types::FileId::BASE {
+                    return pkl_vfs::to_editor_uri(&Uri::parse("pkl:base".to_owned()).ok()?)
+                        .ok()?
+                        .as_str()
+                        .parse()
+                        .ok();
+                }
+                let registry = self.state.file_registry.lock();
+                let uri = registry.uri_for(file_id)?;
+                match uri.scheme().as_str() {
+                    "pkl" | "https" | "jar" => {
+                        pkl_vfs::to_editor_uri(uri).ok()?.as_str().parse().ok()
+                    }
+                    _ => uri.as_str().parse().ok(),
+                }
+            },
         ))
     }
 
@@ -323,11 +476,43 @@ impl LanguageServer for PklBackend {
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "completion");
 
-        let Some(tree) = self.open_document_tree(uri_str) else {
+        let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
-        let ctx = AnalysisContext::new(&tree, DOCUMENT_FILE_ID, self.state.base_module());
+        let state = Arc::clone(&self.state);
+        let position = doc.position;
+        let (analysis, uri_completion) = spawn_blocking(move || {
+            let result = crate::module_uri_completion::completion(&state, &analysis, position);
+            (analysis, result)
+        })
+        .await
+        .map_err(|err| jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })?;
+        if uri_completion.is_some() {
+            return Ok(uri_completion);
+        }
+        let ctx = AnalysisContext::new(
+            &analysis.module.tree,
+            analysis.module.file_id,
+            self.state.base_module(),
+            &analysis.trees,
+            &analysis.imports,
+        );
         Ok(lsp_features::completion::completion(&ctx, &params))
+    }
+
+    async fn completion_resolve(&self, item: CompletionItem) -> jsonrpc::Result<CompletionItem> {
+        let state = Arc::clone(&self.state);
+        spawn_blocking(move || crate::module_uri_completion::resolve(&state, item))
+            .await
+            .map_err(|err| jsonrpc::Error {
+                code: jsonrpc::ErrorCode::InternalError,
+                message: err.to_string().into(),
+                data: None,
+            })
     }
 
     async fn code_action(
@@ -339,7 +524,7 @@ impl LanguageServer for PklBackend {
 
         // Recompute rather than cache: the VFS holds the current contents,
         // so analysis is deterministic and there is no state to invalidate.
-        let Some(diags) = self.analyze_document(uri_str) else {
+        let Some(diags) = self.analyze_document(uri_str).await else {
             return Ok(None);
         };
         let actions = lsp_features::code_action::code_action(&params, &diags);
@@ -365,7 +550,19 @@ impl LanguageServer for PklBackend {
         };
         let source = file.contents();
 
-        let format = spawn_blocking(move || lsp_features::formatting::formatting(&source)).await;
+        let settings = Arc::clone(&self.state.settings.read());
+        let format = spawn_blocking(move || {
+            lsp_features::formatting::formatting(
+                &source,
+                settings.cli_path(),
+                settings
+                    .formatter
+                    .grammar_version
+                    .as_ref()
+                    .map(GrammarVersion::as_str),
+            )
+        })
+        .await;
         match format {
             Ok(Ok(edits)) => Ok(Some(edits)),
             Ok(Err(err)) => {
@@ -383,11 +580,126 @@ impl LanguageServer for PklBackend {
 impl PklBackend {
     // ---- Custom `pkl/*` RPC methods ----
 
+    async fn restore_workspaces(&self, folders: Vec<std::path::PathBuf>) {
+        let state = Arc::clone(&self.state);
+        let result = spawn_blocking(move || {
+            let mut manager = state.project_manager.lock();
+            manager.initialize(folders);
+            let roots = manager.workspace_folders().to_vec();
+            for root in roots {
+                let path = root.join(".lspkl/projects.json");
+                match path.try_exists() {
+                    Ok(true) => {
+                        if let Err(err) = manager.load_state(&path) {
+                            error!(path = %path.display(), ?err, "could not restore project state");
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        error!(path = %path.display(), ?err, "could not inspect project state")
+                    }
+                }
+            }
+        })
+        .await;
+        if let Err(err) = result {
+            error!(?err, "project state restoration worker failed");
+        }
+    }
+
+    async fn publish_open_documents(&self) {
+        let documents: Vec<_> = self.state.open_documents.lock().values().cloned().collect();
+        for uri in documents {
+            let version = Uri::parse(uri.as_str()).ok().and_then(|uri| {
+                self.state
+                    .file_manager
+                    .get(&uri.to_owned())
+                    .and_then(|file| file.version())
+            });
+            self.publish(uri.as_str(), version).await;
+        }
+    }
+
+    async fn refresh_configuration(&self) {
+        if !self.state.client_configuration.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(client) = &self.client else {
+            return;
+        };
+        let sections = [
+            "pkl.cli.path",
+            "pkl.formatter.grammarVersion",
+            "pkl.modulepath",
+            "pkl.projects.excludedDirectories",
+            "pkl.cacheDir",
+        ];
+        let params = ConfigurationParams {
+            items: sections
+                .iter()
+                .map(|section| ConfigurationItem {
+                    scope_uri: None,
+                    section: Some((*section).to_owned()),
+                })
+                .collect(),
+        };
+        match client.configuration(params.items).await {
+            Ok(values) if values.len() == sections.len() => {
+                let [cli, grammar, modulepath, excluded, cache]: [serde_json::Value; 5] =
+                    values.try_into().unwrap();
+                let value = serde_json::json!({
+                    "cli": {"path": cli}, "formatter": {"grammarVersion": grammar},
+                    "modulepath": if modulepath.is_null() { serde_json::json!([]) } else { modulepath },
+                    "projects": {"excludedDirectories": if excluded.is_null() { serde_json::json!([]) } else { excluded }},
+                    "cacheDir": cache,
+                });
+                match WorkspaceSettings::parse(value) {
+                    Ok(settings) => self.state.apply_settings(settings),
+                    Err(err) => error!(?err, "invalid client configuration"),
+                }
+            }
+            Ok(_) => error!("client returned an incomplete configuration response"),
+            Err(err) => error!(?err, "workspace configuration request failed"),
+        }
+    }
+
+    /// Read source behind the same synthetic URIs returned by definition requests.
+    pub async fn file_contents(&self, document: TextDocumentIdentifier) -> jsonrpc::Result<String> {
+        let uri = Uri::parse(document.uri.as_str())
+            .map(|uri| uri.to_owned())
+            .map_err(|err| jsonrpc::Error {
+                code: jsonrpc::ErrorCode::InvalidParams,
+                message: err.to_string().into(),
+                data: None,
+            })?;
+        let state = Arc::clone(&self.state);
+        spawn_blocking(move || {
+            state
+                .file_manager
+                .get_or_load(&uri)
+                .map(|file| file.contents())
+        })
+        .await
+        .map_err(|err| jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })?
+        .map_err(|err| jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })
+    }
+
     pub async fn sync_projects(&self) -> jsonrpc::Result<()> {
         let state = Arc::clone(&self.state);
         let sync = spawn_blocking(move || state.project_manager.lock().sync_projects()).await;
         match sync {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(_)) => {
+                self.publish_open_documents().await;
+                Ok(())
+            }
             Ok(Err(err)) => {
                 error!(?err, "syncProjects failed");
                 Err(jsonrpc::Error {
@@ -416,8 +728,11 @@ impl PklBackend {
         })?;
         let cache_dir = self
             .state
-            .package_cache_dir
+            .settings
+            .read()
+            .resolved_cache_dir
             .clone()
+            .or_else(|| self.state.package_cache_dir.clone())
             .ok_or_else(|| jsonrpc::Error {
                 code: jsonrpc::ErrorCode::InternalError,
                 message: "cannot locate home directory for the Pkl package cache".into(),
@@ -432,7 +747,10 @@ impl PklBackend {
         })
         .await;
         match download {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {
+                self.publish_open_documents().await;
+                Ok(())
+            }
             Ok(Err(err)) => {
                 error!(?err, "downloadPackage failed");
                 Err(jsonrpc::Error {

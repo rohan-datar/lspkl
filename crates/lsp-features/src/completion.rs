@@ -1,8 +1,7 @@
 //! Completion: suggest identifiers / members / keywords at the cursor.
 //!
-//! TODO(completion-module-uri): `ModuleUriCompletionProvider` is deferred —
-//! completing module URIs (`import "…"` / `amends "…"`) needs the Phase 6
-//! package/project machinery to enumerate resolvable modules.
+//! Resource-aware module URI candidates and their lazy documentation resolution
+//! are provided by the server layer, before these pure semantic providers.
 //!
 //! TODO(completion-doc-link): `DocCommentMemberLinkCompletionProvider` is
 //! deferred
@@ -28,11 +27,8 @@ pub fn completion(ctx: &AnalysisContext, params: &CompletionParams) -> Option<Co
     // `None`, which propagates as "no completions".
     let node = ctx.tree.find_at(line, col)?;
 
-    // Provider order mirrors CompletionFeature.kt:28-36 (minus the two
-    // deferred providers noted in the module docs). Each provider decides
-    // applicability from the node kind and contributes zero items otherwise.
-    //
-    // TODO(completion-module-uri): ModuleUriCompletionProvider slot.
+    // URI completion runs in the server layer before this semantic dispatch.
+    // Each provider contributes only when applicable to the current node.
     let mut collector = Vec::new();
     collector.extend(qualified::completions(node, ctx));
     collector.extend(unqualified::completions(node, ctx, col));
@@ -62,13 +58,6 @@ pub(crate) fn ancestor_or_self(
         current = ctx.tree.parent(id);
     }
     None
-}
-
-/// Lazy-resolve detail/documentation for a `CompletionItem` that was
-/// returned by `completion` without those fields populated.
-pub fn resolve_completion_item(item: CompletionItem) -> CompletionItem {
-    // TODO(completion-module-uri): route URI items through package machinery
-    item
 }
 
 // ---------------------------------------------------------------------------

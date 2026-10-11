@@ -1,12 +1,9 @@
 //! GoToDefinition: resolve the node at the cursor and return its
 //! declaration site (possibly in another file).
-//!
-//! Corresponds to
-//! `pkl-lsp/src/main/kotlin/org/pkl/lsp/features/GoToDefinitionFeature.kt`.
 
 use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Location, Position, Uri};
 
-use pkl_types::{AnalysisContext, NodeRef, resolver::resolve_reference};
+use pkl_types::{AnalysisContext, FileId, NodeRef, resolver::resolve_reference};
 
 use crate::span_to_range;
 
@@ -14,28 +11,43 @@ use crate::span_to_range;
 pub fn goto_definition(
     ctx: &AnalysisContext,
     position: Position,
-    document_uri: &Uri,
+    uri_for: impl Fn(FileId) -> Option<Uri>,
 ) -> Option<GotoDefinitionResponse> {
     let line = position.line + 1;
     let col = position.character + 1;
 
     let node_id = ctx.tree.find_at(line, col)?;
+    let mut current = Some(node_id);
+    let mut in_string = false;
+    while let Some(id) = current {
+        in_string |= ctx.tree.kind(id).is_string_literal();
+        if in_string
+            && let Some(pkl_types::ImportResolution::Glob(targets)) =
+                ctx.imports.get(&NodeRef::new(ctx.file_id, id))
+        {
+            let locations: Vec<_> = targets
+                .iter()
+                .filter_map(|target| {
+                    let tree = ctx.tree_for(target.file_id)?;
+                    Some(Location::new(
+                        uri_for(target.file_id)?,
+                        span_to_range(&tree.span(target.node_id)),
+                    ))
+                })
+                .collect();
+            return (!locations.is_empty()).then_some(GotoDefinitionResponse::Array(locations));
+        }
+        current = ctx.tree.parent(id);
+    }
     let original = NodeRef::new(ctx.file_id, node_id);
     let resolved = resolve_reference(original, line, col, ctx)?;
 
-    if resolved.file_id != ctx.file_id {
-        // The only reachable cross-file target today is pkl:base.
-        // TODO(stdlib-goto): jumping into the stdlib needs the synthetic
-        // `pkl-lsp://stdlib/` URI scheme plus content serving so the editor
-        // can actually open it.
-        return None;
-    }
-
+    let uri = uri_for(resolved.file_id)?;
     let resolved_tree = ctx.tree_for(resolved.file_id)?;
     let resolved_span = resolved_tree.span(resolved.node_id);
 
     Some(GotoDefinitionResponse::Scalar(Location::new(
-        document_uri.clone(),
+        uri,
         span_to_range(&resolved_span),
     )))
 }

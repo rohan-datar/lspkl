@@ -1,7 +1,7 @@
 //! Tests for project discovery and state persistence.
 //!
 //! Discovery, state persistence, and CLI orchestration use temporary fixtures.
-//! Sync tests fail until `ProjectManager::sync_projects` is implemented.
+//! Project settings retain synced state and pinned project snapshots.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -391,4 +391,44 @@ fn nested_workspace_owns_its_own_project_state() {
         assert_eq!(state["pklProjects"].as_array().unwrap().len(), 1);
         assert_eq!(state["pklProjects"][0]["projectFile"], "PklProject");
     }
+}
+
+#[test]
+fn configure_preserves_shared_projects_and_applies_exclusions() {
+    let ws = tempfile::tempdir().unwrap();
+    write_workspace(ws.path());
+    let state = ws.path().join(".lspkl/projects.json");
+    fs::create_dir_all(state.parent().unwrap()).unwrap();
+    fs::write(&state, r#"{"schemaVersion":1,"pklProjects":[{"projectFile":"PklProject","declaredDependencies":{}}]}"#).unwrap();
+    let mut manager = ProjectManager::default();
+    manager.initialize(vec![ws.path().to_path_buf()]);
+    manager.load_state(&state).unwrap();
+    let pinned = manager
+        .get_pkl_project_shared(&ws.path().join("config.pkl"))
+        .unwrap();
+    manager.configure(
+        PklCli {
+            binary_path: Some(ws.path().join("different-pkl")),
+        },
+        vec!["app".into()],
+    );
+    let after = manager
+        .get_pkl_project_shared(&ws.path().join("config.pkl"))
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&pinned, &after));
+    assert_eq!(manager.projects().count(), 1);
+    assert_eq!(
+        manager.discover_project_files().unwrap(),
+        [
+            ws.path().join("PklProject"),
+            ws.path().join("lib/PklProject")
+        ]
+    );
+    manager.initialize(Vec::new());
+    assert_eq!(
+        pinned.metadata.project_file_uri,
+        url::Url::from_file_path(ws.path().join("PklProject"))
+            .unwrap()
+            .as_str()
+    );
 }

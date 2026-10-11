@@ -69,11 +69,17 @@ impl TextEdit {
     }
 }
 
+/// An editor command attached to a quickfix, independent of project I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuickFixCommand {
+    DownloadPackage { uri: String },
+}
 /// A quickfix attached to a diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickFix {
     pub title: String,
     pub edits: Vec<TextEdit>,
+    pub command: Option<QuickFixCommand>,
 }
 
 impl QuickFix {
@@ -81,11 +87,19 @@ impl QuickFix {
         Self {
             title: title.into(),
             edits,
+            command: None,
         }
     }
 
     pub fn single(title: impl Into<String>, edit: TextEdit) -> Self {
         Self::new(title, vec![edit])
+    }
+    pub fn download_package(uri: String) -> Self {
+        Self {
+            title: format!("Download package `{uri}`"),
+            edits: Vec::new(),
+            command: Some(QuickFixCommand::DownloadPackage { uri }),
+        }
     }
 }
 

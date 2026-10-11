@@ -1,0 +1,286 @@
+mod harness;
+use pkl_syntax::ast::NodeKind;
+use pkl_types::{AnalysisContext, FileId, ImportResolution, NodeRef};
+use std::{collections::HashMap, sync::Arc};
+use tower_lsp_server::lsp_types::{
+    CompletionParams, CompletionResponse, GotoDefinitionResponse, HoverContents, Position,
+    TextDocumentIdentifier, TextDocumentPositionParams,
+};
+fn with_graph(f: impl FnOnce(&AnalysisContext)) {
+    let base = harness::load_test_base();
+    let current=Arc::new(pkl_syntax::parse("extends \"parent.pkl\"\nimport \"lib.pkl\" as library\nimport* \"*.pkl\" as libs\nx = library.value\ny = inherited\nz = libs[\"lib.pkl\"].value\n").unwrap());
+    let lib =
+        Arc::new(pkl_syntax::parse("/// Imported docs\nvalue = 42\nclass SomeClass {}\n").unwrap());
+    let parent = Arc::new(pkl_syntax::parse("inherited: String = \"yes\"\n").unwrap());
+    let mut edges = HashMap::new();
+    for (kind, target) in [
+        (NodeKind::Import, NodeRef::new(FileId(2), lib.root())),
+        (
+            NodeKind::ModuleExtendsAmendsClause,
+            NodeRef::new(FileId(3), parent.root()),
+        ),
+    ] {
+        let node = find(&current, current.root(), &kind).unwrap();
+        edges.insert(
+            NodeRef::new(FileId(1), node),
+            ImportResolution::Single(target),
+        );
+    }
+    let glob = find(&current, current.root(), &NodeKind::ImportGlob).unwrap();
+    edges.insert(
+        NodeRef::new(FileId(1), glob),
+        ImportResolution::Glob(vec![NodeRef::new(FileId(2), lib.root())]),
+    );
+    let trees = HashMap::from([
+        (FileId(1), current.clone()),
+        (FileId(2), lib),
+        (FileId(3), parent),
+    ]);
+    let ctx = AnalysisContext::new(&current, FileId(1), &base, &trees, &edges);
+    f(&ctx);
+}
+fn find(
+    t: &pkl_syntax::ast::SyntaxTree,
+    n: pkl_syntax::ast::NodeId,
+    k: &NodeKind,
+) -> Option<pkl_syntax::ast::NodeId> {
+    if t.kind(n) == k {
+        return Some(n);
+    }
+    t.children(n).iter().find_map(|&c| find(t, c, k))
+}
+fn labels(ctx: &AnalysisContext, line: u32, col: u32) -> Vec<String> {
+    let params = CompletionParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: "file:///main.pkl".parse().unwrap(),
+            },
+            position: Position::new(line, col),
+        },
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+        context: None,
+    };
+    match lsp_features::completion::completion(ctx, &params).unwrap() {
+        CompletionResponse::Array(v) => v.into_iter().map(|i| i.label).collect(),
+        CompletionResponse::List(v) => v.items.into_iter().map(|i| i.label).collect(),
+    }
+}
+#[test]
+fn imported_hover_and_definition_use_target_tree() {
+    with_graph(|ctx| {
+        let h = lsp_features::hover::hover(ctx, Position::new(3, 13)).unwrap();
+        let HoverContents::Markup(m) = h.contents else {
+            panic!("markdown")
+        };
+        assert!(m.value.contains("value: Int"));
+        assert!(m.value.contains("Imported docs"));
+        let d = lsp_features::goto_definition::goto_definition(ctx, Position::new(3, 13), |id| {
+            (id == FileId(2)).then(|| "file:///lib.pkl".parse().unwrap())
+        })
+        .unwrap();
+        let GotoDefinitionResponse::Scalar(l) = d else {
+            panic!("location")
+        };
+        let target = ctx.tree_for(FileId(2)).unwrap();
+        let property = find(target, target.root(), &NodeKind::ClassProperty).unwrap();
+        assert_eq!(l.range, lsp_features::span_to_range(&target.span(property)));
+        assert_eq!(l.uri.as_str(), "file:///lib.pkl");
+        assert!(lsp_features::hover::hover(ctx, Position::new(1, 21)).is_some());
+    });
+}
+#[test]
+fn imported_inherited_and_glob_value_completions() {
+    with_graph(|ctx| {
+        let qualified = labels(ctx, 3, 13);
+        assert!(qualified.contains(&"value".into()));
+        assert!(qualified.contains(&"SomeClass".into()));
+        let inherited = labels(ctx, 4, 9);
+        assert!(inherited.contains(&"inherited".into()));
+        assert!(inherited.contains(&"library".into()));
+        assert!(inherited.contains(&"libs".into()));
+        let glob = labels(ctx, 5, 25);
+        assert!(glob.contains(&"value".into()), "{glob:?}");
+    });
+}
+
+fn with_consumer_regressions(f: impl FnOnce(&AnalysisContext)) {
+    let base = harness::load_test_base();
+    let current=Arc::new(pkl_syntax::parse("extends \"parent.pkl\"\nimport \"lib.pkl\" as library\nimport \"lib.pkl\" as output\nx: library.Alias\nq = x.field\nz = output.value\ny = let (library = library.value) library\nw = library.f(foobar)\n").unwrap());
+    let lib=Arc::new(pkl_syntax::parse("class C { field: Int }\ntypealias Alias = C\nvalue = 42\nfunction f(arg: String): String = arg\n").unwrap());
+    let parent = Arc::new(pkl_syntax::parse("output: String = \"parent\"\n").unwrap());
+    let mut edges = HashMap::new();
+    for id in current.children_matching(current.root(), |k| matches!(k, NodeKind::Import)) {
+        edges.insert(
+            NodeRef::new(FileId(1), id),
+            ImportResolution::Single(NodeRef::new(FileId(2), lib.root())),
+        );
+    }
+    let clause = find(
+        &current,
+        current.root(),
+        &NodeKind::ModuleExtendsAmendsClause,
+    )
+    .unwrap();
+    edges.insert(
+        NodeRef::new(FileId(1), clause),
+        ImportResolution::Single(NodeRef::new(FileId(3), parent.root())),
+    );
+    let trees = HashMap::from([
+        (FileId(1), current.clone()),
+        (FileId(2), lib),
+        (FileId(3), parent),
+    ]);
+    f(&AnalysisContext::new(
+        &current,
+        FileId(1),
+        &base,
+        &trees,
+        &edges,
+    ));
+}
+#[test]
+fn lexical_import_precedes_inherited_output_in_resolution_and_completion() {
+    with_consumer_regressions(|ctx| {
+        let bindings = pkl_types::TypeBindings::new();
+        let output = pkl_types::resolver::resolve_unqualified_access(
+            ctx.tree.root(),
+            "output",
+            &bindings,
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(output.node.file_id, FileId(2));
+        assert_eq!(
+            pkl_types::resolver::resolve_unqualified_access(ctx.tree.root(), "z", &bindings, ctx)
+                .unwrap()
+                .ty,
+            *ctx.base.int_type()
+        );
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: "file:///main.pkl".parse().unwrap(),
+                },
+                position: Position::new(5, 6),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+        let response = lsp_features::completion::completion(ctx, &params).unwrap();
+        let items = match response {
+            CompletionResponse::Array(v) => v,
+            CompletionResponse::List(v) => v.items,
+        };
+        let item = items.iter().find(|i| i.label == "output").unwrap();
+        assert_eq!(
+            item.kind,
+            Some(tower_lsp_server::lsp_types::CompletionItemKind::MODULE)
+        );
+        assert!(labels(ctx, 5, 13).contains(&"value".to_owned()));
+    });
+}
+#[test]
+fn imported_alias_members_have_types_and_completions() {
+    with_consumer_regressions(|ctx| {
+        let bindings = pkl_types::TypeBindings::new();
+        assert_eq!(
+            pkl_types::resolver::resolve_unqualified_access(ctx.tree.root(), "q", &bindings, ctx)
+                .unwrap()
+                .ty,
+            *ctx.base.int_type()
+        );
+        let library = pkl_types::resolver::resolve_unqualified_access(
+            ctx.tree.root(),
+            "library",
+            &bindings,
+            ctx,
+        )
+        .unwrap();
+        let alias =
+            pkl_types::resolver::find_member_on_type(&library.ty, "Alias", &bindings, ctx).unwrap();
+        assert!(matches!(alias.ty, pkl_types::Type::Alias { .. }));
+        assert_eq!(alias.node.file_id, FileId(2));
+        assert!(labels(ctx, 4, 7).contains(&"field".to_owned()));
+    });
+}
+#[test]
+fn imported_argument_context_and_let_initializer_use_outer_scope() {
+    with_consumer_regressions(|ctx| {
+        let bindings = pkl_types::TypeBindings::new();
+        assert_eq!(
+            pkl_types::resolver::resolve_unqualified_access(ctx.tree.root(), "y", &bindings, ctx)
+                .unwrap()
+                .ty,
+            *ctx.base.int_type()
+        );
+        fn argument(
+            t: &pkl_syntax::ast::SyntaxTree,
+            n: pkl_syntax::ast::NodeId,
+        ) -> Option<pkl_syntax::ast::NodeId> {
+            if matches!(t.kind(n), NodeKind::UnqualifiedAccessExpr) && t.text(n) == "foobar" {
+                return Some(n);
+            }
+            t.children(n).iter().find_map(|&c| argument(t, c))
+        }
+        let arg = argument(ctx.tree, ctx.tree.root()).unwrap();
+        assert_eq!(
+            pkl_types::infer_expr_type::infer_expr_type_from_context(arg, &bindings, ctx),
+            *ctx.base.string_type()
+        );
+        assert!(labels(ctx, 6, 29).contains(&"value".to_owned()));
+    });
+}
+
+#[test]
+fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
+    let base = harness::load_test_base();
+    let tree =
+        pkl_syntax::parse("import* \"*.pkl\" as libs\nx = import*(\"empty*.pkl\")\n").unwrap();
+    let first = Arc::new(pkl_syntax::parse("a = 1\n").unwrap());
+    let second = Arc::new(pkl_syntax::parse("b = 2\n").unwrap());
+    let targets = vec![
+        NodeRef::new(FileId(2), first.root()),
+        NodeRef::new(FileId(3), second.root()),
+    ];
+    let import = find(&tree, tree.root(), &NodeKind::ImportGlob).unwrap();
+    let expression = find(&tree, tree.root(), &NodeKind::ImportExpr).unwrap();
+    let edges = HashMap::from([
+        (
+            NodeRef::new(FileId(1), import),
+            ImportResolution::Glob(targets.clone()),
+        ),
+        (
+            NodeRef::new(FileId(1), expression),
+            ImportResolution::Glob(vec![]),
+        ),
+    ]);
+    let trees = HashMap::from([(FileId(2), first), (FileId(3), second)]);
+    let ctx = AnalysisContext::new(&tree, FileId(1), &base, &trees, &edges);
+    let callback = |id: FileId| format!("file:///{}.pkl", id.0).parse().ok();
+    let GotoDefinitionResponse::Array(locations) =
+        lsp_features::goto_definition::goto_definition(&ctx, Position::new(0, 10), callback)
+            .unwrap()
+    else {
+        panic!("glob array");
+    };
+    assert_eq!(locations.len(), 2);
+    for (location, target) in locations.iter().zip(&targets) {
+        assert_eq!(location.uri, callback(target.file_id).unwrap());
+        assert_eq!(
+            location.range,
+            lsp_features::span_to_range(
+                &ctx.tree_for(target.file_id).unwrap().span(target.node_id)
+            )
+        );
+    }
+    assert!(
+        lsp_features::goto_definition::goto_definition(&ctx, Position::new(1, 16), callback)
+            .is_none()
+    );
+    assert!(
+        lsp_features::goto_definition::goto_definition(&ctx, Position::new(0, 20), callback)
+            .is_none()
+    );
+}

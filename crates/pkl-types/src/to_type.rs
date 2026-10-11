@@ -41,10 +41,10 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
                 constraints: Vec::new(),
             }
         }
-        StringLiteralType => Type::string_literal(
-            tree.escaped_string_literal(node.node_id)
-                .expect("could not escape string literal text"),
-        ),
+        StringLiteralType => tree
+            .escaped_string_literal(node.node_id)
+            .map(Type::string_literal)
+            .unwrap_or(Type::Unknown),
         DeclaredType => {
             let Some(type_node) = resolve_declared_type(ctx, node) else {
                 return Type::Unknown;
@@ -52,14 +52,12 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
             let Some(decl_tree) = ctx.tree_for(type_node.file_id) else {
                 return Type::Unknown;
             };
-            let type_args = decl_tree.child(type_node.node_id, |c| {
-                matches!(c, NodeKind::TypeArgumentList)
-            });
+            let type_args = tree.child(node.node_id, |c| matches!(c, NodeKind::TypeArgumentList));
             let args = match type_args {
-                Some(type_args) => decl_tree
+                Some(type_args) => tree
                     .children_matching(type_args, |c| c.is_type_node())
                     .iter()
-                    .map(|&n| to_type(type_node.with_node(n), bindings, ctx))
+                    .map(|&n| to_type(node.with_node(n), bindings, ctx))
                     .collect(),
 
                 None => vec![],

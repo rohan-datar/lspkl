@@ -38,3 +38,12 @@ fn diagnostic_snapshots() {
         insta::assert_snapshot!(snapshot_name, rendered);
     }
 }
+
+#[test]
+fn modulepath_imports_do_not_use_package_uri_rules() {
+    let base = harness::load_test_base();
+    let tree = pkl_syntax::parse("import \"modulepath:/library.pkl\" as library\n").unwrap();
+    let ctx = harness::make_ctx(&tree, &base);
+    let diagnostics = DiagnosticsEngine::with_default_analyzers().analyze(&ctx);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}

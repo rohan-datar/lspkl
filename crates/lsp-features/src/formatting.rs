@@ -10,9 +10,17 @@ use crate::MAX_RANGE;
 /// Format `source` with `pkl format` and return a single whole-document
 /// `TextEdit` covering `0..end-of-file`. Returns an empty `Vec` when the
 /// formatter produced no changes.
-pub fn formatting(source: &str) -> io::Result<Vec<TextEdit>> {
-    let mut child = Command::new("pkl")
-        .arg("format")
+pub fn formatting(
+    source: &str,
+    cli_path: &std::path::Path,
+    grammar_version: Option<&str>,
+) -> io::Result<Vec<TextEdit>> {
+    let mut command = Command::new(cli_path);
+    command.arg("format");
+    if let Some(version) = grammar_version {
+        command.arg("--grammar-version").arg(version);
+    }
+    let mut child = command
         .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

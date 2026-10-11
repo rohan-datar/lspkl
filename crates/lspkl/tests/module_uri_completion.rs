@@ -1,0 +1,430 @@
+use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+
+use fluent_uri::Uri;
+use lspkl::ServerState;
+use lspkl::module_uri_completion::{completion, resolve};
+use lspkl::state::AnalysisSnapshot;
+use tower_lsp_server::lsp_types::{
+    CompletionItem, CompletionResponse, CompletionTextEdit, Documentation, Position,
+};
+
+fn uri(path: &Path) -> Uri<String> {
+    pkl_vfs::path_to_uri(path).unwrap()
+}
+fn candidates(
+    state: &ServerState,
+    source_uri: Uri<String>,
+    marked: &str,
+) -> Option<Vec<CompletionItem>> {
+    let cursor = marked.find('|').unwrap();
+    let prefix = &marked[..cursor];
+    let position = Position::new(
+        prefix.bytes().filter(|&b| b == b'\n').count() as u32,
+        prefix.rsplit('\n').next().unwrap().encode_utf16().count() as u32,
+    );
+    let source = marked.replacen('|', "", 1);
+    let file = state.file_manager.open(source_uri, source, Some(1));
+    let module = state.parse_module(file).unwrap();
+    let snapshot = AnalysisSnapshot {
+        trees: HashMap::from([(module.file_id, module.tree.clone())]),
+        imports: HashMap::new(),
+        module,
+    };
+    match completion(state, &snapshot, position)? {
+        CompletionResponse::Array(items) => Some(items),
+        _ => panic!("expected deterministic array"),
+    }
+}
+fn edit(item: &CompletionItem) -> &tower_lsp_server::lsp_types::TextEdit {
+    match item.text_edit.as_ref().unwrap() {
+        CompletionTextEdit::Edit(edit) => edit,
+        _ => panic!("expected content replacement"),
+    }
+}
+fn docs(item: CompletionItem) -> String {
+    match item.documentation.unwrap() {
+        Documentation::MarkupContent(content) => content.value,
+        Documentation::String(value) => value,
+    }
+}
+fn archive(path: &Path, entries: &[(&str, &str)]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut writer = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    for (name, source) in entries {
+        writer
+            .start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(source.as_bytes()).unwrap();
+    }
+    writer.finish().unwrap();
+}
+fn package(
+    cache: &Path,
+    name: &str,
+    version: &str,
+    dependencies: serde_json::Value,
+    entries: &[(&str, &str)],
+) -> String {
+    let value = format!("package://example.test/{name}@{version}");
+    let package = pkl_project::dto::PackageUri::create(&value).unwrap();
+    let metadata = cache.join(&package.relative_metadata_files()[0]);
+    fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+    fs::write(
+        metadata,
+        serde_json::to_vec(&serde_json::json!({
+            "name": name, "version": version, "packageUri": value,
+            "packageZipUrl": "https://example.test/package.zip", "dependencies": dependencies
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    archive(&cache.join(&package.relative_zip_files()[0]), entries);
+    value
+}
+
+#[test]
+fn all_uri_owner_forms_and_embedded_modules_have_real_lazy_docs() {
+    let state = ServerState::new();
+    let temp = tempfile::tempdir().unwrap();
+    for source in [
+        "import \"pkl:|\"",
+        "amends \"pkl:|\"",
+        "extends \"pkl:|\"",
+        "x = import(\"pkl:|\")",
+    ] {
+        let items = candidates(&state, uri(&temp.path().join("main.pkl")), source).unwrap();
+        assert_eq!(items.len(), pkl_vfs::stdlib::MODULE_NAMES.len());
+        let item = items
+            .into_iter()
+            .find(|item| item.label == "pkl:math")
+            .unwrap();
+        assert!(item.documentation.is_none());
+        assert_eq!(item.data.as_ref().unwrap()["targetUri"], "pkl:math");
+        let documentation = docs(resolve(&state, item));
+        assert!(documentation.contains("module pkl.math"));
+        assert!(documentation.contains("mathematical"));
+    }
+    assert!(candidates(&state, uri(&temp.path().join("main.pkl")), "x = \"pkl:|\"").is_none());
+}
+
+#[test]
+fn schemes_and_https_do_not_invent_children() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = ServerState::new();
+    let source = uri(&temp.path().join("main.pkl"));
+    let labels =
+        |items: Vec<CompletionItem>| items.into_iter().map(|i| i.label).collect::<Vec<_>>();
+    let items = candidates(&state, source.clone(), "import \"|\"").unwrap();
+    for scheme in ["pkl:", "https://", "package://", "file:///", "modulepath:/"] {
+        assert!(labels(items.clone()).contains(&scheme.to_owned()));
+    }
+    assert_eq!(
+        labels(candidates(&state, source.clone(), "import* \"|\"").unwrap()),
+        ["file:///", "package://"]
+    );
+    assert!(
+        candidates(&state, source, "x = import*(\"https://example.test/|\")")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn local_names_directories_utf16_raw_delimiters_and_lazy_target_docs() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("empty space")).unwrap();
+    fs::write(
+        temp.path().join("a % file.pkl"),
+        "/// Unique target documentation.\nmodule fixture.target\nx = 1\n",
+    )
+    .unwrap();
+    fs::write(temp.path().join(".hidden.pkl"), "x=1").unwrap();
+    fs::write(temp.path().join("no.txt"), "no").unwrap();
+    let state = ServerState::new();
+    let items = candidates(
+        &state,
+        uri(&temp.path().join("main.pkl")),
+        "x = \"😀\"\ny = import(#\"a |suffix\"#)",
+    )
+    .unwrap();
+    let item = items
+        .iter()
+        .find(|item| item.label == "a % file.pkl")
+        .unwrap();
+    assert_eq!(edit(item).new_text, "a%20%25%20file.pkl");
+    assert_eq!(edit(item).range.start, Position::new(1, 13));
+    assert_eq!(edit(item).range.end, Position::new(1, 21));
+    assert!(docs(resolve(&state, item.clone())).contains("Unique target documentation"));
+    let items = candidates(
+        &state,
+        uri(&temp.path().join("main.pkl")),
+        "y = \"😀\" + import(\"|\")",
+    )
+    .unwrap();
+    let item = items
+        .iter()
+        .find(|item| item.label == "empty space/")
+        .unwrap();
+    assert_eq!(edit(item).new_text, "empty%20space/");
+    assert_eq!(edit(item).range.start, Position::new(0, 19));
+    assert!(
+        !items
+            .iter()
+            .any(|item| item.label == ".hidden.pkl" || item.label == "no.txt")
+    );
+}
+
+#[test]
+fn glob_completions_resolve_literal_metacharacters() {
+    let temp = tempfile::tempdir().unwrap();
+    let name = "literal[*{.pkl";
+    fs::write(temp.path().join(name), "module glob.target\nx=1").unwrap();
+    fs::write(temp.path().join("literalOther.pkl"), "x=2").unwrap();
+    let state = ServerState::new();
+    let source_uri = uri(&temp.path().join("main.pkl"));
+    for marked in ["import* \"lit|\"", "x = import*(#\"lit|\"#)"] {
+        let items = candidates(&state, source_uri.clone(), marked).unwrap();
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let replaced = marked.replacen("lit|", &edit(item).new_text, 1);
+        let file = state
+            .file_manager
+            .open(source_uri.clone(), replaced, Some(2));
+        let module = state.parse_module(file).unwrap();
+        let analysis = state.prepare_analysis(module).unwrap();
+        assert_eq!(analysis.imports.len(), 1);
+        let resolution = analysis.imports.values().next().unwrap();
+        match resolution {
+            pkl_types::ImportResolution::Glob(targets) => {
+                let expected = state
+                    .file_registry
+                    .lock()
+                    .register(&uri(&temp.path().join(name)));
+                assert_eq!(
+                    targets,
+                    &vec![pkl_types::NodeRef::new(
+                        expected,
+                        pkl_syntax::ast::NodeId::ROOT
+                    )]
+                );
+            }
+            _ => panic!("glob expected"),
+        }
+    }
+}
+
+#[test]
+fn modulepath_directories_zip_jar_precedence_and_docs_use_physical_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("same.pkl"),
+        "/// Directory wins.\nmodule first\nx=1",
+    )
+    .unwrap();
+    let zip = temp.path().join("modules.zip");
+    archive(
+        &zip,
+        &[
+            ("same.pkl", "module second\nx=2"),
+            ("nested/member.pkl", "module zipped\nx=3"),
+        ],
+    );
+    let jar = temp.path().join("modules.jar");
+    archive(&jar, &[("jar.pkl", "module jarred\nx=4")]);
+    let state = ServerState::new();
+    state.apply_settings(lspkl::settings::WorkspaceSettings {
+        modulepath: vec![root.clone(), zip, jar],
+        ..Default::default()
+    });
+    let items = candidates(
+        &state,
+        uri(&temp.path().join("main.pkl")),
+        "import \"modulepath:/|\"",
+    )
+    .unwrap();
+    assert_eq!(
+        items.iter().filter(|item| item.label == "same.pkl").count(),
+        1
+    );
+    assert!(items.iter().any(|item| item.label == "nested/"));
+    assert!(items.iter().any(|item| item.label == "jar.pkl"));
+    let same = items.iter().find(|item| item.label == "same.pkl").unwrap();
+    assert_eq!(
+        same.data.as_ref().unwrap()["targetUri"],
+        uri(&root.join("same.pkl")).as_str()
+    );
+    assert!(docs(resolve(&state, same.clone())).contains("Directory wins"));
+    let items = candidates(
+        &state,
+        uri(&temp.path().join("main.pkl")),
+        "import \"modulepath:/nested/|\"",
+    )
+    .unwrap();
+    assert!(docs(resolve(&state, items[0].clone())).contains("module zipped"));
+}
+
+#[test]
+fn cached_package_bases_versions_members_and_transitive_dependency_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = temp.path().join("cache");
+    let b = package(
+        &cache,
+        "b",
+        "1.0.0",
+        serde_json::json!({}),
+        &[(
+            "docs member.pkl",
+            "/// Transitive docs.\nmodule b.member\nx=1",
+        )],
+    );
+    let a = package(
+        &cache,
+        "a",
+        "1.0.0",
+        serde_json::json!({"transitive": {"uri": b}}),
+        &[("source.pkl", "x=1"), ("nested/other.pkl", "x=2")],
+    );
+    package(
+        &cache,
+        "a",
+        "2.0.0",
+        serde_json::json!({}),
+        &[("source.pkl", "x=2")],
+    );
+    let state = ServerState::new();
+    state.apply_settings(lspkl::settings::WorkspaceSettings {
+        cache_dir: Some(cache.clone()),
+        ..Default::default()
+    });
+    let source_uri = uri(&temp.path().join("main.pkl"));
+    let bases = candidates(
+        &state,
+        source_uri.clone(),
+        "import \"package://example.test/|\"",
+    )
+    .unwrap();
+    assert_eq!(
+        bases
+            .iter()
+            .map(|item| edit(item).new_text.as_str())
+            .collect::<Vec<_>>(),
+        ["package://example.test/a@", "package://example.test/b@"]
+    );
+    let versions = candidates(
+        &state,
+        source_uri.clone(),
+        "import \"package://example.test/a@|\"",
+    )
+    .unwrap();
+    assert_eq!(
+        versions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["1.0.0", "2.0.0"]
+    );
+    assert_eq!(
+        edit(&versions[1]).new_text,
+        "package://example.test/a@2.0.0#/"
+    );
+    let members = candidates(&state, source_uri, &format!("import \"{a}#/|\"")).unwrap();
+    assert!(members.iter().any(|item| item.label == "nested/"));
+    let package_uri = pkl_project::dto::PackageUri::create(&a).unwrap();
+    let jar_uri = format!(
+        "jar:{}!/source.pkl",
+        uri(&cache.join(&package_uri.relative_zip_files()[0]))
+    );
+    let source = Uri::parse(jar_uri).unwrap();
+    let names = candidates(&state, source.clone(), "import \"@|\"").unwrap();
+    assert_eq!(names[0].label, "@transitive");
+    let members = candidates(&state, source, "import \"@transitive/|\"").unwrap();
+    assert_eq!(edit(&members[0]).new_text, "@transitive/docs%20member.pkl");
+    assert!(docs(resolve(&state, members[0].clone())).contains("Transitive docs"));
+}
+
+#[test]
+fn named_local_and_remote_project_dependencies_complete_members() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = temp.path().join("cache");
+    let remote = package(
+        &cache,
+        "remote",
+        "1.0.0",
+        serde_json::json!({}),
+        &[("remote.pkl", "module remote.member\nx=1")],
+    );
+    let local_uri = "package://example.test/local@1.0.0";
+    fs::create_dir(temp.path().join("local")).unwrap();
+    fs::write(
+        temp.path().join("local/member.pkl"),
+        "/// Local dependency docs.\nmodule local.member\nx=1",
+    )
+    .unwrap();
+    fs::write(temp.path().join("PklProject"), "").unwrap();
+    let state_file = temp.path().join("workspace.json");
+    fs::write(&state_file, serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 1, "pklProjects": [{
+            "projectFile": "PklProject", "packageUri": null,
+            "declaredDependencies": {"local": local_uri, "remote": remote},
+            "resolvedDependencies": {
+                "package://example.test/local@1": {"type": "local", "uri": local_uri, "path": "local"},
+                "package://example.test/remote@1": {"type": "remote", "uri": remote}
+            }, "evaluatorSettings": null
+        }]
+    })).unwrap()).unwrap();
+    let state = ServerState::new();
+    state
+        .project_manager
+        .lock()
+        .initialize(vec![temp.path().to_owned()]);
+    state
+        .project_manager
+        .lock()
+        .load_state(&state_file)
+        .unwrap();
+    state.apply_settings(lspkl::settings::WorkspaceSettings {
+        cache_dir: Some(cache),
+        ..Default::default()
+    });
+    let source = uri(&temp.path().join("main.pkl"));
+    let names = candidates(&state, source.clone(), "import \"@|\"").unwrap();
+    assert_eq!(
+        names
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["@local", "@remote"]
+    );
+    let items = candidates(&state, source.clone(), "import \"@local/|\"").unwrap();
+    assert_eq!(
+        items[0].data.as_ref().unwrap()["targetUri"],
+        uri(&temp.path().join("local/member.pkl")).as_str()
+    );
+    assert!(docs(resolve(&state, items[0].clone())).contains("Local dependency docs"));
+    let items = candidates(&state, source, "import \"@remote/|\"").unwrap();
+    assert!(docs(resolve(&state, items[0].clone())).contains("module remote.member"));
+}
+
+#[test]
+fn absolute_file_upward_paths_and_raw_delimiters_replace_only_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(temp.path().join("parent.pkl"), "module parent\nx=1").unwrap();
+    let state = ServerState::new();
+    let source = uri(&nested.join("main.pkl"));
+    let items = candidates(&state, source.clone(), "import \".../par|\"").unwrap();
+    assert_eq!(edit(&items[0]).new_text, ".../parent.pkl");
+    let absolute = format!("import \"{}|\"", uri(temp.path()));
+    let absolute = absolute.replace("|", "/par|");
+    let items = candidates(&state, source.clone(), &absolute).unwrap();
+    assert!(edit(&items[0]).new_text.ends_with("/parent.pkl"));
+    let marked = "x = import(#\"pkl:ma|\"#)";
+    let items = candidates(&state, source, marked).unwrap();
+    assert_eq!(edit(&items[0]).new_text, "pkl:math");
+    assert_eq!(edit(&items[0]).range.start, Position::new(0, 13));
+}
