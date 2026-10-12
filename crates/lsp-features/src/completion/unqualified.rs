@@ -71,12 +71,15 @@ fn add_definition_completions(
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) -> bool {
-    match this_type {
+    match this_type.unconstrained() {
         Type::Unknown => false,
-        Type::Union { left, right, .. } => {
-            let l = add_definition_completions(node, left, already_defined, tree, ctx, out);
-            let r = add_definition_completions(node, right, already_defined, tree, ctx, out);
-            l && r
+        Type::Union { members } => {
+            let mut typed_only = true;
+            for member in members.iter() {
+                typed_only &=
+                    add_definition_completions(node, member, already_defined, tree, ctx, out);
+            }
+            typed_only
         }
         // Typed objects: class instances and modules. Typed objects cannot
         // have elements, so property amendments/assignments are all there is.
@@ -213,7 +216,7 @@ fn add_mapping_completions(
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
-    let Type::Class { type_args, .. } = mapping else {
+    let Type::Class { type_args, .. } = mapping.unconstrained() else {
         return;
     };
     let Some(key_type) = type_args.first() else {
@@ -268,7 +271,7 @@ fn add_listing_completions(
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
-    let Type::Class { type_args, .. } = listing else {
+    let Type::Class { type_args, .. } = listing.unconstrained() else {
         return;
     };
     let Some(element_type) = type_args.first() else {
@@ -332,12 +335,12 @@ fn default_key(key_type: &Type, ctx: &AnalysisContext, is_snippet: bool) -> Stri
 }
 
 fn to_class_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    match ty {
+    match ty.unconstrained() {
         t @ Type::Class { .. } => Some(t.clone()),
         _ => {
             let unaliased = ty.unaliased(ctx);
-            match unaliased {
-                t @ Type::Class { .. } => Some(t),
+            match unaliased.unconstrained() {
+                t @ Type::Class { .. } => Some(t.clone()),
                 _ => None,
             }
         }
@@ -393,12 +396,13 @@ fn add_inferred_expr_type_completions(
 
 fn add_lambda_completions(expected: &Type, ctx: &AnalysisContext, out: &mut Vec<CompletionItem>) {
     let unaliased = expected.unaliased(ctx);
-    match unaliased {
-        Type::Union { left, right, .. } => {
-            add_lambda_completions(&left, ctx, out);
-            add_lambda_completions(&right, ctx, out);
+    match unaliased.unconstrained() {
+        Type::Union { members } => {
+            for member in members.iter() {
+                add_lambda_completions(member, ctx, out);
+            }
         }
-        Type::Class { ref type_args, .. } => {
+        Type::Class { type_args, .. } => {
             // Match against Function0..Function5.
             for n in 0..=5 {
                 let Some(fn_ty) = ctx.base.function_n_type(n) else {
@@ -442,7 +446,7 @@ fn lambda_parameter_names(param_types: &[Type], ctx: &AnalysisContext) -> Vec<St
     let mut next_int = 0usize;
 
     for ty in param_types {
-        let name = match ty {
+        let name = match ty.unconstrained() {
             Type::Class { class_node, .. }
                 if class_node.file == ctx.base.file_id()
                     && ctx
@@ -459,7 +463,11 @@ fn lambda_parameter_names(param_types: &[Type], ctx: &AnalysisContext) -> Vec<St
                 .and_then(|t| t.name(class_node.value))
                 .map(decapitalize)
                 .unwrap_or_else(|| "param".to_string()),
-            Type::Module { reference_name, .. } => decapitalize(reference_name),
+            Type::Module { module_node } => ctx
+                .tree(module_node.file)
+                .and_then(|tree| Module::cast(tree, module_node.value)?.name(tree))
+                .map(decapitalize)
+                .unwrap_or_else(|| "param".to_string()),
             Type::Variable { type_param, .. } => ctx
                 .tree(type_param.file)
                 .and_then(|t| t.name(type_param.value))

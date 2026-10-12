@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 /// A constraint attached to a constrained type, e.g. `Int(this >= 0)`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConstraintExpr {
     /// Could not analyze the constraint statically — hold onto the source text
     /// so it can be rendered.
@@ -31,7 +31,7 @@ impl Display for ConstraintExpr {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConstraintValue {
     Int(i64),
     String(String),
@@ -48,7 +48,7 @@ impl Display for ConstraintValue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CompareOp {
     Lt,
     Le,

@@ -71,11 +71,7 @@ fn union_subtype_iff_each_component_is() {
     let ctx = ctx(&base, &trees);
 
     // (Int | String) <: Any : both Int and String are subtypes of Any.
-    let int_or_string = Type::Union {
-        left: Box::new(base.int_type().clone()),
-        right: Box::new(base.string_type().clone()),
-        constraints: vec![],
-    };
+    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
     assert!(int_or_string.is_subtype_of(base.any_type(), &ctx));
 
     // (Int | String) is NOT a subtype of Int because String isn't.
@@ -88,11 +84,7 @@ fn member_is_subtype_of_a_union_containing_it() {
     let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
     let ctx = ctx(&base, &trees);
 
-    let int_or_string = Type::Union {
-        left: Box::new(base.int_type().clone()),
-        right: Box::new(base.string_type().clone()),
-        constraints: vec![],
-    };
+    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
     assert!(base.int_type().is_subtype_of(&int_or_string, &ctx));
     assert!(base.string_type().is_subtype_of(&int_or_string, &ctx));
     assert!(!base.boolean_type().is_subtype_of(&int_or_string, &ctx));
@@ -115,11 +107,10 @@ fn string_literal_union_accepts_only_its_values() {
     let base = harness::load_test_base();
     let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
     let ctx = ctx(&base, &trees);
-    let union = Type::Union {
-        left: Box::new(Type::string_literal("foo")),
-        right: Box::new(Type::string_literal("bar")),
-        constraints: vec![],
-    };
+    let union = Type::union(
+        [Type::string_literal("foo"), Type::string_literal("bar")],
+        &ctx,
+    );
     assert!(Type::string_literal("bar").is_subtype_of(&union, &ctx));
     assert!(!Type::string_literal("baz").is_subtype_of(&union, &ctx));
 }

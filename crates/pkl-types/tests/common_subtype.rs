@@ -121,11 +121,7 @@ fn union_overlaps_if_one_branch_does() {
     let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
     let ctx = ctx(&base, &trees);
 
-    let int_or_string = Type::Union {
-        left: Box::new(base.int_type().clone()),
-        right: Box::new(base.string_type().clone()),
-        constraints: vec![],
-    };
+    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
 
     // String branch overlaps with String.
     assert!(int_or_string.has_common_subtype_with(base.string_type(), &ctx));
@@ -142,11 +138,7 @@ fn union_is_disjoint_when_no_branch_overlaps() {
     let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
     let ctx = ctx(&base, &trees);
 
-    let int_or_string = Type::Union {
-        left: Box::new(base.int_type().clone()),
-        right: Box::new(base.string_type().clone()),
-        constraints: vec![],
-    };
+    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
 
     // Boolean overlaps with neither Int nor String.
     assert!(!int_or_string.has_common_subtype_with(base.boolean_type(), &ctx));
@@ -164,16 +156,8 @@ fn union_of_unions_propagates_correctly() {
     let ctx = ctx(&base, &trees);
 
     // (Int | String) | Boolean  vs  Boolean  → true, via the right branch.
-    let inner = Type::Union {
-        left: Box::new(base.int_type().clone()),
-        right: Box::new(base.string_type().clone()),
-        constraints: vec![],
-    };
-    let outer = Type::Union {
-        left: Box::new(inner),
-        right: Box::new(base.boolean_type().clone()),
-        constraints: vec![],
-    };
+    let inner = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
+    let outer = Type::union([inner, base.boolean_type().clone()], &ctx);
 
     assert!(outer.has_common_subtype_with(base.boolean_type(), &ctx));
 }

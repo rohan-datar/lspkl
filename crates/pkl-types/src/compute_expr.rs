@@ -88,19 +88,13 @@ fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
             else {
                 return Type::Unknown;
             };
-            Type::Union {
-                left: Box::new(compute_expr_type(
-                    NodeRef::new(file, then_branch),
-                    bindings,
-                    ctx,
-                )),
-                right: Box::new(compute_expr_type(
-                    NodeRef::new(file, else_branch),
-                    bindings,
-                    ctx,
-                )),
-                constraints: vec![],
-            }
+            Type::union(
+                [
+                    compute_expr_type(NodeRef::new(file, then_branch), bindings, ctx),
+                    compute_expr_type(NodeRef::new(file, else_branch), bindings, ctx),
+                ],
+                ctx,
+            )
         }
         NodeKind::AdditiveExpr => additive_expr_type(NodeRef::new(file, node), bindings, ctx),
         NodeKind::MultiplicativeExpr => {
@@ -155,8 +149,6 @@ fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
             .unwrap_or(Type::Unknown),
         NodeKind::ModuleExpr => Type::Module {
             module_node: NodeRef::new(file, tree.root()),
-            reference_name: "".to_string(),
-            constraints: vec![],
         },
         NodeKind::NewExpr => nodes::NewExpr::cast(tree, node)
             .and_then(|n| n.ty(tree))
@@ -184,8 +176,6 @@ pub(crate) fn compute_this_type(
             NodeKind::Module => {
                 return Type::Module {
                     module_node: NodeRef::new(file, id),
-                    reference_name: tree.name(id).unwrap_or("").to_string(),
-                    constraints: vec![],
                 };
             }
             NodeKind::Class => return Type::class(NodeRef::new(file, id)),
@@ -230,13 +220,13 @@ fn additive_expr_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
         (Bytes, _, Bytes) if op == TokenType::Plus => ctx.base.bytes_type().clone(),
 
         (List, _, List | Set) if op == TokenType::Plus => {
-            union_single_arg(&left, &right, ctx.base.list_type())
+            union_single_arg(&left, &right, ctx.base.list_type(), ctx)
         }
         (Set, _, Set) if op == TokenType::Plus => {
-            union_single_arg(&left, &right, ctx.base.set_type())
+            union_single_arg(&left, &right, ctx.base.set_type(), ctx)
         }
         (Map, _, Map) if op == TokenType::Plus => {
-            union_two_args(&left, &right, ctx.base.map_type())
+            union_two_args(&left, &right, ctx.base.map_type(), ctx)
         }
 
         _ => Type::Unknown,
@@ -288,7 +278,7 @@ enum NumKind {
 
 fn classify(ty: &Type, ctx: &AnalysisContext) -> NumKind {
     let base = ctx.base;
-    match ty {
+    match ty.unconstrained() {
         Type::Unknown => NumKind::Unknown,
         Type::StringLiteral { .. } => NumKind::StringLiteral,
         _ if ty.class_equals(base.int_type()) => NumKind::Int,
@@ -306,20 +296,16 @@ fn classify(ty: &Type, ctx: &AnalysisContext) -> NumKind {
 /// Build `target<L|R>` where `L` is the first type-arg of `left` and `R` of
 /// `right`. Used for List/Set concat. Returns `Type::Unknown` if either side
 /// isn't a `Type::Class`
-fn union_single_arg(left: &Type, right: &Type, target: &Type) -> Type {
+fn union_single_arg(left: &Type, right: &Type, target: &Type, ctx: &AnalysisContext) -> Type {
     let (Some(l_arg), Some(r_arg)) = (type_arg(left, 0), type_arg(right, 0)) else {
         return Type::Unknown;
     };
-    let unioned = Type::Union {
-        left: Box::new(l_arg.clone()),
-        right: Box::new(r_arg.clone()),
-        constraints: vec![],
-    };
-    with_type_args(target.clone(), vec![unioned])
+    let unioned = Type::union([l_arg.clone(), r_arg.clone()], ctx);
+    target.clone().with_type_args(vec![unioned])
 }
 
 /// Build `target<Lk|Rk, Lv|Rv>` for two-arg generics (Map).
-fn union_two_args(left: &Type, right: &Type, target: &Type) -> Type {
+fn union_two_args(left: &Type, right: &Type, target: &Type, ctx: &AnalysisContext) -> Type {
     let (Some(lk), Some(rk), Some(lv), Some(rv)) = (
         type_arg(left, 0),
         type_arg(right, 0),
@@ -328,35 +314,15 @@ fn union_two_args(left: &Type, right: &Type, target: &Type) -> Type {
     ) else {
         return Type::Unknown;
     };
-    let key = Type::Union {
-        left: Box::new(lk.clone()),
-        right: Box::new(rk.clone()),
-        constraints: vec![],
-    };
-    let value = Type::Union {
-        left: Box::new(lv.clone()),
-        right: Box::new(rv.clone()),
-        constraints: vec![],
-    };
-    with_type_args(target.clone(), vec![key, value])
+    let key = Type::union([lk.clone(), rk.clone()], ctx);
+    let value = Type::union([lv.clone(), rv.clone()], ctx);
+    target.clone().with_type_args(vec![key, value])
 }
 
 fn type_arg(ty: &Type, idx: usize) -> Option<&Type> {
-    match ty {
+    match ty.unconstrained() {
         Type::Class { type_args, .. } => type_args.get(idx),
         _ => None,
-    }
-}
-
-fn with_type_args(mut ty: Type, args: Vec<Type>) -> Type {
-    if let Type::Class {
-        ref mut type_args, ..
-    } = ty
-    {
-        *type_args = args;
-        ty
-    } else {
-        Type::Unknown
     }
 }
 

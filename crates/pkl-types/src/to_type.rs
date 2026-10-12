@@ -23,6 +23,15 @@ pub(crate) fn to_type_with_bindings(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Type {
+    to_type_with_bindings_inner(node, bindings, ctx, &mut std::collections::HashSet::new())
+}
+
+pub(crate) fn to_type_with_bindings_inner(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+    aliases: &mut std::collections::HashSet<NodeRef>,
+) -> Type {
     use NodeKind::*;
     let Some(tree) = ctx.tree(node.file) else {
         return Type::Unknown;
@@ -37,12 +46,6 @@ pub(crate) fn to_type_with_bindings(
 
             Type::Module {
                 module_node: type_node,
-                reference_name: ctx
-                    .tree(type_node.file)
-                    .and_then(|t| t.name(type_node.value))
-                    .unwrap_or("")
-                    .to_string(),
-                constraints: Vec::new(),
             }
         }
         StringLiteralType => tree
@@ -61,20 +64,17 @@ pub(crate) fn to_type_with_bindings(
             };
             let args = declared
                 .arguments(tree)
-                .map(|n| to_type_with_bindings(node.with_value(n), bindings, ctx))
+                .map(|n| to_type_with_bindings_inner(node.with_value(n), bindings, ctx, aliases))
                 .collect();
             match decl_tree.kind(type_node.value) {
                 Class => Type::class_with_args(type_node, args),
                 TypeAlias => Type::Alias {
                     alias_node: type_node,
                     type_args: args,
-                    constraints: Vec::new(),
                 },
                 TypeParameter => bindings.get(&type_node).cloned().unwrap_or(Type::Unknown),
                 Module => Type::Module {
                     module_node: type_node,
-                    reference_name: decl_tree.name(type_node.value).unwrap_or("").to_string(),
-                    constraints: Vec::new(),
                 },
                 _ => Type::Unknown,
             }
@@ -91,9 +91,9 @@ pub(crate) fn to_type_with_bindings(
             let Some(inner) = inner else {
                 return Type::Unknown;
             };
-            let ty = to_type_with_bindings(node.with_value(inner), bindings, ctx);
+            let ty = to_type_with_bindings_inner(node.with_value(inner), bindings, ctx, aliases);
             if matches!(tree.kind(node.value), NullableType) {
-                ty.nullable(ctx)
+                Type::union_inner([ctx.base.null_type().clone(), ty], ctx, aliases)
             } else {
                 ty
             }
@@ -105,12 +105,13 @@ pub(crate) fn to_type_with_bindings(
             let Some(inner) = constrained.inner(tree) else {
                 return Type::Unknown;
             };
-            let inner_ty = to_type_with_bindings(node.with_value(inner), bindings, ctx);
+            let inner_ty =
+                to_type_with_bindings_inner(node.with_value(inner), bindings, ctx, aliases);
             let cs = constrained
                 .constraints(tree)
                 .map(|n| ConstraintExpr::opaque(tree.text(n)))
                 .collect();
-            inner_ty.with_constraints(cs)
+            Type::constrained(inner_ty, cs)
         }
         UnionType => {
             let Some(union) = nodes::UnionType::cast(tree, node.value) else {
@@ -119,11 +120,14 @@ pub(crate) fn to_type_with_bindings(
             let (Some(left), Some(right)) = (union.left(tree), union.right(tree)) else {
                 return Type::Unknown;
             };
-            Type::Union {
-                left: Box::new(to_type_with_bindings(node.with_value(left), bindings, ctx)),
-                right: Box::new(to_type_with_bindings(node.with_value(right), bindings, ctx)),
-                constraints: Vec::new(),
-            }
+            Type::union_inner(
+                [
+                    to_type_with_bindings_inner(node.with_value(left), bindings, ctx, aliases),
+                    to_type_with_bindings_inner(node.with_value(right), bindings, ctx, aliases),
+                ],
+                ctx,
+                aliases,
+            )
         }
         FunctionType => {
             let Some(function) = nodes::FunctionType::cast(tree, node.value) else {
@@ -134,13 +138,14 @@ pub(crate) fn to_type_with_bindings(
             };
             let mut args: Vec<Type> = function
                 .parameters(tree)
-                .map(|n| to_type_with_bindings(node.with_value(n), bindings, ctx))
+                .map(|n| to_type_with_bindings_inner(node.with_value(n), bindings, ctx, aliases))
                 .collect();
             let n_params = args.len();
-            args.push(to_type_with_bindings(
+            args.push(to_type_with_bindings_inner(
                 node.with_value(return_node),
                 bindings,
                 ctx,
+                aliases,
             ));
 
             ctx.base

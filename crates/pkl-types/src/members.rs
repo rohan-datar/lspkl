@@ -68,7 +68,7 @@ fn collect(
     seen_names: &mut HashSet<String>,
     seen_nodes: &mut HashSet<NodeRef>,
 ) {
-    match ty {
+    match ty.unconstrained() {
         Type::Class {
             class_node,
             type_args,
@@ -160,37 +160,37 @@ fn collect(
             seen_names,
             seen_nodes,
         ),
-        Type::Union { left, right, .. } => {
-            // Collect both sides independently, then keep left entries whose
-            // name also exists on the right.
-            let mut left_members = Vec::new();
-            let mut left_names = HashSet::new();
-            let mut left_nodes = HashSet::new();
-            collect(
-                left,
-                bindings,
-                ctx,
-                &mut left_members,
-                &mut left_names,
-                &mut left_nodes,
-            );
-
-            let mut right_members = Vec::new();
-            let mut right_names = HashSet::new();
-            let mut right_nodes = HashSet::new();
-            collect(
-                right,
-                bindings,
-                ctx,
-                &mut right_members,
-                &mut right_names,
-                &mut right_nodes,
-            );
-
-            for info in left_members {
-                if right_members.iter().any(|r| r.name == info.name)
-                    && seen_names.insert(info.name.clone())
-                {
+        Type::Union { members } => {
+            let mut common: Option<Vec<MemberInfo>> = None;
+            for member in members.iter() {
+                let mut branch = Vec::new();
+                let mut names = HashSet::new();
+                let mut nodes = HashSet::new();
+                collect(member, bindings, ctx, &mut branch, &mut names, &mut nodes);
+                if let Some(common) = &mut common {
+                    branch.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+                    common.retain_mut(|info| {
+                        let Ok(index) =
+                            branch.binary_search_by(|candidate| candidate.name.cmp(&info.name))
+                        else {
+                            return false;
+                        };
+                        if info.ty != branch[index].ty {
+                            let left = std::mem::replace(&mut info.ty, Type::Nothing);
+                            let right = std::mem::replace(&mut branch[index].ty, Type::Nothing);
+                            info.ty = Type::union([left, right], ctx);
+                        }
+                        true
+                    });
+                } else {
+                    common = Some(branch);
+                }
+                if common.as_ref().is_some_and(Vec::is_empty) {
+                    break;
+                }
+            }
+            for info in common.into_iter().flatten() {
+                if seen_names.insert(info.name.clone()) {
                     out.push(info);
                 }
             }

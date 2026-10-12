@@ -153,11 +153,7 @@ fn enumeration_preserves_imported_inheritance_shadowing_and_union_intersection()
             .file,
         FileId(2)
     );
-    let union = Type::Union {
-        left: Box::new(child_type),
-        right: Box::new(parent_type),
-        constraints: vec![],
-    };
+    let union = Type::union([child_type, parent_type], &ctx);
     let members = pkl_types::members_of_type(&union, &ctx);
     assert!(members.iter().any(|member| member.name == "inherited"));
     assert!(!members.iter().any(|member| member.name == "local"));

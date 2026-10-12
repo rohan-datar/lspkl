@@ -139,7 +139,7 @@ pub(crate) fn infer_expr_type_from_context(
             } else if receiver_type.is_subtype_of(ctx.base.map_type(), ctx)
                 || receiver_type.is_subtype_of(ctx.base.mapping_type(), ctx)
             {
-                let Type::Class { type_args, .. } = receiver_type else {
+                let Type::Class { type_args, .. } = receiver_type.unconstrained() else {
                     return Type::Unknown;
                 };
                 type_args.first().unwrap_or(&Type::Unknown).clone()
@@ -162,17 +162,21 @@ pub(crate) fn infer_expr_type_from_context(
             };
             let other_type = compute_expr_type(NodeRef::new(file, other), bindings, ctx);
             if other_type.is_subtype_of(ctx.base.duration_type(), ctx) {
-                Type::Union {
-                    left: Box::new(ctx.base.number_type().clone()),
-                    right: Box::new(ctx.base.duration_type().clone()),
-                    constraints: vec![],
-                }
+                Type::union(
+                    [
+                        ctx.base.number_type().clone(),
+                        ctx.base.duration_type().clone(),
+                    ],
+                    ctx,
+                )
             } else if other_type.is_subtype_of(ctx.base.data_size_type(), ctx) {
-                Type::Union {
-                    left: Box::new(ctx.base.number_type().clone()),
-                    right: Box::new(ctx.base.data_size_type().clone()),
-                    constraints: vec![],
-                }
+                Type::union(
+                    [
+                        ctx.base.number_type().clone(),
+                        ctx.base.data_size_type().clone(),
+                    ],
+                    ctx,
+                )
             } else {
                 // TODO: make this more exhaustive (support union types and return a pseudo type alias of multiplicative operands)
                 ctx.base.number_type().clone()
@@ -352,7 +356,7 @@ fn infer_type_from_arg_list(
         class_node,
         type_args,
         ..
-    } = &receiver_type
+    } = receiver_type.unconstrained()
     {
         member_bindings =
             crate::resolver::class_member_bindings(*class_node, type_args, bindings, ctx);

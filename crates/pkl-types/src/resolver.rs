@@ -81,16 +81,8 @@ pub fn resolve_type_name(ctx: &AnalysisContext, parts: &[&str], node: NodeRef) -
     None
 }
 
-pub fn module_type(module_node: NodeRef, ctx: &AnalysisContext) -> Type {
-    Type::Module {
-        module_node,
-        reference_name: ctx
-            .tree(module_node.file)
-            .and_then(|t| t.name(module_node.value))
-            .unwrap_or("")
-            .to_string(),
-        constraints: vec![],
-    }
+pub fn module_type(module_node: NodeRef, _ctx: &AnalysisContext) -> Type {
+    Type::Module { module_node }
 }
 
 pub fn module_super(module: NodeRef, ctx: &AnalysisContext) -> Option<NodeRef> {
@@ -128,15 +120,7 @@ pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
     match ctx.imports.get(&node) {
         Some(crate::ImportResolution::Single(root)) => module_type(*root, ctx),
         Some(crate::ImportResolution::Glob(roots)) => {
-            let value = roots
-                .iter()
-                .map(|r| module_type(*r, ctx))
-                .reduce(|a, b| Type::Union {
-                    left: Box::new(a),
-                    right: Box::new(b),
-                    constraints: vec![],
-                })
-                .unwrap_or(Type::Nothing);
+            let value = Type::union(roots.iter().map(|r| module_type(*r, ctx)), ctx);
             ctx.base
                 .mapping_type()
                 .clone()
@@ -313,7 +297,7 @@ fn find_member_inner(
     ctx: &AnalysisContext,
     seen: &mut std::collections::HashSet<NodeRef>,
 ) -> Option<ResolvedType> {
-    match ty {
+    match ty.unconstrained() {
         Type::Class {
             class_node,
             type_args,
@@ -378,28 +362,17 @@ fn find_member_inner(
             }
         }
         Type::Alias { .. } => find_member_inner(&ty.unaliased(ctx), name, bindings, ctx, seen),
-        Type::Union { left, right, .. } => {
-            let left_member = find_member_inner(left, name, bindings, ctx, seen);
-            seen.clear();
-            let right_member = find_member_inner(right, name, bindings, ctx, seen);
-            match (left_member, right_member) {
-                (
-                    Some(ResolvedType {
-                        node: l_ref,
-                        ty: l_ty,
-                    }),
-                    Some(ResolvedType { ty: r_ty, .. }),
-                ) => Some(ResolvedType::new(
-                    l_ref,
-                    Type::Union {
-                        left: Box::new(l_ty),
-                        right: Box::new(r_ty),
-                        constraints: vec![],
-                    },
-                )),
-                (Some(x), None) | (None, Some(x)) => Some(x),
-                (None, None) => None,
+        Type::Union { members } => {
+            let mut node = None;
+            let mut types = Vec::new();
+            for member in members.iter() {
+                seen.clear();
+                if let Some(resolved) = find_member_inner(member, name, bindings, ctx, seen) {
+                    node.get_or_insert(resolved.node);
+                    types.push(resolved.ty);
+                }
             }
+            node.map(|node| ResolvedType::new(node, Type::union(types, ctx)))
         }
         _ => None,
     }
@@ -419,7 +392,6 @@ pub(crate) fn definition_type_with_bindings(
             return Type::Alias {
                 alias_node: node,
                 type_args: vec![],
-                constraints: vec![],
             };
         }
         _ => {}
@@ -435,7 +407,7 @@ pub(crate) fn definition_type_with_bindings(
 }
 
 pub fn super_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    match ty {
+    match ty.unconstrained() {
         Type::Module { module_node, .. } => {
             module_super(*module_node, ctx).map(|m| module_type(m, ctx))
         }
@@ -637,7 +609,7 @@ pub(crate) fn resolve_unqualified_access_with_bindings(
         &receiver,
         &module_type(NodeRef::new(file, tree.root()), ctx),
     ] {
-        let (root, body) = match ty {
+        let (root, body) = match ty.unconstrained() {
             Type::Module { module_node, .. } => (*module_node, module_node.value),
             Type::Class { class_node, .. } => {
                 let tree = ctx.tree(class_node.file)?;
@@ -689,8 +661,6 @@ pub(crate) fn resolve_unqualified_access_with_bindings(
     if let Some(module_type) = find_member_on_type(
         &Type::Module {
             module_node: NodeRef::new(file, tree.root()),
-            reference_name: "".to_string(), // this is probably fine, we don't really care about the module name
-            constraints: vec![],
         },
         name,
         bindings,
@@ -767,7 +737,8 @@ pub(crate) fn access_receiver_type_with_bindings(
 /// - `Mapping<K,V>` / `Map<K,V>` → `K`
 /// - Anything else → `None`
 pub fn container_key_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    let Type::Class { type_args, .. } = ty else {
+    let ty = ty.unaliased(ctx);
+    let Type::Class { type_args, .. } = ty.unconstrained() else {
         return None;
     };
     if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)
@@ -789,7 +760,8 @@ pub fn container_key_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
 /// - `Mapping<K,V>` / `Map<K,V>` → `V`
 /// - Anything else → `None`
 pub fn container_value_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    let Type::Class { type_args, .. } = ty else {
+    let ty = ty.unaliased(ctx);
+    let Type::Class { type_args, .. } = ty.unconstrained() else {
         return None;
     };
     if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)

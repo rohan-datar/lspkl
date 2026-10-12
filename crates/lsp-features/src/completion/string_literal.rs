@@ -90,7 +90,7 @@ fn expand(
     let Some(tree) = ctx.tree(literal.file) else {
         return;
     };
-    match result_type {
+    match result_type.unconstrained() {
         Type::StringLiteral { value, .. } => {
             out.push(literal_item_with_alias(
                 value,
@@ -101,17 +101,18 @@ fn expand(
                 range_for,
             ));
         }
-        Type::Union { left, right, .. } => {
-            expand(left, original_alias, detailed, literal, ctx, range_for, out);
-            expand(
-                right,
-                original_alias,
-                detailed,
-                literal,
-                ctx,
-                range_for,
-                out,
-            );
+        Type::Union { members } => {
+            for member in members.iter() {
+                expand(
+                    member,
+                    original_alias,
+                    detailed,
+                    literal,
+                    ctx,
+                    range_for,
+                    out,
+                );
+            }
         }
         Type::Alias { .. } => expand(
             &result_type.unaliased(ctx),

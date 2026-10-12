@@ -34,7 +34,7 @@ impl Analyzer for TypeAnalyzer {
             .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
             .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
 
-        let param_count = match node_type {
+        let param_count = match node_type.unconstrained() {
             Type::Class { type_args, .. } => type_args.len(),
             Type::Alias { type_args, .. } => type_args.len(),
             _ => 0,

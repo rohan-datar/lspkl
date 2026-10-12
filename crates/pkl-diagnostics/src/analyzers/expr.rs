@@ -42,14 +42,17 @@ impl Analyzer for ExprAnalyzer {
                 let tested_type = NodeRef::new(file, type_node)
                     .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
                     .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
-                if !tested_type.constraints().is_empty() {
-                    return false;
-                }
                 if tested_type.is_non_null(ctx.base) {
+                    if !tested_type.constraints().is_empty() {
+                        return false;
+                    }
                     if !expr_type.is_nullable(ctx) || expr_type.is_non_null(ctx.base) {
                         holder.add_warning(source_tree.span(node), "expression is always true");
                     }
                 } else {
+                    if tested_type.has_constraints(ctx) {
+                        return false;
+                    }
                     if !matches!(expr_type, Type::Unknown)
                         && expr_type.is_subtype_of(&tested_type, ctx)
                     {
@@ -78,7 +81,10 @@ impl Analyzer for ExprAnalyzer {
                     .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
                     .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
 
-                if tested_type.constraints().is_empty()
+                let known_non_null = tested_type.is_non_null(ctx.base)
+                    && tested_type.constraints().is_empty()
+                    && (!expr_type.is_nullable(ctx) || expr_type.is_non_null(ctx.base));
+                if (!tested_type.has_constraints(ctx) || known_non_null)
                     && !matches!(expr_type, Type::Unknown)
                     && expr_type.is_subtype_of(&tested_type, ctx)
                 {

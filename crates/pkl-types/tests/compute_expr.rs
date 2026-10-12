@@ -225,11 +225,13 @@ x = if (c) 1 else "a""#,
 
             assert_eq!(
                 ty,
-                pkl_types::Type::Union {
-                    left: Box::new(ctx.base.int_type().clone()),
-                    right: Box::new(pkl_types::Type::string_literal("a")),
-                    constraints: vec![],
-                }
+                pkl_types::Type::union(
+                    [
+                        ctx.base.int_type().clone(),
+                        pkl_types::Type::string_literal("a"),
+                    ],
+                    ctx
+                )
             );
         },
     );

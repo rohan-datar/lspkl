@@ -206,3 +206,87 @@ fn implement_method_suggests_abstract_superclass_methods() {
         );
     });
 }
+
+#[test]
+fn constrained_literal_alias_expands_every_member_with_alias_details_and_typed_edits() {
+    let base = harness::load_test_base();
+    let src = concat!(
+        "typealias Mode = (\"dev\" | \"prod\" | \"test\")(true)\n",
+        "mode: Mode = #\"partial\"#\n",
+    );
+    harness::with_snippet(&base, src, |tree, ctx| {
+        let value_start = src.rfind("partial").unwrap();
+        let response = completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                pkl_syntax::TextSize::try_from(value_start + 2).unwrap(),
+            ),
+            |range| harness::range(tree, range),
+        );
+        let Some(CompletionResponse::Array(items)) = response else {
+            panic!("expected literal completions");
+        };
+        let converter = lsp_features::positions::PositionConverter::new(tree, Default::default());
+        for value in ["dev", "prod", "test"] {
+            let item = items
+                .iter()
+                .find(|item| item.label == format!("\"{value}\""))
+                .unwrap_or_else(|| panic!("missing {value}: {items:?}"));
+            assert_eq!(
+                item.label_details
+                    .as_ref()
+                    .and_then(|details| details.detail.as_deref()),
+                Some("Mode")
+            );
+            let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("literal completion must use a typed text edit");
+            };
+            let bytes = std::ops::Range::<usize>::from(converter.text_range(edit.range).unwrap());
+            assert_eq!(bytes, value_start..value_start + "partial".len());
+            assert_eq!(edit.new_text, value);
+            let mut updated = src.to_owned();
+            updated.replace_range(bytes, &edit.new_text);
+            assert!(updated.ends_with(&format!("#\"{value}\"#\n")));
+        }
+    });
+}
+
+#[test]
+fn constrained_function_union_offers_every_lambda_shape() {
+    let base = harness::load_test_base();
+    let src = "callback: (Function0<String> | Function1<Int, String> | Function2<String, Boolean, String>)(true) = missing\n";
+    harness::with_snippet(&base, src, |tree, ctx| {
+        let items = completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                pkl_syntax::TextSize::try_from(src.rfind("missing").unwrap() + 2).unwrap(),
+            ),
+            |range| harness::range(tree, range),
+        )
+        .expect("lambda completions");
+        let items = match items {
+            CompletionResponse::Array(items) => items,
+            CompletionResponse::List(list) => list.items,
+        };
+        for (label, insert) in [
+            ("() -> …", "() -> ${1}"),
+            ("(i) -> …", "(${1:i}) -> ${2}"),
+            (
+                "(string, boolean) -> …",
+                "(${1:string}, ${2:boolean}) -> ${3}",
+            ),
+        ] {
+            let item = items
+                .iter()
+                .find(|item| item.label == label)
+                .unwrap_or_else(|| panic!("missing {label}: {items:?}"));
+            assert_eq!(item.insert_text.as_deref(), Some(insert));
+            assert_eq!(
+                item.insert_text_format,
+                Some(lsp_types::InsertTextFormat::SNIPPET)
+            );
+        }
+    });
+}

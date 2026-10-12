@@ -149,3 +149,46 @@ fn analyzer_walk_keeps_file_identity_and_honors_subtree_skips() {
     assert_eq!(second_diagnostics[0].message, "other");
     assert!(engine.analyze(&ctx, FileId(99)).is_empty());
 }
+
+#[test]
+fn constrained_casts_and_type_tests_are_not_reported_as_redundant() {
+    let base = harness::load_test_base();
+    let source = concat!(
+        "value: Int = 1\n",
+        "plainCast = value as Int\n",
+        "constrainedCast = value as Int(isPositive)\n",
+        "plainTest = value is Int\n",
+        "constrainedTest = value is Int(isPositive)\n",
+        "typealias Positive = Int(isPositive)\n",
+        "aliasCast = value as Positive\n",
+        "aliasTest = value is Positive\n",
+        "unionCast = value as (Int(isPositive)|String)\n",
+        "unionTest = value is (Int(isPositive)|String)\n",
+        "typealias Choices = Int(isPositive)|String\n",
+        "aliasUnionCast = value as Choices\n",
+        "aliasUnionTest = value is Choices\n",
+    );
+    let tree = std::sync::Arc::new(pkl_syntax::parse(source).unwrap());
+    let trees = harness::pinned_trees(&tree, &base);
+    let imports = std::collections::HashMap::new();
+    let ctx = pkl_types::AnalysisContext::new(&base, &trees, &imports);
+    let diagnostics = DiagnosticsEngine::new()
+        .with(Box::new(pkl_diagnostics::analyzers::expr::ExprAnalyzer))
+        .analyze(&ctx, pkl_types::FileId(1));
+    let observed: Vec<_> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                tree.line_index().line_col(diagnostic.span.start()).line,
+                diagnostic.message.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed,
+        vec![
+            (1, "type cast is redundant"),
+            (3, "expression is always true")
+        ]
+    );
+}

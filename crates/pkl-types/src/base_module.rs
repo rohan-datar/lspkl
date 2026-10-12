@@ -349,7 +349,6 @@ fn find_alias(tree: &SyntaxTree, aliases: &[NodeId], name: &str) -> Result<Type,
             value: *id,
         },
         type_args: vec![],
-        constraints: vec![],
     })
 }
 

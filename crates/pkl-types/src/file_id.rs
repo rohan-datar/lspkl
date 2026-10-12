@@ -14,7 +14,7 @@ impl FileId {
 }
 
 /// A syntax value paired with the file whose tree gives it meaning.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InFile<T> {
     pub file: FileId,
     pub value: T,
