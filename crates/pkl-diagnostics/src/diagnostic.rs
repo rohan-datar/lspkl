@@ -1,6 +1,6 @@
 //! Single diagnostic emitted by an analyzer
 
-use pkl_syntax::ast::Span;
+use pkl_syntax::TextRange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -23,18 +23,18 @@ impl Severity {
 
 /// A single text-edit operation against the source.
 ///
-/// `span` describes the range to replace. A *zero-length* span — where
-/// `begin_byte == end_byte` — represents an insertion at that offset.
+/// `span` describes the byte range to replace. A zero-length range
+/// represents an insertion at that offset.
 /// `new_text` is the literal text to insert/replace with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
-    pub span: Span,
+    pub span: TextRange,
     pub new_text: String,
 }
 
 impl TextEdit {
     /// Replace the source within `span` with `new_text`.
-    pub fn replace(span: Span, new_text: impl Into<String>) -> Self {
+    pub fn replace(span: TextRange, new_text: impl Into<String>) -> Self {
         Self {
             span,
             new_text: new_text.into(),
@@ -42,30 +42,20 @@ impl TextEdit {
     }
 
     /// Insert `text` immediately before `position`.
-    pub fn insert_before(position: Span, text: impl Into<String>) -> Self {
-        let collapsed = Span {
-            end_line: position.begin_line,
-            end_col: position.begin_col,
-            end_byte: position.begin_byte,
-            ..position
-        };
+    pub fn insert_before(position: TextRange, text: impl Into<String>) -> Self {
+        let collapsed = TextRange::empty(position.start());
         Self::replace(collapsed, text)
     }
 
     /// Insert `text` immediately after `position`.
-    pub fn insert_after(position: Span, text: impl Into<String>) -> Self {
-        let collapsed = Span {
-            begin_line: position.end_line,
-            begin_col: position.end_col,
-            begin_byte: position.end_byte,
-            ..position
-        };
+    pub fn insert_after(position: TextRange, text: impl Into<String>) -> Self {
+        let collapsed = TextRange::empty(position.end());
         Self::replace(collapsed, text)
     }
 
     /// `true` when this edit is a pure insertion (zero-length range).
     pub fn is_insertion(&self) -> bool {
-        self.span.begin_byte == self.span.end_byte
+        self.span.is_empty()
     }
 }
 
@@ -105,14 +95,14 @@ impl QuickFix {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    pub span: Span,
+    pub span: TextRange,
     pub severity: Severity,
     pub message: String,
     pub quick_fixes: Vec<QuickFix>,
 }
 
 impl Diagnostic {
-    pub fn new(span: Span, severity: Severity, message: impl Into<String>) -> Self {
+    pub fn new(span: TextRange, severity: Severity, message: impl Into<String>) -> Self {
         Self {
             span,
             severity,
@@ -121,19 +111,19 @@ impl Diagnostic {
         }
     }
 
-    pub fn error(span: Span, message: impl Into<String>) -> Self {
+    pub fn error(span: TextRange, message: impl Into<String>) -> Self {
         Self::new(span, Severity::Error, message)
     }
 
-    pub fn warning(span: Span, message: impl Into<String>) -> Self {
+    pub fn warning(span: TextRange, message: impl Into<String>) -> Self {
         Self::new(span, Severity::Warning, message)
     }
 
-    pub fn info(span: Span, message: impl Into<String>) -> Self {
+    pub fn info(span: TextRange, message: impl Into<String>) -> Self {
         Self::new(span, Severity::Info, message)
     }
 
-    pub fn hint(span: Span, message: impl Into<String>) -> Self {
+    pub fn hint(span: TextRange, message: impl Into<String>) -> Self {
         Self::new(span, Severity::Hint, message)
     }
 

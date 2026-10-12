@@ -3,12 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use fluent_uri::Uri;
+use lsp_features::positions::PositionConverter;
 use pkl_project::import_resolver::ImportResolver;
 use pkl_project::modulepath::ModulepathResolver;
 use pkl_syntax::ast::NodeKind;
+use pkl_syntax::{TextRange, TextSize};
 use tower_lsp_server::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation,
-    MarkupContent, MarkupKind, Position, Range, TextEdit,
+    MarkupContent, MarkupKind, TextEdit,
 };
 
 use crate::state::{AnalysisSnapshot, ServerState};
@@ -16,12 +18,12 @@ use crate::state::{AnalysisSnapshot, ServerState};
 pub fn completion(
     state: &ServerState,
     analysis: &AnalysisSnapshot,
-    position: Position,
+    offset: TextSize,
 ) -> Option<CompletionResponse> {
     let tree = &analysis.module.tree;
-    let offset = byte_offset(tree.source(), position)?;
-    let byte_column = tree.source()[..offset].rsplit('\n').next()?.len() as u32 + 1;
-    let mut node = tree.find_at(position.line + 1, byte_column)?;
+    let positions = PositionConverter::new(tree, *state.position_encoding.read());
+    let mut node = tree.find_at(offset)?;
+    let offset = usize::from(offset);
     while !tree.kind(node).is_module_uri_owner() {
         node = tree.parent(node)?;
     }
@@ -35,7 +37,7 @@ pub fn completion(
         1
     };
     let delimiter = hashes + quotes;
-    let span = tree.span(literal).byte_range();
+    let span = std::ops::Range::<usize>::from(tree.span(literal));
     let start = span.start + delimiter;
     let end = span.end.checked_sub(delimiter)?;
     if offset < start || offset > end || tree.escaped_string_literal(literal).is_none() {
@@ -50,10 +52,10 @@ pub fn completion(
         &text[text.len() - delimiter..]
     );
     let prefix = pkl_syntax::ast::decode_string_literal(&prefix_literal)?;
-    let range = Range::new(
-        lsp_position(tree.source(), start),
-        lsp_position(tree.source(), end),
-    );
+    let range = positions.range(TextRange::new(
+        TextSize::try_from(start).ok()?,
+        TextSize::try_from(end).ok()?,
+    ));
     let glob = tree.is_glob_import(owner);
     let source = &analysis.module.file;
     let project = pkl_vfs::url_to_path(&source.url)
@@ -476,35 +478,6 @@ fn escape_literal(value: &str, hashes: usize) -> String {
         }
     }
     result
-}
-fn byte_offset(source: &str, position: Position) -> Option<usize> {
-    let mut start = 0;
-    for _ in 0..position.line {
-        start += source[start..].find('\n')? + 1;
-    }
-    let mut units = 0;
-    for (index, ch) in source[start..].char_indices() {
-        if units == position.character {
-            return Some(start + index);
-        }
-        if ch == '\n' {
-            return None;
-        }
-        units += ch.len_utf16() as u32;
-    }
-    (units == position.character).then_some(source.len())
-}
-fn lsp_position(source: &str, offset: usize) -> Position {
-    let prefix = &source[..offset];
-    Position::new(
-        prefix.bytes().filter(|&b| b == b'\n').count() as u32,
-        prefix
-            .rsplit('\n')
-            .next()
-            .unwrap_or("")
-            .encode_utf16()
-            .count() as u32,
-    )
 }
 fn cached_packages(cache: &Path) -> BTreeSet<String> {
     let mut packages = BTreeSet::new();

@@ -24,3 +24,33 @@ fn doc_comments_returns_stripped_source_slices() {
     let y = tree.children_matching(tree.root(), |k| matches!(k, NodeKind::ClassProperty))[1];
     assert!(tree.doc_comments(y).is_empty());
 }
+
+#[test]
+fn byte_ranges_and_line_index_preserve_unicode_and_crlf() {
+    let source = "// é😀\r\nvalue = 1\r\n";
+    let tree = parse(source).unwrap();
+    let property = tree.children_matching(tree.root(), |k| matches!(k, NodeKind::ClassProperty))[0];
+    let name = tree.identifier(property).unwrap();
+    let range = tree.span(name);
+    assert_eq!(&source[std::ops::Range::<usize>::from(range)], "value");
+    assert_eq!(tree.text(name), "value");
+    assert_eq!(
+        tree.line_index().line_col(range.start()),
+        pkl_syntax::LineCol { line: 1, col: 0 }
+    );
+    assert_eq!(tree.find_at(range.start()), Some(name));
+    assert_eq!(tree.find_at(range.end()), Some(name));
+}
+
+#[test]
+fn cursor_lookup_includes_eof_and_rejects_offsets_past_it() {
+    for source in ["", "value = 1", "value = 1\n", "value = (", "value ="] {
+        let tree = parse(source).unwrap();
+        let end = pkl_syntax::TextSize::try_from(source.len()).unwrap();
+        assert!(
+            tree.find_at(end).is_some(),
+            "EOF must remain addressable: {source:?}"
+        );
+        assert!(tree.find_at(end + pkl_syntax::TextSize::from(1)).is_none());
+    }
+}

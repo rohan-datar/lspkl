@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+text-size.workspace = true
+line-index.workspace = true
 tree-sitter.workspace = true
 tree-sitter-pkl.workspace = true
 smallvec = "1.13"

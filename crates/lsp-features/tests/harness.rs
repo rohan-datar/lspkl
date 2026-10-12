@@ -24,3 +24,16 @@ pub fn with_snippet<R>(
     let ctx = AnalysisContext::new(&tree, FileId(1), base, &trees, &imports);
     f(&tree, &ctx)
 }
+
+pub fn offset(tree: &SyntaxTree, line: u32, column: u32) -> pkl_syntax::TextSize {
+    tree.line_index()
+        .offset(pkl_syntax::LineCol { line, col: column })
+        .unwrap()
+}
+
+pub fn range(
+    tree: &SyntaxTree,
+    range: pkl_syntax::TextRange,
+) -> tower_lsp_server::lsp_types::Range {
+    lsp_features::positions::PositionConverter::new(tree, Default::default()).range(range)
+}

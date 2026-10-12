@@ -1,5 +1,6 @@
 //! Name resolution and class hierarchy queries.
 
+use pkl_syntax::TextSize;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
 use crate::FileId;
@@ -172,7 +173,7 @@ fn kind_is_class_or_alias(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Class | NodeKind::TypeAlias)
 }
 
-/// Resolve the reference under the cursor at `(line, col)`.
+/// Resolve the reference under the cursor at the byte `offset`.
 ///
 /// Returns the declaration `node` refers to, or `None` if there's nothing
 /// to resolve at that position (cursor is on whitespace, a keyword, a
@@ -181,8 +182,7 @@ fn kind_is_class_or_alias(kind: &NodeKind) -> bool {
 /// imported identifier resolves into the imported module.
 pub fn resolve_reference(
     node: NodeRef,
-    line: u32,
-    col: u32,
+    offset: TextSize,
     ctx: &AnalysisContext,
 ) -> Option<NodeRef> {
     let tree = ctx.tree_for(node.file_id)?;
@@ -210,10 +210,9 @@ pub fn resolve_reference(
             let segments = tree.qualified_identifier_segments(node_id);
             if segments.len() > 1
                 && let Some(import) = find_import(tree, segments[0])
-                && let Some(identifier) = tree
-                    .children(node_id)
-                    .iter()
-                    .find(|&&id| tree.kind(id).is_terminal() && tree.span(id).matches(line, col))
+                && let Some(identifier) = tree.children(node_id).iter().find(|&&id| {
+                    tree.kind(id).is_terminal() && tree.span(id).contains_inclusive(offset)
+                })
                 && tree.text(*identifier) == segments[0]
             {
                 return ctx
@@ -234,7 +233,7 @@ pub fn resolve_reference(
 
         NodeKind::Import | NodeKind::ImportGlob => {
             let alias = tree.identifier(node_id)?;
-            if tree.span(alias).matches(line, col) {
+            if tree.span(alias).contains_inclusive(offset) {
                 return ctx
                     .imports
                     .get(&node.with_node(node_id))

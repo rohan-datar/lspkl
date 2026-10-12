@@ -12,6 +12,7 @@ use tower_lsp_server::{Client, LanguageServer, jsonrpc};
 use fluent_uri::Uri;
 use tracing::{error, info, warn};
 
+use lsp_features::positions::{PositionConverter, PositionEncoding};
 use pkl_project::dto::PackageUri;
 use pkl_types::AnalysisContext;
 
@@ -73,7 +74,10 @@ impl PklBackend {
     /// Returns `None` when the file isn't open or can't be parsed; an
     /// unparseable-but-open file still yields whatever diagnostics the
     /// analyzers produce on the error-tolerant tree.
-    async fn analyze_document(&self, uri_str: &str) -> Option<Vec<pkl_diagnostics::Diagnostic>> {
+    async fn analyze_document(
+        &self,
+        uri_str: &str,
+    ) -> Option<(AnalysisSnapshot, Vec<pkl_diagnostics::Diagnostic>)> {
         let analysis = self.open_document_analysis(uri_str).await?;
         let _compute = perf::Compute::start("diagnostics");
         let ctx = AnalysisContext::new(
@@ -83,7 +87,8 @@ impl PklBackend {
             &analysis.trees,
             &analysis.imports,
         );
-        Some(self.state.diagnostics().analyze(&ctx))
+        let diagnostics = self.state.diagnostics().analyze(&ctx);
+        Some((analysis, diagnostics))
     }
 
     /// Push current diagnostics for a just-opened or just-changed document
@@ -98,18 +103,28 @@ impl PklBackend {
             error!(uri = uri_str, "publish: failed to parse URI");
             return;
         };
-        let diags = self.analyze_document(uri_str).await.unwrap_or_default();
+        let analyzed = self.analyze_document(uri_str).await;
         let compute = perf::Compute::start("diagnostics_conversion");
-        let lsp_diags = diags.iter().map(to_lsp_diagnostic).collect();
+        let lsp_diags = analyzed.map_or_else(Vec::new, |(analysis, diags)| {
+            let encoding = *self.state.position_encoding.read();
+            let positions = PositionConverter::new(&analysis.module.tree, encoding);
+            diags
+                .iter()
+                .map(|diag| to_lsp_diagnostic(diag, &positions))
+                .collect()
+        });
         drop(compute);
         client.publish_diagnostics(uri, lsp_diags, version).await;
     }
 }
 
 /// Convert an internal diagnostic to its LSP wire form.
-fn to_lsp_diagnostic(diag: &pkl_diagnostics::Diagnostic) -> Diagnostic {
+fn to_lsp_diagnostic(
+    diag: &pkl_diagnostics::Diagnostic,
+    positions: &PositionConverter<'_>,
+) -> Diagnostic {
     Diagnostic {
-        range: lsp_features::span_to_range(&diag.span),
+        range: positions.range(diag.span),
         severity: Some(match diag.severity {
             pkl_diagnostics::Severity::Error => {
                 tower_lsp_server::lsp_types::DiagnosticSeverity::ERROR
@@ -135,6 +150,18 @@ impl LanguageServer for PklBackend {
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
         let _perf = perf::Handler::enter();
         info!(?params.client_info, "initialize");
+        let encoding = if params
+            .capabilities
+            .general
+            .as_ref()
+            .and_then(|general| general.position_encodings.as_ref())
+            .is_some_and(|encodings| encodings.contains(&PositionEncodingKind::UTF8))
+        {
+            PositionEncoding::Utf8
+        } else {
+            PositionEncoding::Utf16
+        };
+        *self.state.position_encoding.write() = encoding;
         self.state.client_configuration.store(
             params
                 .capabilities
@@ -180,7 +207,10 @@ impl LanguageServer for PklBackend {
         Ok(InitializeResult {
             server_info: None,
             capabilities: ServerCapabilities {
-                position_encoding: None,
+                position_encoding: Some(match encoding {
+                    PositionEncoding::Utf8 => PositionEncodingKind::UTF8,
+                    PositionEncoding::Utf16 => PositionEncodingKind::UTF16,
+                }),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
@@ -456,6 +486,11 @@ impl LanguageServer for PklBackend {
         let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
+        let positions =
+            PositionConverter::new(&analysis.module.tree, *self.state.position_encoding.read());
+        let Some(offset) = positions.offset(doc.position) else {
+            return Ok(None);
+        };
         let _compute = perf::Compute::start("hover");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
@@ -464,7 +499,7 @@ impl LanguageServer for PklBackend {
             &analysis.trees,
             &analysis.imports,
         );
-        Ok(lsp_features::hover::hover(&ctx, doc.position))
+        Ok(lsp_features::hover::hover(&ctx, offset))
     }
 
     #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "goto_definition"))]
@@ -480,6 +515,11 @@ impl LanguageServer for PklBackend {
         let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
+        let encoding = *self.state.position_encoding.read();
+        let positions = PositionConverter::new(&analysis.module.tree, encoding);
+        let Some(offset) = positions.offset(doc.position) else {
+            return Ok(None);
+        };
         let _compute = perf::Compute::start("goto_definition");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
@@ -490,7 +530,7 @@ impl LanguageServer for PklBackend {
         );
         Ok(lsp_features::goto_definition::goto_definition(
             &ctx,
-            doc.position,
+            offset,
             |file_id| {
                 if file_id == pkl_types::FileId::BASE {
                     return pkl_vfs::to_editor_uri(&Uri::parse("pkl:base".to_owned()).ok()?)
@@ -508,6 +548,7 @@ impl LanguageServer for PklBackend {
                     _ => uri.as_str().parse().ok(),
                 }
             },
+            |tree, range| PositionConverter::new(tree, encoding).range(range),
         ))
     }
 
@@ -524,10 +565,15 @@ impl LanguageServer for PklBackend {
         let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
+        let encoding = *self.state.position_encoding.read();
+        let Some(offset) =
+            PositionConverter::new(&analysis.module.tree, encoding).offset(doc.position)
+        else {
+            return Ok(None);
+        };
         let state = Arc::clone(&self.state);
-        let position = doc.position;
         let (analysis, uri_completion) = perf::blocking("module_uri_completion", move || {
-            let result = crate::module_uri_completion::completion(&state, &analysis, position);
+            let result = crate::module_uri_completion::completion(&state, &analysis, offset);
             (analysis, result)
         })
         .await
@@ -547,7 +593,12 @@ impl LanguageServer for PklBackend {
             &analysis.trees,
             &analysis.imports,
         );
-        Ok(lsp_features::completion::completion(&ctx, &params))
+        let positions = PositionConverter::new(&analysis.module.tree, encoding);
+        Ok(lsp_features::completion::completion(
+            &ctx,
+            offset,
+            |range| positions.range(range),
+        ))
     }
 
     #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "completion_resolve"))]
@@ -576,11 +627,14 @@ impl LanguageServer for PklBackend {
 
         // Recompute rather than cache: the VFS holds the current contents,
         // so analysis is deterministic and there is no state to invalidate.
-        let Some(diags) = self.analyze_document(uri_str).await else {
+        let Some((analysis, diags)) = self.analyze_document(uri_str).await else {
             return Ok(None);
         };
         let _compute = perf::Compute::start("code_action");
-        let actions = lsp_features::code_action::code_action(&params, &diags);
+        let positions =
+            PositionConverter::new(&analysis.module.tree, *self.state.position_encoding.read());
+        let actions =
+            lsp_features::code_action::code_action(&params, &diags, |range| positions.range(range));
         Ok(Some(CodeActionResponse::from(actions)))
     }
 

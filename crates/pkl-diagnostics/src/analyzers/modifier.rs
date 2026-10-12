@@ -1,7 +1,8 @@
 //! Validates modifier combinations on classes, methods, properties, and type
 //! aliases.
 
-use pkl_syntax::ast::{NodeId, NodeKind, Span, SyntaxTree, TokenType};
+use pkl_syntax::TextRange;
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType};
 use pkl_types::AnalysisContext;
 use semver::Version;
 
@@ -153,7 +154,7 @@ fn has_type_annotation(tree: &SyntaxTree, node: NodeId) -> bool {
 
 // finds the span of the provided modifier. If the modifier is not found, returns the span
 // of the original node
-fn modifier_span(tree: &SyntaxTree, parent_node: NodeId, modifier: TokenType) -> Span {
+fn modifier_span(tree: &SyntaxTree, parent_node: NodeId, modifier: TokenType) -> TextRange {
     tree.span(modifier_node(tree, parent_node, modifier))
 }
 fn modifier_node(tree: &SyntaxTree, parent_node: NodeId, modifier: TokenType) -> NodeId {

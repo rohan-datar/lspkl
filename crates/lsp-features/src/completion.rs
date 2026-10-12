@@ -7,9 +7,10 @@
 //! deferred
 
 use tower_lsp_server::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, InsertTextFormat,
+    CompletionItem, CompletionItemKind, CompletionResponse, InsertTextFormat, Range,
 };
 
+use pkl_syntax::{TextRange, TextSize};
 use pkl_types::AnalysisContext;
 
 mod implement_method;
@@ -18,21 +19,22 @@ mod qualified;
 mod string_literal;
 mod unqualified;
 
-/// Compute completion candidates for the cursor location in `params`.
-pub fn completion(ctx: &AnalysisContext, params: &CompletionParams) -> Option<CompletionResponse> {
-    let line = params.text_document_position.position.line + 1;
-    let col = params.text_document_position.position.character + 1;
-
+/// Compute completion candidates at a UTF-8 byte offset.
+pub fn completion(
+    ctx: &AnalysisContext,
+    offset: TextSize,
+    range_for: impl Fn(TextRange) -> Range,
+) -> Option<CompletionResponse> {
     // Deepest node containing the cursor; whitespace past any token yields
     // `None`, which propagates as "no completions".
-    let node = ctx.tree.find_at(line, col)?;
+    let node = ctx.tree.find_at(offset)?;
 
     // URI completion runs in the server layer before this semantic dispatch.
     // Each provider contributes only when applicable to the current node.
     let mut collector = Vec::new();
     collector.extend(qualified::completions(node, ctx));
-    collector.extend(unqualified::completions(node, ctx, col));
-    collector.extend(string_literal::completions(node, ctx));
+    collector.extend(unqualified::completions(node, ctx, offset));
+    collector.extend(string_literal::completions(node, ctx, &range_for));
     collector.extend(implement_method::completions(node, ctx));
     // TODO(completion-doc-link): DocCommentMemberLinkCompletionProvider slot.
 

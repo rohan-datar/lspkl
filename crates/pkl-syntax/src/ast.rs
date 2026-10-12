@@ -5,6 +5,7 @@
 
 use smallvec::SmallVec;
 
+use crate::{LineIndex, TextRange, TextSize};
 /// Opaque handle into a [`SyntaxTree`]'s node arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub(crate) u32);
@@ -14,42 +15,6 @@ impl NodeId {
 
     pub fn index(self) -> usize {
         self.0 as usize
-    }
-}
-
-/// 1-indexed line/column source span.
-///
-/// `byte_range` is preserved alongside so we can extract the underlying source text
-/// without reconstructing offsets from line/column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Span {
-    pub begin_line: u32,
-    pub begin_col: u32,
-    pub end_line: u32,
-    pub end_col: u32,
-    pub begin_byte: u32,
-    pub end_byte: u32,
-}
-
-impl Span {
-    /// Does `(line, col)` fall inside this span (inclusive)?
-    pub fn matches(&self, line: u32, col: u32) -> bool {
-        if line < self.begin_line || line > self.end_line {
-            return false;
-        }
-        if self.begin_line == self.end_line {
-            col >= self.begin_col && col <= self.end_col
-        } else if line == self.begin_line {
-            col >= self.begin_col
-        } else if line == self.end_line {
-            col <= self.end_col
-        } else {
-            true
-        }
-    }
-
-    pub fn byte_range(&self) -> std::ops::Range<usize> {
-        self.begin_byte as usize..self.end_byte as usize
     }
 }
 
@@ -350,7 +315,7 @@ impl TokenType {
 #[derive(Debug)]
 pub(crate) struct NodeEntry {
     pub kind: NodeKind,
-    pub span: Span,
+    pub span: TextRange,
     pub parent: Option<NodeId>,
     pub children: SmallVec<[NodeId; 6]>,
     pub is_missing: bool,
@@ -361,12 +326,18 @@ pub(crate) struct NodeEntry {
 pub struct SyntaxTree {
     nodes: Vec<NodeEntry>,
     source: String,
+    line_index: LineIndex,
 }
 
 impl SyntaxTree {
     pub(crate) fn from_parts(source: String, nodes: Vec<NodeEntry>) -> Self {
         debug_assert!(!nodes.is_empty(), "tree must contain at least a root node");
-        Self { nodes, source }
+        let line_index = LineIndex::new(&source);
+        Self {
+            nodes,
+            source,
+            line_index,
+        }
     }
 
     pub fn root(&self) -> NodeId {
@@ -377,11 +348,15 @@ impl SyntaxTree {
         &self.source
     }
 
+    pub fn line_index(&self) -> &LineIndex {
+        &self.line_index
+    }
+
     pub fn kind(&self, id: NodeId) -> &NodeKind {
         &self.nodes[id.index()].kind
     }
 
-    pub fn span(&self, id: NodeId) -> Span {
+    pub fn span(&self, id: NodeId) -> TextRange {
         self.nodes[id.index()].span
     }
 
@@ -399,7 +374,7 @@ impl SyntaxTree {
 
     pub fn text(&self, id: NodeId) -> &str {
         let span = self.span(id);
-        &self.source[span.byte_range()]
+        &self.source[std::ops::Range::<usize>::from(span)]
     }
 
     pub fn node_count(&self) -> usize {
@@ -418,23 +393,19 @@ impl SyntaxTree {
         None
     }
 
-    /// Find the deepest node whose span contains `(line, col)`.
-    /// Lines and columns are 1-indexed.
-    pub fn find_at(&self, line: u32, col: u32) -> Option<NodeId> {
-        self.find_at_recursive(NodeId::ROOT, line, col)
+    /// Find the deepest node containing the byte offset, including its end.
+    /// Inclusive ends preserve cursor lookup at token boundaries and EOF.
+    pub fn find_at(&self, offset: TextSize) -> Option<NodeId> {
+        self.find_at_recursive(NodeId::ROOT, offset)
     }
 
-    fn find_at_recursive(&self, id: NodeId, line: u32, col: u32) -> Option<NodeId> {
+    fn find_at_recursive(&self, id: NodeId, offset: TextSize) -> Option<NodeId> {
         for &child in self.children(id) {
-            if self.span(child).matches(line, col) {
-                return self.find_at_recursive(child, line, col).or(Some(child));
+            if self.span(child).contains_inclusive(offset) {
+                return self.find_at_recursive(child, offset).or(Some(child));
             }
         }
-        if self.span(id).matches(line, col) {
-            Some(id)
-        } else {
-            None
-        }
+        self.span(id).contains_inclusive(offset).then_some(id)
     }
 
     /// First child whose kind matches the predicate.

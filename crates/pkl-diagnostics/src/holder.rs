@@ -1,6 +1,6 @@
 //! Collects diagnostics emitted by analyzers during a single tree walk.
 
-use pkl_syntax::ast::Span;
+use pkl_syntax::TextRange;
 
 use crate::diagnostic::{Diagnostic, QuickFix, Severity};
 
@@ -18,27 +18,37 @@ impl DiagnosticsHolder {
         self.diagnostics.push(diag);
     }
 
-    pub fn add_error(&mut self, span: Span, message: impl Into<String>) {
+    pub fn add_error(&mut self, span: TextRange, message: impl Into<String>) {
         self.add(Diagnostic::new(span, Severity::Error, message));
     }
 
-    pub fn add_warning(&mut self, span: Span, message: impl Into<String>) {
+    pub fn add_warning(&mut self, span: TextRange, message: impl Into<String>) {
         self.add(Diagnostic::new(span, Severity::Warning, message));
     }
 
-    pub fn add_info(&mut self, span: Span, message: impl Into<String>) {
+    pub fn add_info(&mut self, span: TextRange, message: impl Into<String>) {
         self.add(Diagnostic::new(span, Severity::Info, message));
     }
 
-    pub fn add_hint(&mut self, span: Span, message: impl Into<String>) {
+    pub fn add_hint(&mut self, span: TextRange, message: impl Into<String>) {
         self.add(Diagnostic::new(span, Severity::Hint, message));
     }
 
-    pub fn add_error_with_fix(&mut self, span: Span, message: impl Into<String>, fix: QuickFix) {
+    pub fn add_error_with_fix(
+        &mut self,
+        span: TextRange,
+        message: impl Into<String>,
+        fix: QuickFix,
+    ) {
         self.add(Diagnostic::error(span, message).with_fix(fix));
     }
 
-    pub fn add_warning_with_fix(&mut self, span: Span, message: impl Into<String>, fix: QuickFix) {
+    pub fn add_warning_with_fix(
+        &mut self,
+        span: TextRange,
+        message: impl Into<String>,
+        fix: QuickFix,
+    ) {
         self.add(Diagnostic::warning(span, message).with_fix(fix));
     }
 

@@ -1,22 +1,20 @@
 //! GoToDefinition: resolve the node at the cursor and return its
 //! declaration site (possibly in another file).
 
-use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Location, Position, Uri};
+use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Location, Range, Uri};
 
 use pkl_types::{AnalysisContext, FileId, NodeRef, resolver::resolve_reference};
 
-use crate::span_to_range;
+use pkl_syntax::{TextRange, TextSize, ast::SyntaxTree};
 
-/// Resolve the definition for the symbol at `position`.
+/// Resolve the definition for the symbol at byte `offset`.
 pub fn goto_definition(
     ctx: &AnalysisContext,
-    position: Position,
+    offset: TextSize,
     uri_for: impl Fn(FileId) -> Option<Uri>,
+    range_for: impl Fn(&SyntaxTree, TextRange) -> Range,
 ) -> Option<GotoDefinitionResponse> {
-    let line = position.line + 1;
-    let col = position.character + 1;
-
-    let node_id = ctx.tree.find_at(line, col)?;
+    let node_id = ctx.tree.find_at(offset)?;
     let mut current = Some(node_id);
     let mut in_string = false;
     while let Some(id) = current {
@@ -31,7 +29,7 @@ pub fn goto_definition(
                     let tree = ctx.tree_for(target.file_id)?;
                     Some(Location::new(
                         uri_for(target.file_id)?,
-                        span_to_range(&tree.span(target.node_id)),
+                        range_for(tree, tree.span(target.node_id)),
                     ))
                 })
                 .collect();
@@ -40,7 +38,7 @@ pub fn goto_definition(
         current = ctx.tree.parent(id);
     }
     let original = NodeRef::new(ctx.file_id, node_id);
-    let resolved = resolve_reference(original, line, col, ctx)?;
+    let resolved = resolve_reference(original, offset, ctx)?;
 
     let uri = uri_for(resolved.file_id)?;
     let resolved_tree = ctx.tree_for(resolved.file_id)?;
@@ -48,6 +46,6 @@ pub fn goto_definition(
 
     Some(GotoDefinitionResponse::Scalar(Location::new(
         uri,
-        span_to_range(&resolved_span),
+        range_for(resolved_tree, resolved_span),
     )))
 }

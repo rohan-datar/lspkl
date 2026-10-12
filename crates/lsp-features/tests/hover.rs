@@ -7,7 +7,7 @@
 
 mod harness;
 
-use tower_lsp_server::lsp_types::{HoverContents, MarkupKind, Position};
+use tower_lsp_server::lsp_types::{HoverContents, MarkupKind};
 
 use lsp_features::hover::hover;
 
@@ -28,12 +28,9 @@ fn hover_on_unqualified_access_renders_property() {
     let base = harness::load_test_base();
     let src = "x = 1\ny = x\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let position = Position {
-            line: 1,
-            character: 4,
-        };
+        let offset = harness::offset(ctx.tree, 1, 4);
 
-        let result = hover(ctx, position).expect("hover should produce a result for `x`");
+        let result = hover(ctx, offset).expect("hover should produce a result for `x`");
 
         let HoverContents::Markup(markup) = result.contents else {
             panic!("expected MarkupContent, got something else");
@@ -54,13 +51,10 @@ fn hover_on_whitespace_returns_none() {
     let src = "x = 1\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         // Column 10 is well past `x = 1` (length 5).
-        let position = Position {
-            line: 0,
-            character: 10,
-        };
+        let offset = harness::offset(ctx.tree, 0, 10);
 
         assert!(
-            hover(ctx, position).is_none(),
+            hover(ctx, offset).is_none(),
             "no hover info expected past end of line",
         );
     });
@@ -75,12 +69,9 @@ fn hover_includes_doc_comment_and_signature() {
     let src = "/// Doubles a number.\nfunction double(n: Int): Int = n\ny = double(1)\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         // Cursor on the `double` reference in `y = double(1)`.
-        let position = Position {
-            line: 2,
-            character: 6,
-        };
+        let offset = harness::offset(ctx.tree, 2, 6);
 
-        let result = hover(ctx, position).expect("hover should resolve `double`");
+        let result = hover(ctx, offset).expect("hover should resolve `double`");
         let HoverContents::Markup(markup) = result.contents else {
             panic!("expected MarkupContent, got something else");
         };

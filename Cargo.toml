@@ -4,6 +4,8 @@ members = ["crates/*"]
 
 [workspace.dependencies]
 insta = "1.43.2"
+text-size = "1.1"
+line-index = "0.1"
 tree-sitter = "0.25"
 tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl", tag = "v0.21.0" }
 

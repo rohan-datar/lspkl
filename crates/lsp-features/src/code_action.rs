@@ -3,18 +3,20 @@
 use std::collections::HashMap;
 
 use tower_lsp_server::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, Command, TextEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, Command, Range, TextEdit,
     WorkspaceEdit,
 };
 
 use pkl_diagnostics::Diagnostic;
 use pkl_diagnostics::diagnostic::QuickFixCommand;
+use pkl_syntax::TextRange;
 
 /// Materialize quick-fix actions for the diagnostics echoed in
 /// `params.context.diagnostics`.
 pub fn code_action(
     params: &CodeActionParams,
     diagnostics: &[Diagnostic],
+    range_for: impl Fn(TextRange) -> Range,
 ) -> Vec<CodeActionOrCommand> {
     let uri = params.text_document.uri.clone();
     let mut actions = Vec::new();
@@ -24,7 +26,7 @@ pub fn code_action(
         // verbatim from our publish (see doc above for why there is no id).
         let Some(matched) = diagnostics
             .iter()
-            .find(|d| d.message == echoed.message && crate::span_to_range(&d.span) == echoed.range)
+            .find(|d| d.message == echoed.message && range_for(d.span) == echoed.range)
         else {
             continue;
         };
@@ -39,7 +41,7 @@ pub fn code_action(
                     fix.edits
                         .iter()
                         .map(|e| TextEdit {
-                            range: crate::span_to_range(&e.span),
+                            range: range_for(e.span),
                             new_text: e.new_text.clone(),
                         })
                         .collect(),

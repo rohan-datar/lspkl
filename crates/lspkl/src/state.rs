@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock};
 
+use lsp_features::positions::PositionEncoding;
 use pkl_diagnostics::DiagnosticsEngine;
 use pkl_project::PklProject;
 use pkl_project::cli::PklCli;
@@ -43,6 +44,8 @@ pub struct ServerState {
     pub package_cache_dir: Option<PathBuf>,
     pub settings: parking_lot::RwLock<Arc<WorkspaceSettings>>,
     pub client_configuration: AtomicBool,
+    /// Negotiated once during initialization; defaults to LSP UTF-16.
+    pub position_encoding: parking_lot::RwLock<PositionEncoding>,
     pub(crate) open_documents:
         parking_lot::Mutex<HashMap<FileId, Arc<tower_lsp_server::lsp_types::Uri>>>,
     module_cache_dir: PathBuf,
@@ -71,6 +74,7 @@ impl Default for ServerState {
             package_cache_dir,
             settings: parking_lot::RwLock::new(Arc::new(WorkspaceSettings::default())),
             client_configuration: AtomicBool::new(false),
+            position_encoding: parking_lot::RwLock::new(PositionEncoding::default()),
             open_documents: parking_lot::Mutex::new(HashMap::new()),
             module_cache_dir,
         }

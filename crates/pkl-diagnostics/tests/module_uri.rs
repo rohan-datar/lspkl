@@ -54,7 +54,10 @@ fn ordinary_extends_and_expression_failures_use_owner_edges() {
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].quick_fixes.is_empty());
         let span = diagnostics[0].span;
-        assert_eq!(&source[span.byte_range()], "\"missing.pkl\"");
+        assert_eq!(
+            &source[std::ops::Range::<usize>::from(span)],
+            "\"missing.pkl\""
+        );
         assert!(
             analyze(
                 source,

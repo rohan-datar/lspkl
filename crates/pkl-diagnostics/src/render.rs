@@ -1,25 +1,27 @@
 //! Render a diagnostic list to a stable, human-readable string for snapshot
 //! testing.
 
+use pkl_syntax::LineIndex;
 use std::fmt::Write;
 
 use crate::diagnostic::Diagnostic;
 
-pub fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {
+pub fn render_diagnostics(diagnostics: &[Diagnostic], line_index: &LineIndex) -> String {
     if diagnostics.is_empty() {
         return String::from("(no diagnostics)\n");
     }
 
     let mut sorted: Vec<&Diagnostic> = diagnostics.iter().collect();
-    sorted.sort_by_key(|d| (d.span.begin_line, d.span.begin_col, d.severity.as_str()));
+    sorted.sort_by_key(|d| (d.span.start(), d.severity.as_str()));
 
     let mut out = String::new();
     for d in sorted {
+        let start = line_index.line_col(d.span.start());
         writeln!(
             &mut out,
             "{}:{} {}: {}",
-            d.span.begin_line,
-            d.span.begin_col,
+            start.line + 1,
+            start.col + 1,
             d.severity.as_str(),
             d.message
         )
@@ -33,21 +35,25 @@ pub fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {
         for fix in &d.quick_fixes {
             writeln!(&mut out, "  fix: {}", fix.title).unwrap();
             for edit in &fix.edits {
+                let start = line_index.line_col(edit.span.start());
+                let end = line_index.line_col(edit.span.end());
                 if edit.is_insertion() {
                     writeln!(
                         &mut out,
                         "    insert {:?} at {}:{}",
-                        edit.new_text, edit.span.begin_line, edit.span.begin_col,
+                        edit.new_text,
+                        start.line + 1,
+                        start.col + 1,
                     )
                     .unwrap();
                 } else {
                     writeln!(
                         &mut out,
                         "    replace {}:{}-{}:{} with {:?}",
-                        edit.span.begin_line,
-                        edit.span.begin_col,
-                        edit.span.end_line,
-                        edit.span.end_col,
+                        start.line + 1,
+                        start.col + 1,
+                        end.line + 1,
+                        end.col + 1,
                         edit.new_text,
                     )
                     .unwrap();

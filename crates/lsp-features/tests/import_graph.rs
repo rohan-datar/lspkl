@@ -2,10 +2,7 @@ mod harness;
 use pkl_syntax::ast::NodeKind;
 use pkl_types::{AnalysisContext, FileId, ImportResolution, NodeRef};
 use std::{collections::HashMap, sync::Arc};
-use tower_lsp_server::lsp_types::{
-    CompletionParams, CompletionResponse, GotoDefinitionResponse, HoverContents, Position,
-    TextDocumentIdentifier, TextDocumentPositionParams,
-};
+use tower_lsp_server::lsp_types::{CompletionResponse, GotoDefinitionResponse, HoverContents};
 fn with_graph(f: impl FnOnce(&AnalysisContext)) {
     let base = harness::load_test_base();
     let current=Arc::new(pkl_syntax::parse("extends \"parent.pkl\"\nimport \"lib.pkl\" as library\nimport* \"*.pkl\" as libs\nx = library.value\ny = inherited\nz = libs[\"lib.pkl\"].value\n").unwrap());
@@ -50,18 +47,10 @@ fn find(
     t.children(n).iter().find_map(|&c| find(t, c, k))
 }
 fn labels(ctx: &AnalysisContext, line: u32, col: u32) -> Vec<String> {
-    let params = CompletionParams {
-        text_document_position: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: "file:///main.pkl".parse().unwrap(),
-            },
-            position: Position::new(line, col),
-        },
-        work_done_progress_params: Default::default(),
-        partial_result_params: Default::default(),
-        context: None,
-    };
-    match lsp_features::completion::completion(ctx, &params).unwrap() {
+    let offset = harness::offset(ctx.tree, line, col);
+    match lsp_features::completion::completion(ctx, offset, |range| harness::range(ctx.tree, range))
+        .unwrap()
+    {
         CompletionResponse::Array(v) => v.into_iter().map(|i| i.label).collect(),
         CompletionResponse::List(v) => v.items.into_iter().map(|i| i.label).collect(),
     }
@@ -69,24 +58,27 @@ fn labels(ctx: &AnalysisContext, line: u32, col: u32) -> Vec<String> {
 #[test]
 fn imported_hover_and_definition_use_target_tree() {
     with_graph(|ctx| {
-        let h = lsp_features::hover::hover(ctx, Position::new(3, 13)).unwrap();
+        let h = lsp_features::hover::hover(ctx, harness::offset(ctx.tree, 3, 13)).unwrap();
         let HoverContents::Markup(m) = h.contents else {
             panic!("markdown")
         };
         assert!(m.value.contains("value: Int"));
         assert!(m.value.contains("Imported docs"));
-        let d = lsp_features::goto_definition::goto_definition(ctx, Position::new(3, 13), |id| {
-            (id == FileId(2)).then(|| "file:///lib.pkl".parse().unwrap())
-        })
+        let d = lsp_features::goto_definition::goto_definition(
+            ctx,
+            harness::offset(ctx.tree, 3, 13),
+            |id| (id == FileId(2)).then(|| "file:///lib.pkl".parse().unwrap()),
+            harness::range,
+        )
         .unwrap();
         let GotoDefinitionResponse::Scalar(l) = d else {
             panic!("location")
         };
         let target = ctx.tree_for(FileId(2)).unwrap();
         let property = find(target, target.root(), &NodeKind::ClassProperty).unwrap();
-        assert_eq!(l.range, lsp_features::span_to_range(&target.span(property)));
+        assert_eq!(l.range, harness::range(target, target.span(property)));
         assert_eq!(l.uri.as_str(), "file:///lib.pkl");
-        assert!(lsp_features::hover::hover(ctx, Position::new(1, 21)).is_some());
+        assert!(lsp_features::hover::hover(ctx, harness::offset(ctx.tree, 1, 21)).is_some());
     });
 }
 #[test]
@@ -157,18 +149,11 @@ fn lexical_import_precedes_inherited_output_in_resolution_and_completion() {
                 .ty,
             *ctx.base.int_type()
         );
-        let params = CompletionParams {
-            text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: "file:///main.pkl".parse().unwrap(),
-                },
-                position: Position::new(5, 6),
-            },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-            context: None,
-        };
-        let response = lsp_features::completion::completion(ctx, &params).unwrap();
+        let offset = harness::offset(ctx.tree, 5, 6);
+        let response = lsp_features::completion::completion(ctx, offset, |range| {
+            harness::range(ctx.tree, range)
+        })
+        .unwrap();
         let items = match response {
             CompletionResponse::Array(v) => v,
             CompletionResponse::List(v) => v.items,
@@ -259,10 +244,13 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
     let trees = HashMap::from([(FileId(2), first), (FileId(3), second)]);
     let ctx = AnalysisContext::new(&tree, FileId(1), &base, &trees, &edges);
     let callback = |id: FileId| format!("file:///{}.pkl", id.0).parse().ok();
-    let GotoDefinitionResponse::Array(locations) =
-        lsp_features::goto_definition::goto_definition(&ctx, Position::new(0, 10), callback)
-            .unwrap()
-    else {
+    let GotoDefinitionResponse::Array(locations) = lsp_features::goto_definition::goto_definition(
+        &ctx,
+        harness::offset(ctx.tree, 0, 10),
+        callback,
+        harness::range,
+    )
+    .unwrap() else {
         panic!("glob array");
     };
     assert_eq!(locations.len(), 2);
@@ -270,17 +258,28 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
         assert_eq!(location.uri, callback(target.file_id).unwrap());
         assert_eq!(
             location.range,
-            lsp_features::span_to_range(
-                &ctx.tree_for(target.file_id).unwrap().span(target.node_id)
+            harness::range(
+                ctx.tree_for(target.file_id).unwrap(),
+                ctx.tree_for(target.file_id).unwrap().span(target.node_id)
             )
         );
     }
     assert!(
-        lsp_features::goto_definition::goto_definition(&ctx, Position::new(1, 16), callback)
-            .is_none()
+        lsp_features::goto_definition::goto_definition(
+            &ctx,
+            harness::offset(ctx.tree, 1, 16),
+            callback,
+            harness::range
+        )
+        .is_none()
     );
     assert!(
-        lsp_features::goto_definition::goto_definition(&ctx, Position::new(0, 20), callback)
-            .is_none()
+        lsp_features::goto_definition::goto_definition(
+            &ctx,
+            harness::offset(ctx.tree, 0, 20),
+            callback,
+            harness::range
+        )
+        .is_none()
     );
 }

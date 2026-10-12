@@ -10,6 +10,7 @@ lspkl is a native Rust language server for Pkl: diagnostics, hover, definitions,
 - Open/change notifications replace full document contents in the VFS and invalidate its parse cache. Cache-miss parsing and tree insertion share the contents-update lock; never install a tree parsed before a concurrent invalidation. Open/change/close refresh diagnostics for all open documents, including import dependents. The server advertises full, not incremental, synchronization.
 - `ServerState::prepare_analysis` parses the root and reachable imports into an `AnalysisSnapshot`. Its pinned `Arc<SyntaxTree>` map prevents cycles and keeps each request internally consistent during edits. Features and diagnostics consume a borrowed `AnalysisContext` containing those trees and resolved import edges.
 - Source loading and project-aware import routing feed semantic analysis; `pkl-types` resolves names/types, `pkl-diagnostics` walks analyzers, and `lsp-features` computes editor results. Module-URI completion is handled in `lspkl` before general completion.
+- Semantic spans/cursors are `TextRange`/`TextSize` byte offsets. Each `SyntaxTree` owns its `LineIndex`; `lsp_features::positions::PositionConverter` is the single protocol conversion boundary, reused by adapters and feature tests. Initialization prefers offered UTF-8, otherwise UTF-16. Convert diagnostics with the same pinned tree that produced them and definitions with the target tree, never the requesting tree.
 - Stdlib, HTTPS, and archive definitions use editor-facing `lspkl://` URIs and the `pkl/fileContents` RPC. Reuse `pkl-vfs/src/uri.rs` conversions. Project initialization restores `.lspkl/projects.json`; explicit sync/download operations invoke the external CLI.
 
 ## Key Directories
@@ -60,7 +61,7 @@ Nix packaging: `nix build`, `nix flake check`. Release automation is in `justfil
 
 - `crates/lspkl/src/main.rs`: startup, stderr tracing, custom RPC registration; `server.rs`: protocol handlers/capabilities; `perf.rs`: opt-in handler/compute timings and ordering counter (`RUST_LOG=warn,lspkl::perf=debug`); `state.rs`: analysis graph preparation; `file_registry.rs`: stable identities.
 - `crates/lspkl/src/settings.rs`: nested `pkl` settings, including `cli.path`, `modulepath`, `projects.excludedDirectories`, `formatter.grammarVersion`, and `cacheDir`. Do not substitute dotted top-level keys.
-- `crates/pkl-types/src/context.rs` and `file_id.rs`: cross-file context/reference invariants; `crates/pkl-project/src/import_resolver.rs`: import routing.
+- `crates/pkl-syntax/src/ast.rs`: byte-range arena and per-tree line index; `crates/lsp-features/src/positions.rs`: negotiated LSP position/range conversions. `crates/pkl-types/src/context.rs` and `file_id.rs`: cross-file context/reference invariants; `crates/pkl-project/src/import_resolver.rs`: import routing.
 - `Cargo.toml`/`Cargo.lock`, `flake.nix`/`flake.lock`, `nix/package.nix`: dependency/build inputs. `.github/workflows/checks.yml`: quality gates.
 - `README.md`: editor setup and virtual-document caveats. Clients must support `lspkl://` and `pkl/fileContents`; stock pkl-vscode's `pkl.lsp.path` expects a JAR, not this executable.
 
@@ -76,6 +77,6 @@ Nix packaging: `nix build`, `nix flake check`. Release automation is in `justfil
 
 - Rust `#[test]`/`#[tokio::test]`; reuse crate-local `tests/harness.rs` and `crates/lspkl/tests/support/mod.rs`. Semantic harnesses use embedded `pkl:base` and `FileId(1)` for snippets.
 - Insta parser inputs: `crates/pkl-syntax/tests/snapshots/parser/inputs/`; diagnostic inputs: `crates/pkl-diagnostics/tests/fixtures/diagnostics/inputs/`. Review snapshot changes with `cargo insta review` rather than blindly accepting them.
-- Match the changed boundary: semantic crate tests, `lspkl/tests/analysis_snapshot.rs` for graph consistency, handler tests for lifecycle, and `lspkl/tests/stdio.rs` for actual executable/JSON-RPC behavior. The smoke example checks diagnostics, stdlib definition/source ranges, and shutdown.
+- Match the changed boundary: semantic crate tests, `lspkl/tests/analysis_snapshot.rs` for graph consistency, handler tests for lifecycle, and `lspkl/tests/stdio.rs` for actual executable/JSON-RPC behavior. `lspkl/tests/positions.rs` covers encoding negotiation and Unicode request/response ranges over the executable. The smoke example checks diagnostics, stdlib definition/source ranges, and shutdown.
 - Keep fixtures isolated: temporary workspaces/caches, explicit CLI executables, locally generated ZIPs and loopback TLS services. Stdio helpers intentionally clear PATH and isolate HOME/USERPROFILE; preserve Unix-only fixture guards.
 - CI runs native tests serially on Linux/macOS/Windows plus separate doctests. No quantitative coverage threshold is configured. If cached stdio tests embed an old checkout path after moving the repo, rebuild the affected test artifacts before interpreting those launch failures as server regressions.

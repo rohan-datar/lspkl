@@ -6,7 +6,7 @@ mod harness;
 
 use std::str::FromStr;
 
-use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Position, Uri};
+use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Uri};
 
 use lsp_features::goto_definition::goto_definition;
 
@@ -26,12 +26,9 @@ fn same_file_definition_returns_location_in_document() {
     let base = harness::load_test_base();
     let src = "x = 1\ny = x\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let position = Position {
-            line: 1,
-            character: 4,
-        };
+        let offset = harness::offset(ctx.tree, 1, 4);
 
-        let result = goto_definition(ctx, position, |_| Some(doc_uri()))
+        let result = goto_definition(ctx, offset, |_| Some(doc_uri()), harness::range)
             .expect("`x` in `y = x` should resolve to a definition");
 
         let GotoDefinitionResponse::Scalar(location) = result else {
@@ -55,21 +52,21 @@ fn stdlib_target_uses_uri_callback() {
     let base = harness::load_test_base();
     let src = "x: String = \"\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let position = Position {
-            line: 0,
-            character: 3,
-        };
+        let offset = harness::offset(ctx.tree, 0, 3);
 
         let uri = Uri::from_str("lspkl://stdlib/base.pkl").unwrap();
-        let result = goto_definition(ctx, position, |id| {
-            (id == pkl_types::FileId::BASE).then(|| uri.clone())
-        })
+        let result = goto_definition(
+            ctx,
+            offset,
+            |id| (id == pkl_types::FileId::BASE).then(|| uri.clone()),
+            harness::range,
+        )
         .unwrap();
         let GotoDefinitionResponse::Scalar(location) = result else {
             panic!("single location");
         };
         assert_eq!(location.uri, uri);
-        assert!(goto_definition(ctx, position, |_| None).is_none());
+        assert!(goto_definition(ctx, offset, |_| None, harness::range).is_none());
     });
 }
 
@@ -79,11 +76,8 @@ fn whitespace_returns_none() {
     let base = harness::load_test_base();
     let src = "x = 1\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let position = Position {
-            line: 0,
-            character: 10,
-        };
+        let offset = harness::offset(ctx.tree, 0, 10);
 
-        assert!(goto_definition(ctx, position, |_| Some(doc_uri())).is_none());
+        assert!(goto_definition(ctx, offset, |_| Some(doc_uri()), harness::range).is_none());
     });
 }

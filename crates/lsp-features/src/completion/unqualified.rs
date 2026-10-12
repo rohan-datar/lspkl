@@ -12,7 +12,11 @@ use pkl_types::{AnalysisContext, Type, TypeBindings};
 use super::members::members_of_type;
 
 /// Collect completions for an unqualified position.
-pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext, col: u32) -> Vec<CompletionItem> {
+pub(crate) fn completions(
+    node: NodeId,
+    ctx: &AnalysisContext,
+    offset: pkl_syntax::TextSize,
+) -> Vec<CompletionItem> {
     let tree = ctx.tree;
     let bindings = TypeBindings::new();
     let mut collector: Vec<CompletionItem> = Vec::new();
@@ -30,7 +34,8 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext, col: u32) -> Vec<
     let in_definition_position = matches!(tree.kind(node), NodeKind::ClassBody)
         || matches!(tree.kind(node), NodeKind::ObjectBody)
         || parent_is_object_element
-        || (matches!(tree.kind(node), NodeKind::Module) && col == 1);
+        || (matches!(tree.kind(node), NodeKind::Module)
+            && tree.line_index().line_col(offset).col == 0);
 
     if in_definition_position {
         let defined = collect_defined_property_names(node, ctx);

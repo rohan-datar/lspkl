@@ -5,6 +5,7 @@ mod harness;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use pkl_syntax::TextSize;
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::{AnalysisContext, FileId, NodeRef, resolver::resolve_reference};
 
@@ -21,10 +22,13 @@ fn unqualified_access_to_local_property() {
     harness::with_snippet(&base, src, |ctx| {
         // Find the access expression `x` on line 2 (1-indexed: line=2).
         // Column 5 = the `x` in `y = x` (1-indexed: `y`=1, ` `=2, `=`=3, ` `=4, `x`=5).
-        let cursor = ctx.tree.find_at(2, 5).expect("cursor lands on a node");
+        let cursor = ctx
+            .tree
+            .find_at(TextSize::from(10))
+            .expect("cursor lands on a node");
         let node = NodeRef::new(ctx.file_id, cursor);
 
-        let resolved = resolve_reference(node, 2, 5, ctx)
+        let resolved = resolve_reference(node, TextSize::from(10), ctx)
             .expect("`x` in `y = x` should resolve to the property declaration");
 
         assert_eq!(
@@ -51,10 +55,13 @@ fn declared_type_resolves_into_base() {
     let src = "x: String = \"\"\n";
     harness::with_snippet(&base, src, |ctx| {
         // Column 4 = the `S` of `String` (1-indexed: `x`=1, `:`=2, ` `=3, `S`=4).
-        let cursor = ctx.tree.find_at(1, 4).expect("cursor lands on a node");
+        let cursor = ctx
+            .tree
+            .find_at(TextSize::from(3))
+            .expect("cursor lands on a node");
         let node = NodeRef::new(ctx.file_id, cursor);
 
-        let resolved = resolve_reference(node, 1, 4, ctx)
+        let resolved = resolve_reference(node, TextSize::from(3), ctx)
             .expect("`String` should resolve to the base-module class");
 
         assert_eq!(
@@ -75,11 +82,14 @@ fn cursor_on_whitespace_returns_none() {
     let src = "x = 1\n";
     harness::with_snippet(&base, src, |ctx| {
         // Column 6 = the trailing newline area on line 1.
-        let cursor = ctx.tree.find_at(1, 6).expect("cursor lands on a node");
+        let cursor = ctx
+            .tree
+            .find_at(TextSize::from(5))
+            .expect("cursor lands on a node");
         let node = NodeRef::new(ctx.file_id, cursor);
 
         assert!(
-            resolve_reference(node, 1, 6, ctx).is_none(),
+            resolve_reference(node, TextSize::from(5), ctx).is_none(),
             "no reference at this position; should return None",
         );
     });
@@ -125,12 +135,7 @@ fn import_alias_in_an_imported_file_resolves_with_its_own_file_id() {
         let alias = tree.identifier(import).unwrap();
         let span = tree.span(alias);
         assert_eq!(
-            resolve_reference(
-                NodeRef::new(FileId(3), alias),
-                span.begin_line,
-                span.begin_col,
-                ctx
-            ),
+            resolve_reference(NodeRef::new(FileId(3), alias), span.start(), ctx),
             Some(NodeRef::new(FileId(4), NodeId::ROOT)),
         );
     });
@@ -139,9 +144,9 @@ fn import_alias_in_an_imported_file_resolves_with_its_own_file_id() {
 #[test]
 fn import_uri_cursor_resolves_to_the_target_module_root() {
     with_import_context(|ctx| {
-        let cursor = ctx.tree.find_at(1, 10).unwrap();
+        let cursor = ctx.tree.find_at(TextSize::from(9)).unwrap();
         assert_eq!(
-            resolve_reference(NodeRef::new(ctx.file_id, cursor), 1, 10, ctx),
+            resolve_reference(NodeRef::new(ctx.file_id, cursor), TextSize::from(9), ctx),
             Some(NodeRef::new(FileId(2), NodeId::ROOT)),
         );
     });
@@ -152,7 +157,7 @@ fn import_declaration_does_not_resolve_outside_its_alias() {
     with_import_context(|ctx| {
         let import = harness::find_first(ctx.tree, |kind| matches!(kind, NodeKind::Import));
         assert_eq!(
-            resolve_reference(NodeRef::new(ctx.file_id, import), 1, 1, ctx),
+            resolve_reference(NodeRef::new(ctx.file_id, import), TextSize::from(0), ctx),
             None
         );
     });
@@ -173,20 +178,28 @@ fn unresolved_and_glob_imports_and_unrelated_strings_have_no_target() {
                 let alias = ctx.tree.identifier(import).unwrap();
                 let span = ctx.tree.span(alias);
                 assert_eq!(
-                    resolve_reference(
-                        NodeRef::new(ctx.file_id, alias),
-                        span.begin_line,
-                        span.begin_col,
-                        ctx
-                    ),
+                    resolve_reference(NodeRef::new(ctx.file_id, alias), span.start(), ctx),
                     None
                 );
             }
-            let cursor = ctx.tree.find_at(3, 11).unwrap();
+            let offset = TextSize::try_from(ctx.tree.source().rfind("plain").unwrap()).unwrap();
+            let cursor = ctx.tree.find_at(offset).unwrap();
             assert_eq!(
-                resolve_reference(NodeRef::new(ctx.file_id, cursor), 3, 11, ctx),
+                resolve_reference(NodeRef::new(ctx.file_id, cursor), offset, ctx),
                 None
             );
         },
     );
+}
+
+#[test]
+fn reference_after_unicode_resolves_at_its_inclusive_end() {
+    let base = harness::load_test_base();
+    let source = "x = 1\ntext = \"é😀\"; y = x";
+    harness::with_snippet(&base, source, |ctx| {
+        let offset = TextSize::try_from(source.len()).unwrap();
+        let cursor = ctx.tree.find_at(offset).expect("reference includes EOF");
+        let resolved = resolve_reference(NodeRef::new(ctx.file_id, cursor), offset, ctx).unwrap();
+        assert_eq!(ctx.tree.name(resolved.node_id), Some("x"));
+    });
 }

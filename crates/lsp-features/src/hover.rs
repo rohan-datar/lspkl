@@ -1,7 +1,8 @@
 //! Hover: resolve the node at the cursor, render its type + docs as markdown.
 
-use tower_lsp_server::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
+use tower_lsp_server::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
+use pkl_syntax::TextSize;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::to_type::to_type;
@@ -9,27 +10,22 @@ use pkl_types::{
     AnalysisContext, FileId, NodeRef, Type, TypeBindings, resolver::resolve_reference,
 };
 
-/// Resolve hover information for the given cursor `position`.
+/// Resolve hover information for the given cursor byte `offset`.
 ///
 /// Returns `None` when there is nothing meaningful at the cursor — the
 /// caller should translate `None` into an empty `Hover` per the LSP spec.
 ///
-/// `position` is LSP-style (0-indexed line/column). `pkl_syntax` spans are
-/// 1-indexed, so this function is responsible for the conversion before
-/// calling `SyntaxTree::find_at`.
+/// `offset` is a UTF-8 byte offset in the current syntax tree.
 ///
 /// Pipeline:
 ///   1. Locate the deepest node at the cursor (`find_at`).
 ///   2. Resolve what it refers to (`resolve_reference`).
 ///   3. Render the resolved declaration as Markdown (`render_markdown`).
 ///   4. Wrap as a Markdown `Hover`.
-pub fn hover(ctx: &AnalysisContext, position: Position) -> Option<Hover> {
-    let line = position.line + 1;
-    let col = position.character + 1;
-
-    let node_id = ctx.tree.find_at(line, col)?;
+pub fn hover(ctx: &AnalysisContext, offset: TextSize) -> Option<Hover> {
+    let node_id = ctx.tree.find_at(offset)?;
     let original = NodeRef::new(ctx.file_id, node_id);
-    let resolved = resolve_reference(original, line, col, ctx)?;
+    let resolved = resolve_reference(original, offset, ctx)?;
     let value = render_markdown(resolved, original, ctx)?;
 
     Some(Hover {

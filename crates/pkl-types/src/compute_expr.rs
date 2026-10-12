@@ -93,8 +93,8 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
                     matches!(k, NodeKind::Terminal(TokenType::Identifier))
                 })
                 .map(|accessor| {
-                    let between = ctx.tree.span(reciever).end_byte as usize
-                        ..ctx.tree.span(accessor).begin_byte as usize;
+                    let between = usize::from(ctx.tree.span(reciever).end())
+                        ..usize::from(ctx.tree.span(accessor).start());
                     ctx.tree.source()[between].contains("?.")
                 })
                 .unwrap_or(false);

@@ -10,7 +10,12 @@ use tower_lsp_server::lsp_types::{
 };
 
 use lsp_features::code_action::code_action;
-use lsp_features::span_to_range;
+use pkl_syntax::{TextRange, TextSize};
+
+fn range_for(range: TextRange) -> tower_lsp_server::lsp_types::Range {
+    let tree = pkl_syntax::parse("           \n                               \n").unwrap();
+    harness::range(&tree, range)
+}
 
 fn doc_uri() -> Uri {
     Uri::from_str("file:///snippets/test.pkl").expect("static test URI must parse")
@@ -22,7 +27,7 @@ fn doc_uri() -> Uri {
 /// into a shared crate rather than duplicating per-handler.
 fn to_lsp(d: &Diagnostic) -> tower_lsp_server::lsp_types::Diagnostic {
     tower_lsp_server::lsp_types::Diagnostic {
-        range: span_to_range(&d.span),
+        range: range_for(d.span),
         severity: match d.severity {
             Severity::Error => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::ERROR),
             Severity::Warning => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::WARNING),
@@ -57,27 +62,13 @@ fn params_for(echoed: &[tower_lsp_server::lsp_types::Diagnostic]) -> CodeActionP
 /// ```
 fn annotated_diagnostic() -> Diagnostic {
     let mut d = Diagnostic::error(
-        pkl_syntax::ast::Span {
-            begin_line: 2,
-            begin_col: 3,
-            end_line: 2,
-            end_col: 9,
-            begin_byte: 14,
-            end_byte: 20,
-        },
+        TextRange::new(TextSize::from(14), TextSize::from(20)),
         "Type mismatch. Expected: Int. Actual: String",
     );
     d.quick_fixes.push(QuickFix::single(
         "annotate as unknown",
         TextEdit::insert_after(
-            pkl_syntax::ast::Span {
-                begin_line: 2,
-                begin_col: 9,
-                end_line: 2,
-                end_col: 9,
-                begin_byte: 20,
-                end_byte: 20,
-            },
+            TextRange::new(TextSize::from(20), TextSize::from(20)),
             " -> Unknown",
         ),
     ));
@@ -88,14 +79,7 @@ fn annotated_diagnostic() -> Diagnostic {
 #[test]
 fn fixless_diagnostic_yields_no_actions() {
     let fixless = Diagnostic::warning(
-        pkl_syntax::ast::Span {
-            begin_line: 5,
-            begin_col: 1,
-            end_line: 5,
-            end_col: 4,
-            begin_byte: 40,
-            end_byte: 43,
-        },
+        TextRange::new(TextSize::from(40), TextSize::from(43)),
         "unresolved reference: foo",
     );
     // A record with fixes sits alongside in our set, but only the fixless
@@ -104,7 +88,7 @@ fn fixless_diagnostic_yields_no_actions() {
     let echoed = [to_lsp(&internal[1])];
     let params = params_for(&echoed);
 
-    let result = code_action(&params, &internal);
+    let result = code_action(&params, &internal, range_for);
     assert!(
         result.is_empty(),
         "diagnostic without quick_fixes should produce no actions, got {result:?}"
@@ -118,7 +102,7 @@ fn matching_diagnostic_materializes_its_quick_fixes() {
     let echoed = internal.iter().map(to_lsp).collect::<Vec<_>>();
     let params = params_for(&echoed);
 
-    let result = code_action(&params, &internal);
+    let result = code_action(&params, &internal, range_for);
     assert_eq!(result.len(), 1, "one quick fix -> one action");
 
     let CodeActionOrCommand::CodeAction(action) = &result[0] else {
@@ -171,7 +155,7 @@ fn unmatched_echoed_diagnostics_are_skipped() {
     stale.message = "stale message from a previous publish".into();
     let params = params_for(&[stale]);
 
-    let result = code_action(&params, &internal);
+    let result = code_action(&params, &internal, range_for);
     assert!(
         result.is_empty(),
         "no internal diagnostic matches the echoed one; got {result:?}"
@@ -184,7 +168,7 @@ fn package_download_action_has_command_and_no_workspace_edit() {
     let mut diagnostic = annotated_diagnostic();
     diagnostic.quick_fixes = vec![QuickFix::download_package(package.into())];
     let echoed = [to_lsp(&diagnostic)];
-    let result = code_action(&params_for(&echoed), &[diagnostic]);
+    let result = code_action(&params_for(&echoed), &[diagnostic], range_for);
     assert_eq!(result.len(), 1);
     let CodeActionOrCommand::CodeAction(action) = &result[0] else {
         panic!("expected code action")

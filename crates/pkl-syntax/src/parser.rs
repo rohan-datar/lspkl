@@ -12,7 +12,8 @@ use smallvec::SmallVec;
 use thiserror::Error;
 use tree_sitter::{Node as TsNode, Parser};
 
-use crate::ast::{NodeEntry, NodeId, NodeKind, Span, SyntaxTree, TokenType};
+use crate::ast::{NodeEntry, NodeId, NodeKind, SyntaxTree, TokenType};
+use crate::{TextRange, TextSize};
 
 #[derive(Debug, Error)]
 pub enum ParseError {
@@ -254,16 +255,9 @@ fn operator_token(raw: &str) -> TokenType {
     }
 }
 
-fn span_of(ts_node: &TsNode<'_>) -> Span {
-    let start = ts_node.start_position();
-    let end = ts_node.end_position();
-    Span {
-        // tree-sitter coordinates are 0-indexed; public Span coordinates are 1-indexed.
-        begin_line: (start.row as u32).saturating_add(1),
-        begin_col: (start.column as u32).saturating_add(1),
-        end_line: (end.row as u32).saturating_add(1),
-        end_col: (end.column as u32).saturating_add(1),
-        begin_byte: ts_node.start_byte() as u32,
-        end_byte: ts_node.end_byte() as u32,
-    }
+fn span_of(ts_node: &TsNode<'_>) -> TextRange {
+    TextRange::new(
+        TextSize::try_from(ts_node.start_byte()).expect("source exceeds text offset capacity"),
+        TextSize::try_from(ts_node.end_byte()).expect("source exceeds text offset capacity"),
+    )
 }

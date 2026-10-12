@@ -7,6 +7,7 @@ use fluent_uri::Uri;
 use lspkl::ServerState;
 use lspkl::module_uri_completion::{completion, resolve};
 use lspkl::state::AnalysisSnapshot;
+use pkl_syntax::TextSize;
 use tower_lsp_server::lsp_types::{
     CompletionItem, CompletionResponse, CompletionTextEdit, Documentation, Position,
 };
@@ -20,11 +21,6 @@ fn candidates(
     marked: &str,
 ) -> Option<Vec<CompletionItem>> {
     let cursor = marked.find('|').unwrap();
-    let prefix = &marked[..cursor];
-    let position = Position::new(
-        prefix.bytes().filter(|&b| b == b'\n').count() as u32,
-        prefix.rsplit('\n').next().unwrap().encode_utf16().count() as u32,
-    );
     let source = marked.replacen('|', "", 1);
     let file = state.file_manager.open(source_uri, source, Some(1));
     let module = state.parse_module(file).unwrap();
@@ -33,7 +29,7 @@ fn candidates(
         imports: HashMap::new(),
         module,
     };
-    match completion(state, &snapshot, position)? {
+    match completion(state, &snapshot, TextSize::try_from(cursor).unwrap())? {
         CompletionResponse::Array(items) => Some(items),
         _ => panic!("expected deterministic array"),
     }
