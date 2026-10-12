@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use lspkl::{PklBackend, ServerState};
+use lspkl::{PklBackend, Workspace};
 use tower_lsp_server::{LspService, Server};
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -31,11 +31,11 @@ async fn main() {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    let state = Arc::new(ServerState::new());
+    let workspace = Arc::new(parking_lot::Mutex::new(Workspace::new()));
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     // Custom `pkl/*` RPC methods
-    let (service, socket) = LspService::build(|client| PklBackend::new(state, Some(client)))
+    let (service, socket) = LspService::build(|client| PklBackend::new(workspace, Some(client)))
         .custom_method("pkl/syncProjects", PklBackend::sync_projects)
         .custom_method("pkl/downloadPackage", PklBackend::download_package)
         .custom_method("pkl/fileContents", PklBackend::file_contents)

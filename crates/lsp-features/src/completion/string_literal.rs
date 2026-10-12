@@ -1,6 +1,6 @@
 //! String-literal type completion: suggest allowed literal values.
 
-use tower_lsp_server::lsp_types::{
+use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionTextEdit,
     Documentation, MarkupContent, MarkupKind, Range, TextEdit,
 };

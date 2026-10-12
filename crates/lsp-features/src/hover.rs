@@ -1,6 +1,6 @@
 //! Hover: resolve the node at the cursor, render its type + docs as markdown.
 
-use tower_lsp_server::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use pkl_syntax::TextSize;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};

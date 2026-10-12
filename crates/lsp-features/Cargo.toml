@@ -8,7 +8,7 @@ pkl-syntax.workspace = true
 pkl-types.workspace = true
 pkl-vfs.workspace = true
 pkl-diagnostics.workspace = true
-tower-lsp-server.workspace = true
+lsp-types.workspace = true
 fluent-uri.workspace = true
 
 [dev-dependencies]

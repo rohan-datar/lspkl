@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fluent_uri::Uri;
-use lspkl::ServerState;
+use lspkl::Workspace;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_vfs::VirtualFile;
 
@@ -13,11 +13,9 @@ fn file_uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
 }
 
-fn source(state: &ServerState, path: &Path, text: &str) -> (Arc<VirtualFile>, Arc<SyntaxTree>) {
-    let file = state
-        .file_manager
-        .open(file_uri(path), text.into(), Some(1));
-    let tree = state.file_manager.parse(&file.url).unwrap();
+fn source(state: &mut Workspace, path: &Path, text: &str) -> (Arc<VirtualFile>, Arc<SyntaxTree>) {
+    let file = open(state, file_uri(path), text.into(), Some(1));
+    let tree = state.snapshot().file_manager.parse(&file.url).unwrap();
     (file, tree)
 }
 
@@ -26,7 +24,7 @@ fn import_node(tree: &SyntaxTree) -> NodeId {
         .expect("fixture must contain an ordinary import")
 }
 
-fn load_projects(state: &ServerState, workspace: &Path, projects: &[(&str, &[&str])]) {
+fn load_projects(state: &mut Workspace, workspace: &Path, projects: &[(&str, &[&str])]) {
     let entries: Vec<_> = projects
         .iter()
         .map(|(project_file, roots)| {
@@ -50,8 +48,15 @@ fn load_projects(state: &ServerState, workspace: &Path, projects: &[(&str, &[&st
         .unwrap(),
     )
     .unwrap();
-    let mut manager = state.project_manager.lock();
-    manager.initialize(vec![workspace.to_path_buf()]);
+    state.apply_initialize(&lsp_types::InitializeParams {
+        workspace_folders: Some(vec![lsp_types::WorkspaceFolder {
+            uri: file_uri(workspace).as_str().parse().unwrap(),
+            name: "fixture".into(),
+        }]),
+        ..Default::default()
+    });
+    let view = state.snapshot();
+    let mut manager = view.project_manager.lock();
     manager.load_state(&state_file).unwrap();
 }
 
@@ -61,14 +66,15 @@ fn relative_import_uses_ast_literal_and_source_directory_without_a_project() {
     let dir = temp.path().join("source directory");
     fs::create_dir(&dir).unwrap();
     fs::write(dir.join("library.pkl"), "answer = 42\n").unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let (source, tree) = source(
-        &state,
+        &mut state,
         &dir.join("main.pkl"),
         "// import \"./not-the-target.pkl\"\nimport \"./library.pkl\"\n",
     );
 
     let target = state
+        .snapshot()
         .resolve_import_file(&tree, import_node(&tree), &source)
         .unwrap();
 
@@ -92,9 +98,9 @@ fn modulepath_import_selects_the_nearest_project_for_each_source() {
         "owner = \"inner\"\n",
     )
     .unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     load_projects(
-        &state,
+        &mut state,
         workspace,
         &[
             ("PklProject", &["outer-lib"]),
@@ -102,20 +108,22 @@ fn modulepath_import_selects_the_nearest_project_for_each_source() {
         ],
     );
     let (outer, outer_tree) = source(
-        &state,
+        &mut state,
         &workspace.join("main.pkl"),
         "import \"modulepath:/library.pkl\"\n",
     );
     let (inner, inner_tree) = source(
-        &state,
+        &mut state,
         &workspace.join("app/main.pkl"),
         "import \"modulepath:/library.pkl\"\n",
     );
 
     let outer_target = state
+        .snapshot()
         .resolve_import_file(&outer_tree, import_node(&outer_tree), &outer)
         .unwrap();
     let inner_target = state
+        .snapshot()
         .resolve_import_file(&inner_tree, import_node(&inner_tree), &inner)
         .unwrap();
 
@@ -136,17 +144,21 @@ fn imported_file_reuses_unsaved_editor_contents() {
     let temp = tempfile::tempdir().unwrap();
     let target_path = temp.path().join("library.pkl");
     fs::write(&target_path, "answer = 0\n").unwrap();
-    let state = ServerState::new();
-    let opened = state
-        .file_manager
-        .open(file_uri(&target_path), "answer = 42\n".into(), Some(2));
+    let mut state = Workspace::new();
+    let opened = open(
+        &mut state,
+        file_uri(&target_path),
+        "answer = 42\n".into(),
+        Some(2),
+    );
     let (source, tree) = source(
-        &state,
+        &mut state,
         &temp.path().join("main.pkl"),
         "import \"./library.pkl\"\n",
     );
 
     let target = state
+        .snapshot()
         .resolve_import_file(&tree, import_node(&tree), &source)
         .unwrap();
 
@@ -158,19 +170,20 @@ fn imported_file_reuses_unsaved_editor_contents() {
 #[test]
 fn missing_or_unsupported_import_targets_return_none() {
     let temp = tempfile::tempdir().unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     for uri in [
         "./missing.pkl",
         "modulepath:/library.pkl",
         "ftp://example.com/library.pkl",
     ] {
         let (source, tree) = source(
-            &state,
+            &mut state,
             &temp.path().join("main.pkl"),
             &format!("import \"{uri}\"\n"),
         );
         assert!(
             state
+                .snapshot()
                 .resolve_import_file(&tree, import_node(&tree), &source)
                 .is_none(),
             "unsupported or unresolved import: {uri}"
@@ -182,9 +195,9 @@ fn missing_or_unsupported_import_targets_return_none() {
 fn glob_imports_and_non_import_nodes_are_rejected() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("library.pkl"), "answer = 42\n").unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let (source, tree) = source(
-        &state,
+        &mut state,
         &temp.path().join("main.pkl"),
         "import* \"./library.pkl\"\nanswer = 1\n",
     );
@@ -195,10 +208,35 @@ fn glob_imports_and_non_import_nodes_are_rejected() {
         .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
         .unwrap();
 
-    assert!(state.resolve_import_file(&tree, glob, &source).is_none());
     assert!(
         state
+            .snapshot()
+            .resolve_import_file(&tree, glob, &source)
+            .is_none()
+    );
+    assert!(
+        state
+            .snapshot()
             .resolve_import_file(&tree, property, &source)
             .is_none()
     );
+}
+
+fn open(
+    state: &mut Workspace,
+    url: Uri<String>,
+    text: String,
+    version: Option<i32>,
+) -> Arc<pkl_vfs::VirtualFile> {
+    state
+        .apply_open(lsp_types::DidOpenTextDocumentParams {
+            text_document: lsp_types::TextDocumentItem {
+                uri: url.as_str().parse().unwrap(),
+                language_id: "pkl".into(),
+                version: version.unwrap_or(1),
+                text,
+            },
+        })
+        .unwrap();
+    state.snapshot().document(url.as_str()).unwrap()
 }

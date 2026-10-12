@@ -6,7 +6,7 @@ mod harness;
 
 use std::str::FromStr;
 
-use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Uri};
+use lsp_types::{GotoDefinitionResponse, Uri};
 
 use lsp_features::goto_definition::goto_definition;
 

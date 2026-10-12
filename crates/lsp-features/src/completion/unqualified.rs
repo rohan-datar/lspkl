@@ -1,7 +1,7 @@
 //! Unqualified access completion: names in scope at expression and
 //! definition positions.
 
-use tower_lsp_server::lsp_types::{CompletionItem, CompletionItemKind};
+use lsp_types::{CompletionItem, CompletionItemKind};
 
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::compute_expr::compute_this_type;
@@ -165,7 +165,7 @@ fn add_typed_completions(
             Some(CompletionItemKind::PROPERTY),
         );
         amend.insert_text = Some(format!("{modifiers}{} {{\n  $1\n}}", member.name));
-        amend.insert_text_format = Some(tower_lsp_server::lsp_types::InsertTextFormat::SNIPPET);
+        amend.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
         out.push(amend);
 
         let assign = super::simple_item(
@@ -242,7 +242,7 @@ fn add_mapping_completions(
         Some(CompletionItemKind::FIELD),
     );
     entry_amend.insert_text = Some(format!("[{key_snippet}] {{\n  $2\n}}"));
-    entry_amend.insert_text_format = Some(tower_lsp_server::lsp_types::InsertTextFormat::SNIPPET);
+    entry_amend.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
     out.push(entry_amend);
 
     out.push(super::simple_item(
@@ -285,7 +285,7 @@ fn add_listing_completions(
 
     let mut new_amend = super::simple_item("new {…}", "", &element_type.render(ctx), None);
     new_amend.insert_text = Some("new {\n  $1\n}".to_string());
-    new_amend.insert_text_format = Some(tower_lsp_server::lsp_types::InsertTextFormat::SNIPPET);
+    new_amend.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
     out.push(new_amend);
 }
 

@@ -125,7 +125,7 @@ pub(crate) fn https_contents(
     Ok(contents)
 }
 
-pub(crate) fn default_cache() -> PathBuf {
+pub fn default_cache() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache")))

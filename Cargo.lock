@@ -911,11 +911,11 @@ name = "lsp-features"
 version = "0.1.0"
 dependencies = [
  "fluent-uri 0.4.1",
+ "lsp-types",
  "pkl-diagnostics",
  "pkl-syntax",
  "pkl-types",
  "pkl-vfs",
- "tower-lsp-server",
 ]
 
 [[package]]
@@ -938,6 +938,7 @@ dependencies = [
  "clap",
  "fluent-uri 0.4.1",
  "lsp-features",
+ "lsp-types",
  "parking_lot",
  "pkl-diagnostics",
  "pkl-project",
@@ -947,6 +948,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tower-lsp-server",
  "tracing",

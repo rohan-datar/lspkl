@@ -58,7 +58,7 @@ pub(super) struct Compute {
 
 impl Compute {
     pub(super) fn start(stage: &'static str) -> Self {
-        Self::begin(stage, "runtime", None)
+        Self::begin(stage, "blocking", None)
     }
 
     fn begin(stage: &'static str, execution: &'static str, queued: Option<Instant>) -> Self {
@@ -92,7 +92,7 @@ impl Drop for Compute {
     }
 }
 
-/// Measure only existing blocking hops, without moving any runtime-thread work.
+/// Measure whole synchronous handlers dispatched away from the runtime.
 pub(super) async fn blocking<F, R>(
     stage: &'static str,
     work: F,

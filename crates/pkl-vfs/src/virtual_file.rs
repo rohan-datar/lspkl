@@ -105,7 +105,7 @@ impl VirtualFile {
 
     /// Parse and cache under the same lock used to replace contents. An edit
     /// cannot invalidate the cache between reading source and storing its tree.
-    pub(crate) fn parsed_tree(&self) -> Result<Arc<SyntaxTree>, pkl_syntax::ParseError> {
+    pub fn parsed_tree(&self) -> Result<Arc<SyntaxTree>, pkl_syntax::ParseError> {
         if let Some(tree) = self.cached_tree() {
             return Ok(tree);
         }

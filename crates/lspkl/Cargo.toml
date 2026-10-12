@@ -18,6 +18,8 @@ pkl-vfs.workspace = true
 pkl-project.workspace = true
 lsp-features.workspace = true
 tower-lsp-server.workspace = true
+lsp-types.workspace = true
+thiserror.workspace = true
 parking_lot.workspace = true
 tokio = { workspace = true, features = ["full"] }
 clap.workspace = true

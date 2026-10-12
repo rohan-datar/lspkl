@@ -1,6 +1,6 @@
 //! Qualified access completion: members of the receiver's type.
 
-use tower_lsp_server::lsp_types::{CompletionItem, CompletionItemKind};
+use lsp_types::{CompletionItem, CompletionItemKind};
 
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::{AnalysisContext, Type, TypeBindings};

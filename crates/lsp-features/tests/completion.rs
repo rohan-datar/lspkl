@@ -5,7 +5,7 @@
 
 mod harness;
 
-use tower_lsp_server::lsp_types::CompletionResponse;
+use lsp_types::CompletionResponse;
 
 use lsp_features::completion::completion;
 
@@ -86,9 +86,7 @@ fn string_literal_offers_union_alternatives() {
             panic!("literal candidates")
         };
         for candidate in candidates {
-            let Some(tower_lsp_server::lsp_types::CompletionTextEdit::Edit(edit)) =
-                &candidate.text_edit
-            else {
+            let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &candidate.text_edit else {
                 continue;
             };
             let converter =

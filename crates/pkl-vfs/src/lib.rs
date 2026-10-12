@@ -8,4 +8,5 @@ pub mod virtual_file;
 pub use uri::{effective_uri, to_editor_uri};
 
 pub use file_manager::{FileError, FileManager, path_to_uri, url_to_path};
+pub use sources::default_cache;
 pub use virtual_file::{Origin, VirtualFile};

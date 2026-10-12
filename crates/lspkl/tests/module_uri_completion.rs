@@ -4,37 +4,61 @@ use std::io::Write;
 use std::path::Path;
 
 use fluent_uri::Uri;
-use lspkl::ServerState;
+use lsp_types::{
+    CompletionItem, CompletionResponse, CompletionTextEdit, DidOpenTextDocumentParams,
+    Documentation, Position, TextDocumentItem,
+};
 use lspkl::module_uri_completion::{completion, resolve};
 use lspkl::state::AnalysisSnapshot;
+use lspkl::{Snapshot, Workspace};
 use pkl_syntax::TextSize;
-use tower_lsp_server::lsp_types::{
-    CompletionItem, CompletionResponse, CompletionTextEdit, Documentation, Position,
-};
 
 fn uri(path: &Path) -> Uri<String> {
     pkl_vfs::path_to_uri(path).unwrap()
 }
+fn open_source(
+    state: &mut Workspace,
+    source_uri: Uri<String>,
+    source: String,
+    version: i32,
+) -> Snapshot {
+    state
+        .apply_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: source_uri.as_str().parse().unwrap(),
+                language_id: "pkl".into(),
+                version,
+                text: source,
+            },
+        })
+        .unwrap();
+    state.snapshot()
+}
 fn candidates(
-    state: &ServerState,
+    state: &mut Workspace,
     source_uri: Uri<String>,
     marked: &str,
 ) -> Option<Vec<CompletionItem>> {
     let cursor = marked.find('|').unwrap();
     let source = marked.replacen('|', "", 1);
-    let file = state.file_manager.open(source_uri, source, Some(1));
-    let module = state.parse_module(file).unwrap();
+    let workspace_snapshot = open_source(state, source_uri.clone(), source, 1);
+    let file = workspace_snapshot.document(source_uri.as_str()).unwrap();
+    let module = workspace_snapshot.parse_module(file).unwrap();
     let snapshot = AnalysisSnapshot {
         trees: HashMap::from([(module.file_id, module.tree.clone())]),
         imports: HashMap::new(),
         module,
     };
-    match completion(state, &snapshot, TextSize::try_from(cursor).unwrap())? {
+    match completion(
+        &workspace_snapshot,
+        &snapshot,
+        TextSize::try_from(cursor).unwrap(),
+    )? {
         CompletionResponse::Array(items) => Some(items),
         _ => panic!("expected deterministic array"),
     }
 }
-fn edit(item: &CompletionItem) -> &tower_lsp_server::lsp_types::TextEdit {
+fn edit(item: &CompletionItem) -> &lsp_types::TextEdit {
     match item.text_edit.as_ref().unwrap() {
         CompletionTextEdit::Edit(edit) => edit,
         _ => panic!("expected content replacement"),
@@ -83,7 +107,7 @@ fn package(
 
 #[test]
 fn all_uri_owner_forms_and_embedded_modules_have_real_lazy_docs() {
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let temp = tempfile::tempdir().unwrap();
     for source in [
         "import \"pkl:|\"",
@@ -91,7 +115,7 @@ fn all_uri_owner_forms_and_embedded_modules_have_real_lazy_docs() {
         "extends \"pkl:|\"",
         "x = import(\"pkl:|\")",
     ] {
-        let items = candidates(&state, uri(&temp.path().join("main.pkl")), source).unwrap();
+        let items = candidates(&mut state, uri(&temp.path().join("main.pkl")), source).unwrap();
         assert_eq!(items.len(), pkl_vfs::stdlib::MODULE_NAMES.len());
         let item = items
             .into_iter()
@@ -99,32 +123,43 @@ fn all_uri_owner_forms_and_embedded_modules_have_real_lazy_docs() {
             .unwrap();
         assert!(item.documentation.is_none());
         assert_eq!(item.data.as_ref().unwrap()["targetUri"], "pkl:math");
-        let documentation = docs(resolve(&state, item));
+        let documentation = docs(resolve(&state.snapshot(), item));
         assert!(documentation.contains("module pkl.math"));
         assert!(documentation.contains("mathematical"));
     }
-    assert!(candidates(&state, uri(&temp.path().join("main.pkl")), "x = \"pkl:|\"").is_none());
+    assert!(
+        candidates(
+            &mut state,
+            uri(&temp.path().join("main.pkl")),
+            "x = \"pkl:|\""
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn schemes_and_https_do_not_invent_children() {
     let temp = tempfile::tempdir().unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let source = uri(&temp.path().join("main.pkl"));
     let labels =
         |items: Vec<CompletionItem>| items.into_iter().map(|i| i.label).collect::<Vec<_>>();
-    let items = candidates(&state, source.clone(), "import \"|\"").unwrap();
+    let items = candidates(&mut state, source.clone(), "import \"|\"").unwrap();
     for scheme in ["pkl:", "https://", "package://", "file:///", "modulepath:/"] {
         assert!(labels(items.clone()).contains(&scheme.to_owned()));
     }
     assert_eq!(
-        labels(candidates(&state, source.clone(), "import* \"|\"").unwrap()),
+        labels(candidates(&mut state, source.clone(), "import* \"|\"").unwrap()),
         ["file:///", "package://"]
     );
     assert!(
-        candidates(&state, source, "x = import*(\"https://example.test/|\")")
-            .unwrap()
-            .is_empty()
+        candidates(
+            &mut state,
+            source,
+            "x = import*(\"https://example.test/|\")"
+        )
+        .unwrap()
+        .is_empty()
     );
 }
 
@@ -139,9 +174,9 @@ fn local_names_directories_utf16_raw_delimiters_and_lazy_target_docs() {
     .unwrap();
     fs::write(temp.path().join(".hidden.pkl"), "x=1").unwrap();
     fs::write(temp.path().join("no.txt"), "no").unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let items = candidates(
-        &state,
+        &mut state,
         uri(&temp.path().join("main.pkl")),
         "x = \"😀\"\ny = import(#\"a |suffix\"#)",
     )
@@ -153,9 +188,9 @@ fn local_names_directories_utf16_raw_delimiters_and_lazy_target_docs() {
     assert_eq!(edit(item).new_text, "a%20%25%20file.pkl");
     assert_eq!(edit(item).range.start, Position::new(1, 13));
     assert_eq!(edit(item).range.end, Position::new(1, 21));
-    assert!(docs(resolve(&state, item.clone())).contains("Unique target documentation"));
+    assert!(docs(resolve(&state.snapshot(), item.clone())).contains("Unique target documentation"));
     let items = candidates(
-        &state,
+        &mut state,
         uri(&temp.path().join("main.pkl")),
         "y = \"😀\" + import(\"|\")",
     )
@@ -185,24 +220,31 @@ fn glob_completions_resolve_literal_metacharacters() {
             ("literalOther.pkl", "x=2"),
         ],
     );
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let root = Uri::parse(format!("jar:{}!/", uri(&archive_path))).unwrap();
-    let source_uri = state.file_manager.resolve_uri(&root, "main.pkl").unwrap();
-    let target_uri = state.file_manager.resolve_uri(&root, name).unwrap();
+    let source_uri = state
+        .snapshot()
+        .file_manager
+        .resolve_uri(&root, "main.pkl")
+        .unwrap();
+    let target_uri = state
+        .snapshot()
+        .file_manager
+        .resolve_uri(&root, name)
+        .unwrap();
     for marked in ["import* \"lit|\"", "x = import*(#\"lit|\"#)"] {
-        let items = candidates(&state, source_uri.clone(), marked).unwrap();
+        let items = candidates(&mut state, source_uri.clone(), marked).unwrap();
         let item = items.iter().find(|item| item.label == name).unwrap();
         let replaced = marked.replacen("lit|", &edit(item).new_text, 1);
-        let file = state
-            .file_manager
-            .open(source_uri.clone(), replaced, Some(2));
-        let module = state.parse_module(file).unwrap();
-        let analysis = state.prepare_analysis(module).unwrap();
+        let snapshot = open_source(&mut state, source_uri.clone(), replaced, 2);
+        let file = snapshot.document(source_uri.as_str()).unwrap();
+        let module = snapshot.parse_module(file).unwrap();
+        let analysis = snapshot.prepare_analysis(module).unwrap();
         assert_eq!(analysis.imports.len(), 1);
         let resolution = analysis.imports.values().next().unwrap();
         match resolution {
             pkl_types::ImportResolution::Glob(targets) => {
-                let expected = state.file_registry.lock().register(&target_uri);
+                let expected = snapshot.file_registry.lock().register(&target_uri);
                 assert_eq!(
                     targets,
                     &vec![pkl_types::NodeRef::new(
@@ -232,8 +274,8 @@ fn filesystem_completion_keeps_sources_under_non_utf8_parent_paths() {
         "/// Native directory documentation.\nmodule library\nx = 1\n",
     )
     .unwrap();
-    let state = ServerState::new();
-    let items = candidates(&state, uri(&parent.join("main.pkl")), "import \"lib|\"").unwrap();
+    let mut state = Workspace::new();
+    let items = candidates(&mut state, uri(&parent.join("main.pkl")), "import \"lib|\"").unwrap();
     let item = items
         .into_iter()
         .find(|item| item.label == "library.pkl")
@@ -242,7 +284,7 @@ fn filesystem_completion_keeps_sources_under_non_utf8_parent_paths() {
         item.data.as_ref().unwrap()["targetUri"],
         uri(&library).as_str()
     );
-    assert!(docs(resolve(&state, item)).contains("Native directory documentation."));
+    assert!(docs(resolve(&state.snapshot(), item)).contains("Native directory documentation."));
 }
 
 #[test]
@@ -265,13 +307,13 @@ fn modulepath_directories_zip_jar_precedence_and_docs_use_physical_target() {
     );
     let jar = temp.path().join("modules.jar");
     archive(&jar, &[("jar.pkl", "module jarred\nx=4")]);
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     state.apply_settings(lspkl::settings::WorkspaceSettings {
         modulepath: vec![root.clone(), zip, jar],
         ..Default::default()
     });
     let items = candidates(
-        &state,
+        &mut state,
         uri(&temp.path().join("main.pkl")),
         "import \"modulepath:/|\"",
     )
@@ -287,14 +329,14 @@ fn modulepath_directories_zip_jar_precedence_and_docs_use_physical_target() {
         same.data.as_ref().unwrap()["targetUri"],
         uri(&root.join("same.pkl")).as_str()
     );
-    assert!(docs(resolve(&state, same.clone())).contains("Directory wins"));
+    assert!(docs(resolve(&state.snapshot(), same.clone())).contains("Directory wins"));
     let items = candidates(
-        &state,
+        &mut state,
         uri(&temp.path().join("main.pkl")),
         "import \"modulepath:/nested/|\"",
     )
     .unwrap();
-    assert!(docs(resolve(&state, items[0].clone())).contains("module zipped"));
+    assert!(docs(resolve(&state.snapshot(), items[0].clone())).contains("module zipped"));
 }
 
 #[test]
@@ -325,14 +367,14 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
         serde_json::json!({}),
         &[("source.pkl", "x=2")],
     );
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     state.apply_settings(lspkl::settings::WorkspaceSettings {
         cache_dir: Some(cache.clone()),
         ..Default::default()
     });
     let source_uri = uri(&temp.path().join("main.pkl"));
     let bases = candidates(
-        &state,
+        &mut state,
         source_uri.clone(),
         "import \"package://example.test/|\"",
     )
@@ -345,7 +387,7 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
         ["package://example.test/a@", "package://example.test/b@"]
     );
     let versions = candidates(
-        &state,
+        &mut state,
         source_uri.clone(),
         "import \"package://example.test/a@|\"",
     )
@@ -361,7 +403,7 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
         edit(&versions[1]).new_text,
         "package://example.test/a@2.0.0#/"
     );
-    let members = candidates(&state, source_uri, &format!("import \"{a}#/|\"")).unwrap();
+    let members = candidates(&mut state, source_uri, &format!("import \"{a}#/|\"")).unwrap();
     assert!(members.iter().any(|item| item.label == "nested/"));
     let package_uri = pkl_project::dto::PackageUri::create(&a).unwrap();
     let jar_uri = format!(
@@ -369,11 +411,11 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
         uri(&cache.join(&package_uri.relative_zip_files()[0]))
     );
     let source = Uri::parse(jar_uri).unwrap();
-    let names = candidates(&state, source.clone(), "import \"@|\"").unwrap();
+    let names = candidates(&mut state, source.clone(), "import \"@|\"").unwrap();
     assert_eq!(names[0].label, "@transitive");
-    let members = candidates(&state, source, "import \"@transitive/|\"").unwrap();
+    let members = candidates(&mut state, source, "import \"@transitive/|\"").unwrap();
     assert_eq!(edit(&members[0]).new_text, "@transitive/docs%20member.pkl");
-    assert!(docs(resolve(&state, members[0].clone())).contains("Transitive docs"));
+    assert!(docs(resolve(&state.snapshot(), members[0].clone())).contains("Transitive docs"));
 }
 
 #[test]
@@ -406,22 +448,19 @@ fn named_local_and_remote_project_dependencies_complete_members() {
             }, "evaluatorSettings": null
         }]
     })).unwrap()).unwrap();
-    let state = ServerState::new();
-    state
-        .project_manager
-        .lock()
-        .initialize(vec![temp.path().to_owned()]);
-    state
-        .project_manager
-        .lock()
-        .load_state(&state_file)
-        .unwrap();
+    let mut state = Workspace::new();
+    let snapshot = state.snapshot();
+    {
+        let mut projects = snapshot.project_manager.lock();
+        projects.initialize(vec![temp.path().to_owned()]);
+        projects.load_state(&state_file).unwrap();
+    }
     state.apply_settings(lspkl::settings::WorkspaceSettings {
         cache_dir: Some(cache),
         ..Default::default()
     });
     let source = uri(&temp.path().join("main.pkl"));
-    let names = candidates(&state, source.clone(), "import \"@|\"").unwrap();
+    let names = candidates(&mut state, source.clone(), "import \"@|\"").unwrap();
     assert_eq!(
         names
             .iter()
@@ -429,14 +468,14 @@ fn named_local_and_remote_project_dependencies_complete_members() {
             .collect::<Vec<_>>(),
         ["@local", "@remote"]
     );
-    let items = candidates(&state, source.clone(), "import \"@local/|\"").unwrap();
+    let items = candidates(&mut state, source.clone(), "import \"@local/|\"").unwrap();
     assert_eq!(
         items[0].data.as_ref().unwrap()["targetUri"],
         uri(&temp.path().join("local/member.pkl")).as_str()
     );
-    assert!(docs(resolve(&state, items[0].clone())).contains("Local dependency docs"));
-    let items = candidates(&state, source, "import \"@remote/|\"").unwrap();
-    assert!(docs(resolve(&state, items[0].clone())).contains("module remote.member"));
+    assert!(docs(resolve(&state.snapshot(), items[0].clone())).contains("Local dependency docs"));
+    let items = candidates(&mut state, source, "import \"@remote/|\"").unwrap();
+    assert!(docs(resolve(&state.snapshot(), items[0].clone())).contains("module remote.member"));
 }
 
 #[test]
@@ -445,16 +484,16 @@ fn absolute_file_upward_paths_and_raw_delimiters_replace_only_contents() {
     let nested = temp.path().join("nested");
     fs::create_dir(&nested).unwrap();
     fs::write(temp.path().join("parent.pkl"), "module parent\nx=1").unwrap();
-    let state = ServerState::new();
+    let mut state = Workspace::new();
     let source = uri(&nested.join("main.pkl"));
-    let items = candidates(&state, source.clone(), "import \".../par|\"").unwrap();
+    let items = candidates(&mut state, source.clone(), "import \".../par|\"").unwrap();
     assert_eq!(edit(&items[0]).new_text, ".../parent.pkl");
     let absolute = format!("import \"{}|\"", uri(temp.path()));
     let absolute = absolute.replace("|", "/par|");
-    let items = candidates(&state, source.clone(), &absolute).unwrap();
+    let items = candidates(&mut state, source.clone(), &absolute).unwrap();
     assert!(edit(&items[0]).new_text.ends_with("/parent.pkl"));
     let marked = "x = import(#\"pkl:ma|\"#)";
-    let items = candidates(&state, source, marked).unwrap();
+    let items = candidates(&mut state, source, marked).unwrap();
     assert_eq!(edit(&items[0]).new_text, "pkl:math");
     assert_eq!(edit(&items[0]).range.start, Position::new(0, 13));
 }

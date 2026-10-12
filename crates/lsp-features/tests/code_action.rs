@@ -3,16 +3,16 @@ mod harness;
 
 use std::str::FromStr;
 
-use pkl_diagnostics::{Diagnostic, QuickFix, Severity, TextEdit};
-use tower_lsp_server::lsp_types::{
+use lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position,
     TextDocumentIdentifier, Uri,
 };
+use pkl_diagnostics::{Diagnostic, QuickFix, Severity, TextEdit};
 
 use lsp_features::code_action::code_action;
 use pkl_syntax::{TextRange, TextSize};
 
-fn range_for(range: TextRange) -> tower_lsp_server::lsp_types::Range {
+fn range_for(range: TextRange) -> lsp_types::Range {
     let tree = pkl_syntax::parse("           \n                               \n").unwrap();
     harness::range(&tree, range)
 }
@@ -25,21 +25,21 @@ fn doc_uri() -> Uri {
 /// an internal `Diagnostic` into its LSP wire form. Kept local until the
 /// publish path lands (`TODO(publish-diagnostics)`); if it grows, promote it
 /// into a shared crate rather than duplicating per-handler.
-fn to_lsp(d: &Diagnostic) -> tower_lsp_server::lsp_types::Diagnostic {
-    tower_lsp_server::lsp_types::Diagnostic {
+fn to_lsp(d: &Diagnostic) -> lsp_types::Diagnostic {
+    lsp_types::Diagnostic {
         range: range_for(d.span),
         severity: match d.severity {
-            Severity::Error => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::ERROR),
-            Severity::Warning => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::WARNING),
-            Severity::Info => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::INFORMATION),
-            Severity::Hint => Some(tower_lsp_server::lsp_types::DiagnosticSeverity::HINT),
+            Severity::Error => Some(lsp_types::DiagnosticSeverity::ERROR),
+            Severity::Warning => Some(lsp_types::DiagnosticSeverity::WARNING),
+            Severity::Info => Some(lsp_types::DiagnosticSeverity::INFORMATION),
+            Severity::Hint => Some(lsp_types::DiagnosticSeverity::HINT),
         },
         message: d.message.clone(),
         ..Default::default()
     }
 }
 
-fn params_for(echoed: &[tower_lsp_server::lsp_types::Diagnostic]) -> CodeActionParams {
+fn params_for(echoed: &[lsp_types::Diagnostic]) -> CodeActionParams {
     CodeActionParams {
         text_document: TextDocumentIdentifier { uri: doc_uri() },
         range: Default::default(),

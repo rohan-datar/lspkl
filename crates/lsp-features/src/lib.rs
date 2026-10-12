@@ -4,7 +4,7 @@
 //! - extracting state (looking up the right `VirtualFile` from a URI)
 //! - any async / IO orchestration
 //! - wrapping returned values in `jsonrpc::Result`
-use tower_lsp_server::lsp_types::{Position, Range};
+use lsp_types::{Position, Range};
 const MAX_RANGE: Range = Range {
     start: Position {
         line: 0,

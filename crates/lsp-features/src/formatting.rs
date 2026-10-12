@@ -1,6 +1,6 @@
 //! Formatting: shell out to `pkl format` and return a whole-document edit.
 
-use tower_lsp_server::lsp_types::TextEdit;
+use lsp_types::TextEdit;
 
 use std::io;
 use std::io::Write;

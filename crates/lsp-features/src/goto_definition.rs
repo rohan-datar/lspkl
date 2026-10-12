@@ -1,7 +1,7 @@
 //! GoToDefinition: resolve the node at the cursor and return its
 //! declaration site (possibly in another file).
 
-use tower_lsp_server::lsp_types::{GotoDefinitionResponse, Location, Range, Uri};
+use lsp_types::{GotoDefinitionResponse, Location, Range, Uri};
 
 use pkl_types::{AnalysisContext, FileId, NodeRef, resolver::resolve_reference};
 

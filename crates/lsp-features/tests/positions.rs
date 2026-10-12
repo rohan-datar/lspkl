@@ -1,6 +1,6 @@
 use lsp_features::positions::{PositionConverter, PositionEncoding};
+use lsp_types::{Position, Range};
 use pkl_syntax::{TextRange, TextSize};
-use tower_lsp_server::lsp_types::{Position, Range};
 
 #[test]
 fn unicode_boundaries_reject_interior_code_units() {

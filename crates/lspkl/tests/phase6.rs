@@ -5,11 +5,11 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use lsp_types::*;
 use lspkl::PklBackend;
 use pkl_project::dto::{PackageMetadata, PackageUri, RemoteDependency};
 use serde_json::{Value, json};
 use tower_lsp_server::LanguageServer;
-use tower_lsp_server::lsp_types::*;
 
 fn uri(path: &Path) -> Uri {
     url::Url::from_file_path(path)

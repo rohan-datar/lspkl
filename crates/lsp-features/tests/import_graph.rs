@@ -1,8 +1,8 @@
 mod harness;
+use lsp_types::{CompletionResponse, GotoDefinitionResponse, HoverContents};
 use pkl_syntax::ast::NodeKind;
 use pkl_types::{AnalysisContext, FileId, ImportResolution, NodeRef};
 use std::{collections::HashMap, sync::Arc};
-use tower_lsp_server::lsp_types::{CompletionResponse, GotoDefinitionResponse, HoverContents};
 fn with_graph(f: impl FnOnce(&AnalysisContext)) {
     let base = harness::load_test_base();
     let current=Arc::new(pkl_syntax::parse("extends \"parent.pkl\"\nimport \"lib.pkl\" as library\nimport* \"*.pkl\" as libs\nx = library.value\ny = inherited\nz = libs[\"lib.pkl\"].value\n").unwrap());
@@ -159,10 +159,7 @@ fn lexical_import_precedes_inherited_output_in_resolution_and_completion() {
             CompletionResponse::List(v) => v.items,
         };
         let item = items.iter().find(|i| i.label == "output").unwrap();
-        assert_eq!(
-            item.kind,
-            Some(tower_lsp_server::lsp_types::CompletionItemKind::MODULE)
-        );
+        assert_eq!(item.kind, Some(lsp_types::CompletionItemKind::MODULE));
         assert!(labels(ctx, 5, 13).contains(&"value".to_owned()));
     });
 }

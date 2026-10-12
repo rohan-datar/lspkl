@@ -7,7 +7,7 @@
 
 mod harness;
 
-use tower_lsp_server::lsp_types::{HoverContents, MarkupKind};
+use lsp_types::{HoverContents, MarkupKind};
 
 use lsp_features::hover::hover;
 

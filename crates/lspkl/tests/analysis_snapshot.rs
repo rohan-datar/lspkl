@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fluent_uri::Uri;
-use lspkl::ServerState;
+use lspkl::Workspace;
 use lspkl::state::AnalysisSnapshot;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::{AnalysisContext, ImportResolution, NodeRef};
@@ -14,18 +14,23 @@ fn uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
 }
 
-fn prepare(state: &ServerState, path: &Path, source: &str) -> AnalysisSnapshot {
-    let file = state.file_manager.open(uri(path), source.into(), Some(1));
-    let module = state.parse_module(file).unwrap();
-    state.prepare_analysis(module).unwrap()
+fn prepare(state: &mut Workspace, path: &Path, source: &str) -> AnalysisSnapshot {
+    let file = open(state, uri(path), source.into(), Some(1));
+    let module = state.snapshot().parse_module(file).unwrap();
+    state.snapshot().prepare_analysis(module).unwrap()
 }
 
 #[test]
 fn uri_diagnostics_use_real_resolution_for_single_expression_extends_glob_and_package() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("valid.pkl"), "value = 1").unwrap();
-    let mut state = ServerState::new();
-    state.package_cache_dir = Some(temp.path().join("cache"));
+    let mut state = Workspace::new();
+    state.apply_settings(
+        lspkl::settings::WorkspaceSettings::parse(
+            serde_json::json!({ "cacheDir": temp.path().join("cache") }),
+        )
+        .unwrap(),
+    );
     let source = r#"extends "missing-parent.pkl"
 import "valid.pkl" as valid
 import "missing.pkl" as missing
@@ -33,7 +38,7 @@ import* "nothing-*.pkl" as empty
 import "package://example.test/uncached@1.0.0#/main.pkl" as package
 value = import("missing-expr.pkl")
 "#;
-    let snapshot = prepare(&state, &temp.path().join("main.pkl"), source);
+    let snapshot = prepare(&mut state, &temp.path().join("main.pkl"), source);
     assert_eq!(snapshot.imports.len(), 6);
     assert_eq!(
         snapshot
@@ -64,10 +69,11 @@ value = import("missing-expr.pkl")
             .count(),
         3
     );
+    let view = state.snapshot();
     let ctx = AnalysisContext::new(
         &snapshot.module.tree,
         snapshot.module.file_id,
-        state.base_module(),
+        view.base_module(),
         &snapshot.trees,
         &snapshot.imports,
     );
@@ -117,18 +123,25 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
         "import \"../main.pkl\"\ndValue = 4\n",
     )
     .unwrap();
-    let state = ServerState::new();
-    let snapshot = prepare(&state, &dir.join("main.pkl"), main);
+    let mut state = Workspace::new();
+    let snapshot = prepare(&mut state, &dir.join("main.pkl"), main);
+    let view = state.snapshot();
     let ctx = AnalysisContext::new(
         &snapshot.module.tree,
         snapshot.module.file_id,
-        state.base_module(),
+        view.base_module(),
         &snapshot.trees,
         &snapshot.imports,
     );
 
     assert_eq!(snapshot.trees.len(), 4);
-    let id_for = |path: &str| state.file_registry.lock().register(&uri(&dir.join(path)));
+    let id_for = |path: &str| {
+        state
+            .snapshot()
+            .file_registry
+            .lock()
+            .register(&uri(&dir.join(path)))
+    };
     let expected_edges = [
         ("main.pkl", 0, "sub/b.pkl"),
         ("main.pkl", 1, "sub/c.pkl"),
@@ -163,8 +176,12 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
         ("shared/d.pkl", "dValue"),
     ] {
         let url = uri(&dir.join(path));
-        let file = state.file_manager.get(&url).expect("reachable file loaded");
-        let id = state.file_registry.lock().register(&url);
+        let file = state
+            .snapshot()
+            .file_manager
+            .get(&url)
+            .expect("reachable file loaded");
+        let id = state.snapshot().file_registry.lock().register(&url);
         let tree = ctx.tree_for(id).expect("reachable tree belongs to request");
         assert_eq!(property_name(tree), expected);
         assert!(Arc::ptr_eq(
@@ -183,14 +200,15 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("good.pkl"), "goodValue = 1\n").unwrap();
     fs::write(temp.path().join("glob-only.pkl"), "globValue = 2\n").unwrap();
-    let state = ServerState::new();
-    state.file_manager.open(
+    let mut state = Workspace::new();
+    open(
+        &mut state,
         uri(&temp.path().join("unrelated.pkl")),
         "unrelatedValue = 3\n".into(),
         Some(1),
     );
     let snapshot = prepare(
-        &state,
+        &mut state,
         &temp.path().join("main.pkl"),
         "import \"./good.pkl\"\nimport \"./missing.pkl\"\nimport \"ftp://example.com/remote.pkl\"\nimport* \"./glob-only.pkl\"\nmainValue = 0\n",
     );
@@ -203,6 +221,7 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
 
     assert_eq!(names, ["globValue", "goodValue", "mainValue"]);
     let good_id = state
+        .snapshot()
         .file_registry
         .lock()
         .register(&uri(&temp.path().join("good.pkl")));
@@ -212,6 +231,7 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
         .child(NodeId::ROOT, |kind| matches!(kind, NodeKind::Import))
         .unwrap();
     let glob_id = state
+        .snapshot()
         .file_registry
         .lock()
         .register(&uri(&temp.path().join("glob-only.pkl")));
@@ -259,23 +279,24 @@ fn later_requests_see_editor_updates_without_replacing_previous_import_snapshots
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("library.pkl");
     fs::write(&target, "diskValue = 0\n").unwrap();
-    let state = ServerState::new();
-    let opened = state
-        .file_manager
-        .open(uri(&target), "oldValue = 1\n".into(), Some(1));
-    let root = state.file_manager.open(
+    let mut state = Workspace::new();
+    let opened = open(&mut state, uri(&target), "oldValue = 1\n".into(), Some(1));
+    let root = open(
+        &mut state,
         uri(&temp.path().join("main.pkl")),
         "import \"./library.pkl\"\nmainValue = 0\n".into(),
         Some(1),
     );
     let before = state
-        .prepare_analysis(state.parse_module(Arc::clone(&root)).unwrap())
+        .snapshot()
+        .prepare_analysis(state.snapshot().parse_module(Arc::clone(&root)).unwrap())
         .unwrap();
-    let imported_id = state.file_registry.lock().register(&opened.url);
+    let imported_id = state.snapshot().file_registry.lock().register(&opened.url);
+    let view = state.snapshot();
     let before_ctx = AnalysisContext::new(
         &before.module.tree,
         before.module.file_id,
-        state.base_module(),
+        view.base_module(),
         &before.trees,
         &before.imports,
     );
@@ -284,17 +305,16 @@ fn later_requests_see_editor_updates_without_replacing_previous_import_snapshots
         "oldValue"
     );
 
-    state
-        .file_manager
-        .update(&opened.url, "newValue = 2\n".into(), Some(2))
-        .unwrap();
+    change(&mut state, &opened.url, "newValue = 2\n", 2);
     let after = state
-        .prepare_analysis(state.parse_module(root).unwrap())
+        .snapshot()
+        .prepare_analysis(state.snapshot().parse_module(root).unwrap())
         .unwrap();
+    let view = state.snapshot();
     let after_ctx = AnalysisContext::new(
         &after.module.tree,
         after.module.file_id,
-        state.base_module(),
+        view.base_module(),
         &after.trees,
         &after.imports,
     );
@@ -313,4 +333,171 @@ fn later_requests_see_editor_updates_without_replacing_previous_import_snapshots
         &before.trees[&imported_id],
         &after.trees[&imported_id]
     ));
+}
+
+fn open(
+    state: &mut Workspace,
+    url: Uri<String>,
+    text: String,
+    version: Option<i32>,
+) -> Arc<pkl_vfs::VirtualFile> {
+    state
+        .apply_open(lsp_types::DidOpenTextDocumentParams {
+            text_document: lsp_types::TextDocumentItem {
+                uri: url.as_str().parse().unwrap(),
+                language_id: "pkl".into(),
+                version: version.unwrap_or(1),
+                text,
+            },
+        })
+        .unwrap();
+    state.snapshot().document(url.as_str()).unwrap()
+}
+
+fn change(state: &mut Workspace, url: &Uri<String>, text: &str, version: i32) {
+    state
+        .apply_change(lsp_types::DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: url.as_str().parse().unwrap(),
+                version,
+            },
+            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: text.into(),
+            }],
+        })
+        .unwrap();
+}
+
+#[test]
+fn captured_buffers_drive_import_analysis_even_after_edit_close_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root_uri = uri(&temp.path().join("main.pkl"));
+    let target_uri = uri(&temp.path().join("library.pkl"));
+    let mut state = Workspace::new();
+    open(
+        &mut state,
+        root_uri.clone(),
+        r#"import "./library.pkl"
+rootBefore = 1
+"#
+        .into(),
+        Some(1),
+    );
+    open(
+        &mut state,
+        target_uri.clone(),
+        "importBefore = 1
+"
+        .into(),
+        Some(1),
+    );
+    let captured = state.snapshot();
+    change(
+        &mut state,
+        &root_uri,
+        r#"import "./library.pkl"
+rootAfter = 2
+"#,
+        2,
+    );
+    change(
+        &mut state,
+        &target_uri,
+        "importAfter = 2
+",
+        2,
+    );
+    state
+        .apply_close(lsp_types::DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: target_uri.as_str().parse().unwrap(),
+            },
+        })
+        .unwrap();
+    open(
+        &mut state,
+        target_uri.clone(),
+        "reopened = 3
+"
+        .into(),
+        Some(3),
+    );
+    // Parse for the first time after all writes: no pre-parsed graph hides epoch leaks.
+    let old = captured
+        .open_document_analysis(root_uri.as_str())
+        .unwrap()
+        .unwrap();
+    let new = state
+        .snapshot()
+        .open_document_analysis(root_uri.as_str())
+        .unwrap()
+        .unwrap();
+    let target_id = captured.file_registry.lock().register(&target_uri);
+    assert_eq!(property_name(&old.module.tree), "rootBefore");
+    assert_eq!(property_name(&old.trees[&target_id]), "importBefore");
+    assert_eq!(old.module.file.version(), Some(1));
+    assert_eq!(
+        captured.document(target_uri.as_str()).unwrap().version(),
+        Some(1)
+    );
+    assert_eq!(property_name(&new.module.tree), "rootAfter");
+    assert_eq!(property_name(&new.trees[&target_id]), "reopened");
+}
+
+#[test]
+fn closing_a_saved_import_reloads_disk_instead_of_a_pre_open_cache_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("library.pkl");
+    let target_uri = uri(&target);
+    let root_uri = uri(&temp.path().join("main.pkl"));
+    fs::write(&target, "diskBefore = 0\n").unwrap();
+    let mut workspace = Workspace::new();
+    let before = prepare(
+        &mut workspace,
+        &temp.path().join("main.pkl"),
+        "import \"./library.pkl\"\nroot = 1\n",
+    );
+    let target_id = workspace
+        .snapshot()
+        .file_registry
+        .lock()
+        .register(&target_uri);
+    assert_eq!(property_name(&before.trees[&target_id]), "diskBefore");
+    open(
+        &mut workspace,
+        target_uri.clone(),
+        "savedAfter = 2\n".into(),
+        Some(1),
+    );
+    let captured = workspace.snapshot();
+    fs::write(&target, "savedAfter = 2\n").unwrap();
+    workspace
+        .apply_save(lsp_types::DidSaveTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: target_uri.as_str().parse().unwrap(),
+            },
+            text: None,
+        })
+        .unwrap();
+    workspace
+        .apply_close(lsp_types::DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: target_uri.as_str().parse().unwrap(),
+            },
+        })
+        .unwrap();
+    let after = workspace
+        .snapshot()
+        .open_document_analysis(root_uri.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(property_name(&after.trees[&target_id]), "savedAfter");
+    let pinned = captured
+        .open_document_analysis(root_uri.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(property_name(&pinned.trees[&target_id]), "savedAfter");
+    assert_eq!(property_name(&before.trees[&target_id]), "diskBefore");
 }

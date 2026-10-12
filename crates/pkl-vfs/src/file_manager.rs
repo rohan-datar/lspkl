@@ -48,7 +48,8 @@ pub enum FileError {
 /// Owns every `VirtualFile` the server is currently tracking.
 #[derive(Debug)]
 pub struct FileManager {
-    files: DashMap<Uri<String>, Arc<VirtualFile>>,
+    files: Arc<DashMap<Uri<String>, Arc<VirtualFile>>>,
+    open_documents: Option<Arc<std::collections::HashMap<Uri<String>, Arc<VirtualFile>>>>,
     cache_dir: RwLock<PathBuf>,
     client: RwLock<Option<reqwest::blocking::Client>>,
 }
@@ -66,9 +67,24 @@ impl From<(fluent_uri::ParseError, String)> for FileError {
 }
 
 impl FileManager {
+    /// Pin editor buffers while sharing the loader cache. Construct on workspace
+    /// writes, so capturing a request only clones the resulting Arc.
+    pub fn with_open_documents(
+        &self,
+        open_documents: Arc<std::collections::HashMap<Uri<String>, Arc<VirtualFile>>>,
+        cache_dir: PathBuf,
+    ) -> Self {
+        Self {
+            files: Arc::clone(&self.files),
+            open_documents: Some(open_documents),
+            cache_dir: RwLock::new(cache_dir),
+            client: RwLock::new(self.client.read().unwrap().clone()),
+        }
+    }
     pub fn new() -> Self {
         Self {
-            files: DashMap::new(),
+            files: Arc::new(DashMap::new()),
+            open_documents: None,
             cache_dir: RwLock::new(crate::sources::default_cache()),
             client: RwLock::new(None),
         }
@@ -86,6 +102,11 @@ impl FileManager {
     /// Get a known file without disk or network access.
     pub fn get(&self, url: &Uri<String>) -> Option<Arc<VirtualFile>> {
         let url = crate::effective_uri(url).ok()?;
+        if let Some(documents) = &self.open_documents
+            && let Some(file) = documents.get(&url)
+        {
+            return Some(Arc::clone(file));
+        }
         self.files.get(&url).map(|f| f.value().clone())
     }
 
@@ -223,7 +244,7 @@ impl FileManager {
     /// FileManager itself stays sync to keep tests easy.
     pub fn parse(&self, url: &Uri<String>) -> Result<Arc<SyntaxTree>, FileError> {
         let url = crate::effective_uri(url)?;
-        let Some(file) = self.files.get(&url) else {
+        let Some(file) = self.get(&url) else {
             return Err(FileError::NotOpen(url));
         };
 

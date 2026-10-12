@@ -1,7 +1,7 @@
 //! The protocol boundary between encoded LSP positions and UTF-8 byte offsets.
 
+use lsp_types::{Position, Range};
 use pkl_syntax::{LineCol, TextRange, TextSize, WideEncoding, WideLineCol, ast::SyntaxTree};
-use tower_lsp_server::lsp_types::{Position, Range};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PositionEncoding {

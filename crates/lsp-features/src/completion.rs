@@ -6,9 +6,7 @@
 //! TODO(completion-doc-link): `DocCommentMemberLinkCompletionProvider` is
 //! deferred
 
-use tower_lsp_server::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, InsertTextFormat, Range,
-};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, InsertTextFormat, Range};
 
 use pkl_syntax::{TextRange, TextSize};
 use pkl_types::AnalysisContext;

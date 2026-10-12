@@ -1,7 +1,7 @@
 //! Implement-method completion: offer abstract superclass methods that the
 //! current class doesn't implement yet.
 
-use tower_lsp_server::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
+use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::resolver::resolve_type_name;

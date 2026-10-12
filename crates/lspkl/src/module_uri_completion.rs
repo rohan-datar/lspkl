@@ -4,24 +4,24 @@ use std::path::Path;
 
 use fluent_uri::Uri;
 use lsp_features::positions::PositionConverter;
+use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation,
+    MarkupContent, MarkupKind, TextEdit,
+};
 use pkl_project::import_resolver::ImportResolver;
 use pkl_project::modulepath::ModulepathResolver;
 use pkl_syntax::ast::NodeKind;
 use pkl_syntax::{TextRange, TextSize};
-use tower_lsp_server::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation,
-    MarkupContent, MarkupKind, TextEdit,
-};
 
-use crate::state::{AnalysisSnapshot, ServerState};
+use crate::state::{AnalysisSnapshot, Snapshot};
 
 pub fn completion(
-    state: &ServerState,
+    state: &Snapshot,
     analysis: &AnalysisSnapshot,
     offset: TextSize,
 ) -> Option<CompletionResponse> {
     let tree = &analysis.module.tree;
-    let positions = PositionConverter::new(tree, *state.position_encoding.read());
+    let positions = PositionConverter::new(tree, state.position_encoding);
     let mut node = tree.find_at(offset)?;
     let offset = usize::from(offset);
     while !tree.kind(node).is_module_uri_owner() {
@@ -61,15 +61,10 @@ pub fn completion(
     let project = pkl_vfs::url_to_path(&source.url)
         .ok()
         .and_then(|path| state.project_manager.lock().get_pkl_project_shared(&path));
-    let settings = state.settings.read().clone();
-    let cache: std::borrow::Cow<'_, Path> = settings
-        .resolved_cache_dir
-        .as_deref()
-        .or(state.package_cache_dir.as_deref())
-        .map(std::borrow::Cow::Borrowed)
-        .unwrap_or_else(|| std::borrow::Cow::Owned(state.file_manager.cache_dir()));
+    let settings = &state.settings;
+    let cache = settings.effective_cache_dir();
     let resolver =
-        ImportResolver::with_settings(&state.file_manager, &settings.module_paths, &cache);
+        ImportResolver::with_settings(&state.file_manager, &settings.module_paths, cache);
     let modulepath =
         ModulepathResolver::with_modulepaths(&state.file_manager, &settings.module_paths);
     let mut items = BTreeMap::new();
@@ -101,7 +96,7 @@ pub fn completion(
             }
         }
     } else if prefix.starts_with("package://") && !prefix.contains('#') {
-        let packages = cached_packages(&cache);
+        let packages = cached_packages(cache);
         if let Some((base, version_prefix)) = prefix.rsplit_once('@') {
             for package in packages {
                 if let Some((candidate_base, version)) = package.rsplit_once('@')
@@ -264,7 +259,7 @@ pub fn completion(
 }
 
 /// Fetch and parse the candidate only when the client requests its documentation.
-pub fn resolve(state: &ServerState, mut item: CompletionItem) -> CompletionItem {
+pub fn resolve(state: &Snapshot, mut item: CompletionItem) -> CompletionItem {
     let Some(data) = item
         .data
         .as_ref()
@@ -367,7 +362,7 @@ fn logical_children(
         .map(|(name, (folder, uri))| (name, folder, uri))
         .collect()
 }
-fn children(state: &ServerState, directory: &Uri<String>) -> Vec<(String, bool, Uri<String>)> {
+fn children(state: &Snapshot, directory: &Uri<String>) -> Vec<(String, bool, Uri<String>)> {
     if let Ok(path) = pkl_vfs::url_to_path(directory) {
         return std::fs::read_dir(path)
             .into_iter()
@@ -538,7 +533,7 @@ fn decode_cache_path(path: &str, encoded: bool) -> Option<String> {
     Some(value)
 }
 fn modulepath_children(
-    state: &ServerState,
+    state: &Snapshot,
     modulepath: &ModulepathResolver<'_>,
     parent: &str,
     project: Option<&pkl_project::PklProject>,

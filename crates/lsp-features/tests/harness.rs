@@ -31,9 +31,6 @@ pub fn offset(tree: &SyntaxTree, line: u32, column: u32) -> pkl_syntax::TextSize
         .unwrap()
 }
 
-pub fn range(
-    tree: &SyntaxTree,
-    range: pkl_syntax::TextRange,
-) -> tower_lsp_server::lsp_types::Range {
+pub fn range(tree: &SyntaxTree, range: pkl_syntax::TextRange) -> lsp_types::Range {
     lsp_features::positions::PositionConverter::new(tree, Default::default()).range(range)
 }

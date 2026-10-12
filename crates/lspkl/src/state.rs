@@ -1,8 +1,6 @@
 //! Process-wide state shared across LSP handlers.
 
 use std::collections::{HashMap, hash_map::Entry};
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock};
 
 use lsp_features::positions::PositionEncoding;
@@ -33,93 +31,278 @@ pub struct AnalysisSnapshot {
 
 type PendingModule = (FileId, Arc<VirtualFile>, Option<Arc<PklProject>>);
 
-pub struct ServerState {
-    pub file_manager: FileManager,
-    pub file_registry: parking_lot::Mutex<FileRegistry>,
-    base_module: LazyLock<BaseModule>,
-    diagnostics: LazyLock<DiagnosticsEngine>,
-    pub project_manager: parking_lot::Mutex<pkl_project::project_manager::ProjectManager>,
-    pub package_manager: parking_lot::Mutex<pkl_project::package_manager::PackageManager>,
-    /// Default package cache; live workspace settings may override it.
-    pub package_cache_dir: Option<PathBuf>,
-    pub settings: parking_lot::RwLock<Arc<WorkspaceSettings>>,
-    pub client_configuration: AtomicBool,
-    /// Negotiated once during initialization; defaults to LSP UTF-16.
-    pub position_encoding: parking_lot::RwLock<PositionEncoding>,
-    pub(crate) open_documents:
-        parking_lot::Mutex<HashMap<FileId, Arc<tower_lsp_server::lsp_types::Uri>>>,
-    module_cache_dir: PathBuf,
+/// Exclusive notification-side workspace owner. Requests use immutable snapshots.
+#[derive(Debug)]
+pub struct Workspace {
+    current: Snapshot,
+    buffers: Arc<HashMap<fluent_uri::Uri<String>, Arc<VirtualFile>>>,
 }
 
-impl Default for ServerState {
-    fn default() -> Self {
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-        let package_cache_dir = home.map(|dir| PathBuf::from(dir).join(".pkl/cache"));
-        let file_manager = FileManager::default();
-        if let Some(cache_dir) = &package_cache_dir {
-            file_manager.set_cache_dir(cache_dir.clone());
-        }
-        let module_cache_dir = file_manager.cache_dir();
-        Self {
-            file_manager,
-            file_registry: parking_lot::Mutex::new(FileRegistry::default()),
-            base_module: LazyLock::new(|| {
-                BaseModule::load_embedded().expect("embedded pkl:base must load")
-            }),
-            diagnostics: LazyLock::new(DiagnosticsEngine::default),
-            project_manager: parking_lot::Mutex::new(Default::default()),
-            package_manager: parking_lot::Mutex::new(
-                pkl_project::package_manager::PackageManager::new(Default::default()),
-            ),
-            package_cache_dir,
-            settings: parking_lot::RwLock::new(Arc::new(WorkspaceSettings::default())),
-            client_configuration: AtomicBool::new(false),
-            position_encoding: parking_lot::RwLock::new(PositionEncoding::default()),
-            open_documents: parking_lot::Mutex::new(HashMap::new()),
-            module_cache_dir,
-        }
-    }
+/// Cheap request capture. Open files and settings retain their captured epoch;
+/// loader/project/package caches remain shared until the later database cutover.
+#[derive(Clone)]
+pub struct Snapshot {
+    pub file_manager: Arc<FileManager>,
+    pub file_registry: Arc<parking_lot::Mutex<FileRegistry>>,
+    base_module: Arc<LazyLock<BaseModule>>,
+    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
+    pub project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
+    pub package_manager: Arc<parking_lot::Mutex<pkl_project::package_manager::PackageManager>>,
+    pub settings: Arc<WorkspaceSettings>,
+    pub client_configuration: bool,
+    pub position_encoding: PositionEncoding,
+    pub generation: u64,
+    pub open_documents: Arc<HashMap<FileId, Arc<lsp_types::Uri>>>,
+    buffers: Arc<HashMap<fluent_uri::Uri<String>, Arc<VirtualFile>>>,
 }
 
-impl std::fmt::Debug for ServerState {
+impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerState")
-            .field("file_manager", &self.file_manager)
+        f.debug_struct("Snapshot")
+            .field("generation", &self.generation)
             .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
 
-impl ServerState {
+impl Default for Workspace {
+    fn default() -> Self {
+        let settings = Arc::new(WorkspaceSettings::default());
+        let buffers = Arc::new(HashMap::new());
+        let file_manager = Arc::new(FileManager::new().with_open_documents(
+            Arc::clone(&buffers),
+            settings.effective_cache_dir().to_owned(),
+        ));
+        Self {
+            buffers: Arc::clone(&buffers),
+            current: Snapshot {
+                file_manager,
+                file_registry: Arc::new(parking_lot::Mutex::new(FileRegistry::default())),
+                base_module: Arc::new(LazyLock::new(|| {
+                    BaseModule::load_embedded().expect("embedded pkl:base must load")
+                })),
+                diagnostics: Arc::new(LazyLock::new(DiagnosticsEngine::default)),
+                project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
+                package_manager: Arc::new(parking_lot::Mutex::new(
+                    pkl_project::package_manager::PackageManager::new(Default::default()),
+                )),
+                settings,
+                client_configuration: false,
+                position_encoding: PositionEncoding::default(),
+                generation: 0,
+                open_documents: Arc::new(HashMap::new()),
+                buffers,
+            },
+        }
+    }
+}
+
+impl Workspace {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn base_module(&self) -> &BaseModule {
-        &self.base_module
+    /// No parsing, I/O, map traversal, or source copies occurs during capture.
+    pub fn snapshot(&self) -> Snapshot {
+        self.current.clone()
     }
 
-    pub fn diagnostics(&self) -> &DiagnosticsEngine {
-        &self.diagnostics
+    pub fn invalidate_analysis(&mut self) {
+        self.current.generation += 1;
     }
 
-    pub fn apply_settings(&self, mut settings: WorkspaceSettings) {
+    fn refresh_buffers(&mut self) {
+        self.current.buffers = Arc::clone(&self.buffers);
+        self.current.file_manager = Arc::new(self.current.file_manager.with_open_documents(
+            Arc::clone(&self.buffers),
+            self.current.settings.effective_cache_dir().to_owned(),
+        ));
+        self.invalidate_analysis();
+    }
+
+    pub fn apply_open(
+        &mut self,
+        params: lsp_types::DidOpenTextDocumentParams,
+    ) -> Result<(), FileError> {
+        let document = params.text_document;
+        let url =
+            pkl_vfs::effective_uri(&fluent_uri::Uri::parse(document.uri.as_str().to_owned())?)?;
+        let origin = match url.scheme().as_str() {
+            "file" => pkl_vfs::Origin::Fs { url: url.clone() },
+            "pkl" => pkl_vfs::Origin::Stdlib,
+            "https" => pkl_vfs::Origin::Https,
+            "jar" => pkl_vfs::Origin::Jar,
+            _ => pkl_vfs::Origin::Ephemeral,
+        };
+        let file = Arc::new(VirtualFile::new(
+            url.clone(),
+            origin,
+            document.text,
+            Some(document.version),
+        ));
+        let id = self.current.file_id(&file);
+        Arc::make_mut(&mut self.buffers).insert(url, file);
+        Arc::make_mut(&mut self.current.open_documents).insert(id, Arc::new(document.uri));
+        self.refresh_buffers();
+        Ok(())
+    }
+
+    pub fn apply_change(
+        &mut self,
+        params: lsp_types::DidChangeTextDocumentParams,
+    ) -> Result<(), FileError> {
+        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(
+            params.text_document.uri.as_str().to_owned(),
+        )?)?;
+        let Some(file) = self.buffers.get(&url) else {
+            return Err(FileError::NotOpen(url));
+        };
+        let Some(change) = params.content_changes.into_iter().last() else {
+            return Ok(());
+        };
+        let updated = Arc::new(VirtualFile::new(
+            url.clone(),
+            file.origin.clone(),
+            change.text,
+            Some(params.text_document.version),
+        ));
+        Arc::make_mut(&mut self.buffers).insert(url, updated);
+        self.refresh_buffers();
+        Ok(())
+    }
+
+    pub fn apply_close(
+        &mut self,
+        params: lsp_types::DidCloseTextDocumentParams,
+    ) -> Result<(), FileError> {
+        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(
+            params.text_document.uri.as_str().to_owned(),
+        )?)?;
+        // A pre-open disk entry may predate a save made while this buffer was open.
+        self.current.file_manager.close(&url);
+        if let Some(file) = Arc::make_mut(&mut self.buffers).remove(&url) {
+            let id = self.current.file_id(&file);
+            Arc::make_mut(&mut self.current.open_documents).remove(&id);
+            self.refresh_buffers();
+        }
+        Ok(())
+    }
+
+    // Full-sync save does not replace the editor's versioned buffer.
+    pub fn apply_save(
+        &mut self,
+        _params: lsp_types::DidSaveTextDocumentParams,
+    ) -> Result<(), FileError> {
+        Ok(())
+    }
+
+    pub fn apply_settings(&mut self, mut settings: WorkspaceSettings) {
         let cli = PklCli {
             binary_path: settings.cli.path.clone(),
         };
         {
-            let mut projects = self.project_manager.lock();
+            let mut projects = self.current.project_manager.lock();
             settings.resolve_paths(projects.workspace_folders());
             projects.configure(cli.clone(), settings.projects.excluded_directories.clone());
         }
-        self.package_manager.lock().set_cli(cli);
-        let cache_dir = settings
-            .resolved_cache_dir
+        self.current.package_manager.lock().set_cli(cli);
+        self.current.settings = Arc::new(settings);
+        self.refresh_buffers();
+    }
+
+    pub fn apply_initialize(&mut self, params: &lsp_types::InitializeParams) {
+        self.current.position_encoding = if params
+            .capabilities
+            .general
             .as_ref()
-            .or(self.package_cache_dir.as_ref())
-            .unwrap_or(&self.module_cache_dir);
-        self.file_manager.set_cache_dir(cache_dir.clone());
-        *self.settings.write() = Arc::new(settings);
+            .and_then(|general| general.position_encodings.as_ref())
+            .is_some_and(|encodings| encodings.contains(&lsp_types::PositionEncodingKind::UTF8))
+        {
+            PositionEncoding::Utf8
+        } else {
+            PositionEncoding::Utf16
+        };
+        self.current.client_configuration = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|caps| caps.configuration)
+            .unwrap_or(false);
+        #[allow(deprecated)]
+        let uris: Vec<_> = params
+            .workspace_folders
+            .as_ref()
+            .map(|folders| folders.iter().map(|folder| &folder.uri).collect())
+            .unwrap_or_else(|| params.root_uri.iter().collect());
+        let folders = uris
+            .into_iter()
+            .filter_map(|uri| fluent_uri::Uri::parse(uri.as_str().to_owned()).ok())
+            .filter_map(|uri| url_to_path(&uri).ok())
+            .collect();
+        self.current.project_manager.lock().initialize(folders);
+        match params
+            .initialization_options
+            .clone()
+            .map(WorkspaceSettings::parse)
+        {
+            Some(Ok(settings)) => self.apply_settings(settings),
+            Some(Err(error)) => tracing::error!(?error, "invalid initialization settings"),
+            None => {}
+        }
+    }
+
+    pub fn apply_workspace_folders(&mut self, params: lsp_types::DidChangeWorkspaceFoldersParams) {
+        let mut folders = self
+            .current
+            .project_manager
+            .lock()
+            .workspace_folders()
+            .to_vec();
+        for folder in params.event.removed {
+            if let Ok(uri) = fluent_uri::Uri::parse(folder.uri.as_str().to_owned())
+                && let Ok(path) = url_to_path(&uri)
+            {
+                folders.retain(|existing| existing != &path);
+            }
+        }
+        for folder in params.event.added {
+            if let Ok(uri) = fluent_uri::Uri::parse(folder.uri.as_str().to_owned())
+                && let Ok(path) = url_to_path(&uri)
+                && !folders.contains(&path)
+            {
+                folders.push(path);
+            }
+        }
+        self.current.project_manager.lock().initialize(folders);
+        let settings = self
+            .current
+            .settings
+            .rebind(self.current.project_manager.lock().workspace_folders());
+        self.apply_settings(settings);
+    }
+}
+
+impl Snapshot {
+    pub fn base_module(&self) -> &BaseModule {
+        &self.base_module
+    }
+    pub fn diagnostics(&self) -> &DiagnosticsEngine {
+        &self.diagnostics
+    }
+
+    /// Only captured editor buffers qualify as request roots, never loader entries.
+    pub fn document(&self, uri: &str) -> Option<Arc<VirtualFile>> {
+        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(uri.to_owned()).ok()?).ok()?;
+        self.buffers.get(&url).cloned()
+    }
+
+    pub fn open_document_analysis(&self, uri: &str) -> Result<Option<AnalysisSnapshot>, FileError> {
+        self.document(uri)
+            .map(|file| {
+                self.parse_module(file)
+                    .and_then(|module| self.prepare_analysis(module))
+            })
+            .transpose()
     }
 
     fn project_for(&self, source: &VirtualFile) -> Option<Arc<PklProject>> {
@@ -139,12 +322,8 @@ impl ServerState {
         }
         let literal = tree.child(import, NodeKind::is_string_literal)?;
         let uri = tree.escaped_string_literal(literal)?;
-        let settings = Arc::clone(&self.settings.read());
-        let cache_dir = settings
-            .resolved_cache_dir
-            .as_ref()
-            .or(self.package_cache_dir.as_ref())
-            .unwrap_or(&self.module_cache_dir);
+        let settings = &self.settings;
+        let cache_dir = settings.effective_cache_dir();
         let project = self.project_for(source);
         ImportResolver::with_settings(&self.file_manager, &settings.module_paths, cache_dir)
             .resolve_file(&uri, source, project.as_deref())
@@ -175,7 +354,7 @@ impl ServerState {
         let tree = if file_id == FileId::BASE {
             Arc::clone(self.base_module().tree())
         } else {
-            self.file_manager.parse(&file.url)?
+            file.parsed_tree()?
         };
         Ok(ParsedModule {
             file_id,
@@ -188,12 +367,8 @@ impl ServerState {
     /// Package/remote descendants retain the importing project's dependency context.
     /// Local files select their own nearest project. No project lock spans I/O.
     pub fn prepare_analysis(&self, module: ParsedModule) -> Result<AnalysisSnapshot, FileError> {
-        let settings = Arc::clone(&self.settings.read());
-        let cache_dir = settings
-            .resolved_cache_dir
-            .as_ref()
-            .or(self.package_cache_dir.as_ref())
-            .unwrap_or(&self.module_cache_dir);
+        let settings = &self.settings;
+        let cache_dir = settings.effective_cache_dir();
         let resolver =
             ImportResolver::with_settings(&self.file_manager, &settings.module_paths, cache_dir);
         let mut trees = HashMap::new();
@@ -274,7 +449,7 @@ impl ServerState {
             let tree = if file_id == FileId::BASE {
                 Arc::clone(self.base_module().tree())
             } else {
-                self.file_manager.parse(&file.url)?
+                file.parsed_tree()?
             };
             entry.insert(tree);
             pending.push((file_id, file, context.clone()));

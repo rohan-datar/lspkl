@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(unix)]
-use pkl_project::cli::PklCli;
+use lspkl::settings::WorkspaceSettings;
 
-use lspkl::{PklBackend, ServerState};
+use lspkl::{PklBackend, Workspace};
+use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower_lsp_server::{LspService, Server};
 
@@ -49,10 +50,11 @@ async fn sync_projects_round_trip_via_jsonrpc() {
     fs::set_permissions(&staged, permissions).unwrap();
     fs::rename(staged, &binary).unwrap();
 
-    let state = Arc::new(ServerState::new());
-    *state.project_manager.lock() = pkl_project::project_manager::ProjectManager::new(PklCli {
-        binary_path: Some(binary),
-    });
+    let state = Arc::new(Mutex::new(Workspace::new()));
+    state.lock().apply_settings(
+        WorkspaceSettings::parse(serde_json::json!({"cli": {"path": binary}})).unwrap(),
+    );
+
     let service_state = Arc::clone(&state);
     let (service, socket) =
         LspService::build(move |client| PklBackend::new(Arc::clone(&service_state), Some(client)))
@@ -97,7 +99,16 @@ async fn sync_projects_round_trip_via_jsonrpc() {
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
     assert_eq!(response["id"], 2);
     assert!(response.get("error").is_none(), "{response}");
-    assert_eq!(state.project_manager.lock().projects().count(), 1);
+    assert_eq!(
+        state
+            .lock()
+            .snapshot()
+            .project_manager
+            .lock()
+            .projects()
+            .count(),
+        1
+    );
     assert!(workspace.join(".lspkl/projects.json").is_file());
     assert_eq!(
         fs::read_to_string(&calls)
@@ -146,12 +157,16 @@ async fn download_package_round_trip_via_jsonrpc() {
     fs::set_permissions(&binary, permissions).unwrap();
     let cache_dir = temp.path().join("cache");
 
-    let mut state = ServerState::new();
-    state.package_cache_dir = Some(cache_dir.clone());
-    *state.package_manager.lock() = pkl_project::package_manager::PackageManager::new(PklCli {
-        binary_path: Some(binary),
-    });
-    let state = Arc::new(state);
+    let mut state = Workspace::new();
+
+    state.apply_settings(
+        WorkspaceSettings::parse(
+            serde_json::json!({"cacheDir": cache_dir, "cli": {"path": binary}}),
+        )
+        .unwrap(),
+    );
+
+    let state = Arc::new(Mutex::new(state));
     let (service, socket) =
         LspService::build(move |client| PklBackend::new(Arc::clone(&state), Some(client)))
             .custom_method("pkl/downloadPackage", PklBackend::download_package)

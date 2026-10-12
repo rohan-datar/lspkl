@@ -7,9 +7,9 @@
 //! (hover, goto-definition) additionally get positive end-to-end tests that
 //! `did_open` a document first.
 
+use lsp_types::*;
 use lspkl::PklBackend;
 use tower_lsp_server::LanguageServer;
-use tower_lsp_server::lsp_types::*;
 
 fn pkl_url(name: &str) -> Uri {
     format!("inmemory:///{name}").parse().unwrap()

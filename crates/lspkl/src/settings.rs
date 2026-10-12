@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspaceSettings {
     pub modulepath: Vec<PathBuf>,
@@ -17,6 +17,27 @@ pub struct WorkspaceSettings {
     pub module_paths: Vec<PathBuf>,
     #[serde(skip)]
     pub resolved_cache_dir: Option<PathBuf>,
+    /// Initialized once, and retained when workspace-relative paths are rebound.
+    #[serde(skip)]
+    pub fallback_cache_dir: PathBuf,
+}
+
+impl Default for WorkspaceSettings {
+    fn default() -> Self {
+        Self {
+            modulepath: Vec::new(),
+            cli: CliSettings::default(),
+            projects: ProjectSettings::default(),
+            formatter: FormatterSettings::default(),
+            cache_dir: None,
+            module_paths: Vec::new(),
+            resolved_cache_dir: None,
+            fallback_cache_dir: std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".pkl/cache"))
+                .unwrap_or_else(pkl_vfs::default_cache),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -99,12 +120,90 @@ impl WorkspaceSettings {
             cache_dir: self.cache_dir.clone(),
             module_paths: Vec::new(),
             resolved_cache_dir: None,
+            fallback_cache_dir: self.fallback_cache_dir.clone(),
         };
         settings.resolve_paths(workspaces);
         settings
     }
 
+    /// Borrow the resolved override or the fallback captured when settings were created.
+    pub fn effective_cache_dir(&self) -> &Path {
+        self.resolved_cache_dir
+            .as_deref()
+            .unwrap_or(&self.fallback_cache_dir)
+    }
+
     pub fn cli_path(&self) -> &Path {
         self.cli.path.as_deref().unwrap_or_else(|| Path::new("pkl"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkspaceSettings;
+    use std::path::PathBuf;
+
+    #[test]
+    fn deserialization_initializes_fallback_and_ignores_runtime_fields() {
+        let settings = WorkspaceSettings::parse(serde_json::json!({
+            "pkl": {
+                "cacheDir": "custom-cache",
+                "fallbackCacheDir": "untrusted-fallback",
+                "resolvedCacheDir": "untrusted-resolved"
+            }
+        }))
+        .unwrap();
+        assert_eq!(settings.cache_dir, Some(PathBuf::from("custom-cache")));
+        assert_eq!(settings.resolved_cache_dir, None);
+        assert_eq!(
+            settings.fallback_cache_dir,
+            WorkspaceSettings::default().fallback_cache_dir,
+        );
+        assert_eq!(settings.effective_cache_dir(), settings.fallback_cache_dir);
+    }
+
+    #[test]
+    fn resolved_override_wins_and_rebind_preserves_fallback() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let fallback = first.path().join("captured-fallback");
+        let mut settings = WorkspaceSettings {
+            cache_dir: Some(PathBuf::from("custom-cache")),
+            fallback_cache_dir: fallback.clone(),
+            ..Default::default()
+        };
+        settings.resolve_paths(&[first.path().to_owned()]);
+        assert_eq!(
+            settings.effective_cache_dir(),
+            first.path().join("custom-cache"),
+        );
+
+        let rebound = settings.rebind(&[second.path().to_owned()]);
+        assert_eq!(rebound.fallback_cache_dir, fallback);
+        assert_eq!(
+            rebound.effective_cache_dir(),
+            second.path().join("custom-cache"),
+        );
+
+        settings.cache_dir = None;
+        let rebound = settings.rebind(&[second.path().to_owned()]);
+        assert_eq!(rebound.effective_cache_dir(), fallback);
+    }
+
+    #[test]
+    fn absolute_override_is_not_rebound() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        let settings = WorkspaceSettings {
+            cache_dir: Some(cache.clone()),
+            ..Default::default()
+        };
+        assert_eq!(settings.rebind(&[]).effective_cache_dir(), cache);
+        assert_eq!(
+            settings
+                .rebind(&[root.path().join("other")])
+                .effective_cache_dir(),
+            cache,
+        );
     }
 }

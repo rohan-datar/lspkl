@@ -484,3 +484,48 @@ async fn modulepath_archive_precedes_directory_for_completion_and_navigation() {
     );
     client.shutdown().await;
 }
+
+#[tokio::test]
+async fn close_reopen_during_edits_publishes_and_serves_the_new_epoch() {
+    let temp = tempfile::tempdir().unwrap();
+    let main = uri(&temp.path().join("reopened.pkl"));
+    let mut client = start(temp.path(), json!({})).await;
+    let old_source = "value: Int = \"wrong\"\nanswer = value\n";
+    open(&mut client, &main, old_source).await;
+    assert!(
+        !diagnostics(&mut client, &main).await["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for version in 2..42 {
+        client.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":old_source}]})).await;
+    }
+    client
+        .notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":main}}),
+        )
+        .await;
+    let source = "value: String = \"reopened\"\nanswer = value\n";
+    open(&mut client, &main, source).await;
+    loop {
+        let published = diagnostics(&mut client, &main).await;
+        if published["version"] == 1 && published["diagnostics"] == json!([]) {
+            break;
+        }
+    }
+    let hover = at(&mut client, "textDocument/hover", &main, source, "value").await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: String"),
+        "{hover}"
+    );
+    let contents = client
+        .request("pkl/fileContents", json!({"uri":main}))
+        .await;
+    assert_eq!(contents["result"], source);
+    client.shutdown().await;
+}
