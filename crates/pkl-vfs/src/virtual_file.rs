@@ -103,11 +103,21 @@ impl VirtualFile {
             .clone()
     }
 
-    /// Store a freshly parsed tree in the cache. Idempotent.
-    pub fn set_cached_tree(&self, tree: Arc<SyntaxTree>) {
-        self.state
+    /// Parse and cache under the same lock used to replace contents. An edit
+    /// cannot invalidate the cache between reading source and storing its tree.
+    pub(crate) fn parsed_tree(&self) -> Result<Arc<SyntaxTree>, pkl_syntax::ParseError> {
+        if let Some(tree) = self.cached_tree() {
+            return Ok(tree);
+        }
+        let mut state = self
+            .state
             .write()
-            .expect("virtual file state lock poisoned")
-            .tree = Some(tree);
+            .expect("virtual file state lock poisoned");
+        if let Some(tree) = &state.tree {
+            return Ok(Arc::clone(tree));
+        }
+        let tree = Arc::new(pkl_syntax::parse(&state.contents)?);
+        state.tree = Some(Arc::clone(&tree));
+        Ok(tree)
     }
 }

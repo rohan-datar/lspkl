@@ -1,3 +1,6 @@
+// Shared by tests and examples, each using a different subset of helpers.
+#![allow(dead_code)]
+
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -21,22 +24,67 @@ const STDERR_LIMIT: usize = 64 * 1024;
 pub struct LspClient {
     child: Child,
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    incoming: mpsc::UnboundedReceiver<Result<Value, String>>,
-    queued: VecDeque<Value>,
+    incoming: mpsc::UnboundedReceiver<Result<ObservedMessage, String>>,
+    queued: VecDeque<ObservedMessage>,
     stderr: Arc<Mutex<Vec<u8>>>,
     reader: JoinHandle<()>,
     stderr_reader: JoinHandle<()>,
-    next_id: u64,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
-async fn send(stdin: &AsyncMutex<ChildStdin>, message: &Value) -> std::io::Result<()> {
+/// Timestamped by the reader before consumer-side queuing.
+#[derive(Debug)]
+pub struct ObservedMessage {
+    pub message: Value,
+    pub received_at: Instant,
+}
+
+#[derive(Clone)]
+pub struct LspSender {
+    stdin: Arc<AsyncMutex<ChildStdin>>,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[derive(Clone, Copy)]
+pub struct PendingRequest {
+    pub id: u64,
+    pub sent_at: Instant,
+}
+
+impl LspSender {
+    /// Sends without waiting for a response; sent_at is after frame flush.
+    pub async fn start_request(&self, method: &str, params: Value) -> PendingRequest {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let sent_at = self
+            .write(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}))
+            .await;
+        PendingRequest { id, sent_at }
+    }
+
+    pub async fn notify(&self, method: &str, params: Value) -> Instant {
+        self.write(json!({"jsonrpc":"2.0", "method":method, "params":params}))
+            .await
+    }
+
+    async fn write(&self, message: Value) -> Instant {
+        timeout(WAIT, send(&self.stdin, &message))
+            .await
+            .expect("timed out writing LSP message")
+            .expect("failed writing LSP message")
+    }
+}
+
+async fn send(stdin: &AsyncMutex<ChildStdin>, message: &Value) -> std::io::Result<Instant> {
     let body = serde_json::to_vec(message)?;
     let mut stdin = stdin.lock().await;
     stdin
         .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
         .await?;
     stdin.write_all(&body).await?;
-    stdin.flush().await
+    stdin.flush().await?;
+    Ok(Instant::now())
 }
 
 impl LspClient {
@@ -128,7 +176,11 @@ impl LspClient {
                         }
                     }
                     Ok(message) => {
-                        if tx.send(Ok(message)).is_err() {
+                        let observed = ObservedMessage {
+                            message,
+                            received_at: Instant::now(),
+                        };
+                        if tx.send(Ok(observed)).is_err() {
                             break;
                         }
                     }
@@ -147,7 +199,7 @@ impl LspClient {
             stderr,
             reader,
             stderr_reader,
-            next_id: 1,
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
 
@@ -160,7 +212,7 @@ impl LspClient {
 
     async fn write(&self, value: Value) {
         match timeout(WAIT, send(&self.stdin, &value)).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(_)) => {}
             result => panic!(
                 "{}",
                 self.failure(&format!("writing LSP message failed: {result:?}"))
@@ -169,13 +221,13 @@ impl LspClient {
     }
 
     async fn matching(&mut self, description: &str, predicate: impl Fn(&Value) -> bool) -> Value {
-        if let Some(index) = self.queued.iter().position(&predicate) {
-            return self.queued.remove(index).unwrap();
+        if let Some(index) = self.queued.iter().position(|item| predicate(&item.message)) {
+            return self.queued.remove(index).unwrap().message;
         }
         let deadline = Instant::now() + WAIT;
         loop {
             match timeout_at(deadline, self.incoming.recv()).await {
-                Ok(Some(Ok(message))) if predicate(&message) => return message,
+                Ok(Some(Ok(message))) if predicate(&message.message) => return message.message,
                 Ok(Some(Ok(message))) => self.queued.push_back(message),
                 result => panic!(
                     "{}",
@@ -190,8 +242,9 @@ impl LspClient {
 
     /// Returns the entire response, including JSON-RPC errors.
     pub async fn request(&mut self, method: &str, params: Value) -> Value {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.write(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}))
             .await;
         self.matching(method, |value| value["id"] == id).await
@@ -205,6 +258,28 @@ impl LspClient {
     pub async fn notification(&mut self, method: &str) -> Value {
         self.matching(method, |value| value["method"] == method)
             .await
+    }
+
+    pub fn sender(&self) -> LspSender {
+        LspSender {
+            stdin: Arc::clone(&self.stdin),
+            next_id: Arc::clone(&self.next_id),
+        }
+    }
+
+    /// Drains queued messages first, retaining original receipt timestamps.
+    pub async fn observe_until(&mut self, deadline: Instant) -> Option<ObservedMessage> {
+        if let Some(message) = self.queued.pop_front() {
+            return Some(message);
+        }
+        match timeout_at(deadline, self.incoming.recv()).await {
+            Ok(Some(Ok(message))) => Some(message),
+            Err(_) => None,
+            result => panic!(
+                "{}",
+                self.failure(&format!("observing LSP message: {result:?}"))
+            ),
+        }
     }
 
     pub async fn shutdown(mut self) {

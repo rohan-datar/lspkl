@@ -6,7 +6,6 @@ use std::sync::{Arc, RwLock};
 use dashmap::DashMap;
 use fluent_uri::Uri;
 use pkl_syntax::ast::SyntaxTree;
-use pkl_syntax::parse;
 use thiserror::Error;
 use url;
 
@@ -228,17 +227,7 @@ impl FileManager {
             return Err(FileError::NotOpen(url));
         };
 
-        match file.cached_tree() {
-            Some(tree) => Ok(tree),
-            None => match parse(file.contents().as_str()) {
-                Ok(tree) => {
-                    let tree_rc: Arc<SyntaxTree> = Arc::new(tree);
-                    file.set_cached_tree(tree_rc.clone());
-                    Ok(tree_rc)
-                }
-                Err(err) => Err(FileError::Parse(err)),
-            },
-        }
+        file.parsed_tree().map_err(FileError::Parse)
     }
 
     fn origin_for(url: &Uri<String>) -> Origin {

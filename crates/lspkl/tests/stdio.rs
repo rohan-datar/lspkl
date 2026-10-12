@@ -114,6 +114,54 @@ async fn local_and_imported_definitions_have_target_ranges_and_foreign_hover_doc
 }
 
 #[tokio::test]
+async fn rapid_changes_publish_diagnostics_for_the_final_text() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = uri(&temp.path().join("burst.pkl"));
+    let mut client = start(temp.path(), json!({})).await;
+    open(&mut client, &document, "value: Int = 1\n").await;
+    assert_eq!(
+        diagnostics(&mut client, &document).await["diagnostics"],
+        json!([])
+    );
+
+    const FINAL_VERSION: i32 = 129;
+    for version in 2..=FINAL_VERSION {
+        let text = if version == FINAL_VERSION {
+            "value: Int = missing_final\n"
+        } else if version % 2 == 0 {
+            "value: Int = 1\n"
+        } else {
+            "value: Int = missing_intermediate\n"
+        };
+        client
+            .notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":document,"version":version},
+                    "contentChanges":[{"text":text}]}),
+            )
+            .await;
+    }
+    let final_publish = loop {
+        let published = diagnostics(&mut client, &document).await;
+        if published["version"] == FINAL_VERSION {
+            break published;
+        }
+    };
+    let errors = final_publish["diagnostics"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{final_publish}");
+    assert_eq!(errors[0]["severity"], 1, "{final_publish}");
+    assert_eq!(errors[0]["range"], range(0, 13, 26), "{final_publish}");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing_final"),
+        "{final_publish}"
+    );
+    client.shutdown().await;
+}
+
+#[tokio::test]
 async fn edits_refresh_dependent_diagnostics_and_close_restores_disk_source() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("library.pkl"), "value: Int = 1\n").unwrap();

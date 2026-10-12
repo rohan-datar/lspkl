@@ -3,13 +3,14 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use tokio::task::spawn_blocking;
+#[path = "perf.rs"]
+mod perf;
 
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc};
 
 use fluent_uri::Uri;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use pkl_project::dto::PackageUri;
 use pkl_types::AnalysisContext;
@@ -47,7 +48,7 @@ impl PklBackend {
         let url = Uri::parse(uri_str.to_owned()).ok()?;
         let file = self.state.file_manager.get(&url)?;
         let state = Arc::clone(&self.state);
-        match spawn_blocking(move || {
+        match perf::blocking("prepare", move || {
             state
                 .parse_module(file)
                 .and_then(|module| state.prepare_analysis(module))
@@ -74,6 +75,7 @@ impl PklBackend {
     /// analyzers produce on the error-tolerant tree.
     async fn analyze_document(&self, uri_str: &str) -> Option<Vec<pkl_diagnostics::Diagnostic>> {
         let analysis = self.open_document_analysis(uri_str).await?;
+        let _compute = perf::Compute::start("diagnostics");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
             analysis.module.file_id,
@@ -86,7 +88,9 @@ impl PklBackend {
 
     /// Push current diagnostics for a just-opened or just-changed document
     /// to the editor (`textDocument/publishDiagnostics`).
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip(self), fields(handler_id = tracing::field::Empty))]
     async fn publish(&self, uri_str: &str, version: Option<i32>) {
+        let _perf = perf::Handler::enter();
         let Some(client) = &self.client else {
             return;
         };
@@ -95,7 +99,9 @@ impl PklBackend {
             return;
         };
         let diags = self.analyze_document(uri_str).await.unwrap_or_default();
+        let compute = perf::Compute::start("diagnostics_conversion");
         let lsp_diags = diags.iter().map(to_lsp_diagnostic).collect();
+        drop(compute);
         client.publish_diagnostics(uri, lsp_diags, version).await;
     }
 }
@@ -125,7 +131,9 @@ fn to_lsp_diagnostic(diag: &pkl_diagnostics::Diagnostic) -> Diagnostic {
 }
 
 impl LanguageServer for PklBackend {
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "initialize"))]
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+        let _perf = perf::Handler::enter();
         info!(?params.client_info, "initialize");
         self.state.client_configuration.store(
             params
@@ -244,12 +252,16 @@ impl LanguageServer for PklBackend {
         })
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "initialized"))]
     async fn initialized(&self, _params: InitializedParams) {
+        let _perf = perf::Handler::enter();
         info!("server initialized");
         self.refresh_configuration().await;
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_change_configuration"))]
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let _perf = perf::Handler::enter();
         if params.settings.is_null()
             || params
                 .settings
@@ -266,7 +278,9 @@ impl LanguageServer for PklBackend {
         self.publish_open_documents().await;
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_change_workspace_folders"))]
     async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        let _perf = perf::Handler::enter();
         let mut folders = self
             .state
             .project_manager
@@ -298,15 +312,19 @@ impl LanguageServer for PklBackend {
         self.publish_open_documents().await;
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "shutdown"))]
     async fn shutdown(&self) -> jsonrpc::Result<()> {
+        let _perf = perf::Handler::enter();
         info!("server shutdown");
         Ok(())
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "execute_command"))]
     async fn execute_command(
         &self,
         mut params: ExecuteCommandParams,
     ) -> jsonrpc::Result<Option<serde_json::Value>> {
+        let _perf = perf::Handler::enter();
         match params.command.as_str() {
             "pkl.downloadPackage" => {
                 if params.arguments.len() != 1 {
@@ -336,7 +354,9 @@ impl LanguageServer for PklBackend {
 
     // ---- Text document lifecycle ----
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_open"))]
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let _perf = perf::Handler::enter();
         let uri = params.text_document.uri;
         let uri_str = uri.as_str();
         info!(uri = %uri_str, "didOpen");
@@ -357,7 +377,9 @@ impl LanguageServer for PklBackend {
         self.publish_open_documents().await;
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_change"))]
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let _perf = perf::Handler::enter();
         let uri = params.text_document.uri;
         let uri_str = uri.as_str();
         info!(uri = %uri_str, "didChange");
@@ -371,6 +393,17 @@ impl LanguageServer for PklBackend {
         let Some(change) = changes.pop() else {
             return;
         };
+        if let Some(stored_version) = self
+            .state
+            .file_manager
+            .get(&url)
+            .and_then(|file| file.version())
+            && version <= stored_version
+        {
+            let ordering_violations = perf::ordering_violation();
+            warn!(target: "lspkl::perf", uri = uri_str, incoming_version = version,
+                stored_version, ordering_violations, "non-increasing didChange version; applying incoming text");
+        }
         match self
             .state
             .file_manager
@@ -385,12 +418,16 @@ impl LanguageServer for PklBackend {
         }
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_save"))]
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let _perf = perf::Handler::enter();
         let _ = params;
         // No-op. Later phases may trigger project/package refresh here
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "did_close"))]
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let _perf = perf::Handler::enter();
         info!(uri = %params.text_document.uri.as_str(), "didClose");
         let Ok(url) = Uri::parse(params.text_document.uri.as_str().to_string()) else {
             error!(uri = %params.text_document.uri.as_str(), "Failed to parse URI!");
@@ -409,7 +446,9 @@ impl LanguageServer for PklBackend {
 
     // ---- LSP features ----
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "hover"))]
     async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
+        let _perf = perf::Handler::enter();
         let doc = &params.text_document_position_params;
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "hover");
@@ -417,6 +456,7 @@ impl LanguageServer for PklBackend {
         let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
+        let _compute = perf::Compute::start("hover");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
             analysis.module.file_id,
@@ -427,10 +467,12 @@ impl LanguageServer for PklBackend {
         Ok(lsp_features::hover::hover(&ctx, doc.position))
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "goto_definition"))]
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> jsonrpc::Result<Option<GotoDefinitionResponse>> {
+        let _perf = perf::Handler::enter();
         let doc = &params.text_document_position_params;
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "gotoDefinition");
@@ -438,6 +480,7 @@ impl LanguageServer for PklBackend {
         let Some(analysis) = self.open_document_analysis(uri_str).await else {
             return Ok(None);
         };
+        let _compute = perf::Compute::start("goto_definition");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
             analysis.module.file_id,
@@ -468,10 +511,12 @@ impl LanguageServer for PklBackend {
         ))
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "completion"))]
     async fn completion(
         &self,
         params: CompletionParams,
     ) -> jsonrpc::Result<Option<CompletionResponse>> {
+        let _perf = perf::Handler::enter();
         let doc = &params.text_document_position;
         let uri_str = doc.text_document.uri.as_str();
         info!(uri = uri_str, "completion");
@@ -481,7 +526,7 @@ impl LanguageServer for PklBackend {
         };
         let state = Arc::clone(&self.state);
         let position = doc.position;
-        let (analysis, uri_completion) = spawn_blocking(move || {
+        let (analysis, uri_completion) = perf::blocking("module_uri_completion", move || {
             let result = crate::module_uri_completion::completion(&state, &analysis, position);
             (analysis, result)
         })
@@ -494,6 +539,7 @@ impl LanguageServer for PklBackend {
         if uri_completion.is_some() {
             return Ok(uri_completion);
         }
+        let _compute = perf::Compute::start("completion");
         let ctx = AnalysisContext::new(
             &analysis.module.tree,
             analysis.module.file_id,
@@ -504,21 +550,27 @@ impl LanguageServer for PklBackend {
         Ok(lsp_features::completion::completion(&ctx, &params))
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "completion_resolve"))]
     async fn completion_resolve(&self, item: CompletionItem) -> jsonrpc::Result<CompletionItem> {
+        let _perf = perf::Handler::enter();
         let state = Arc::clone(&self.state);
-        spawn_blocking(move || crate::module_uri_completion::resolve(&state, item))
-            .await
-            .map_err(|err| jsonrpc::Error {
-                code: jsonrpc::ErrorCode::InternalError,
-                message: err.to_string().into(),
-                data: None,
-            })
+        perf::blocking("completion_resolve", move || {
+            crate::module_uri_completion::resolve(&state, item)
+        })
+        .await
+        .map_err(|err| jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "code_action"))]
     async fn code_action(
         &self,
         params: CodeActionParams,
     ) -> jsonrpc::Result<Option<CodeActionResponse>> {
+        let _perf = perf::Handler::enter();
         let uri_str = params.text_document.uri.as_str();
         info!(uri = uri_str, "codeAction");
 
@@ -527,14 +579,17 @@ impl LanguageServer for PklBackend {
         let Some(diags) = self.analyze_document(uri_str).await else {
             return Ok(None);
         };
+        let _compute = perf::Compute::start("code_action");
         let actions = lsp_features::code_action::code_action(&params, &diags);
         Ok(Some(CodeActionResponse::from(actions)))
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "formatting"))]
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> jsonrpc::Result<Option<Vec<TextEdit>>> {
+        let _perf = perf::Handler::enter();
         let uri_str = params.text_document.uri.as_str();
         info!(uri = uri_str, "formatting");
 
@@ -551,7 +606,7 @@ impl LanguageServer for PklBackend {
         let source = file.contents();
 
         let settings = Arc::clone(&self.state.settings.read());
-        let format = spawn_blocking(move || {
+        let format = perf::blocking("formatting", move || {
             lsp_features::formatting::formatting(
                 &source,
                 settings.cli_path(),
@@ -582,7 +637,7 @@ impl PklBackend {
 
     async fn restore_workspaces(&self, folders: Vec<std::path::PathBuf>) {
         let state = Arc::clone(&self.state);
-        let result = spawn_blocking(move || {
+        let result = perf::blocking("restore_workspaces", move || {
             let mut manager = state.project_manager.lock();
             manager.initialize(folders);
             let roots = manager.workspace_folders().to_vec();
@@ -664,7 +719,9 @@ impl PklBackend {
     }
 
     /// Read source behind the same synthetic URIs returned by definition requests.
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "file_contents"))]
     pub async fn file_contents(&self, document: TextDocumentIdentifier) -> jsonrpc::Result<String> {
+        let _perf = perf::Handler::enter();
         let uri = Uri::parse(document.uri.as_str())
             .map(|uri| uri.to_owned())
             .map_err(|err| jsonrpc::Error {
@@ -673,7 +730,7 @@ impl PklBackend {
                 data: None,
             })?;
         let state = Arc::clone(&self.state);
-        spawn_blocking(move || {
+        perf::blocking("file_contents", move || {
             state
                 .file_manager
                 .get_or_load(&uri)
@@ -692,9 +749,14 @@ impl PklBackend {
         })
     }
 
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "sync_projects"))]
     pub async fn sync_projects(&self) -> jsonrpc::Result<()> {
+        let _perf = perf::Handler::enter();
         let state = Arc::clone(&self.state);
-        let sync = spawn_blocking(move || state.project_manager.lock().sync_projects()).await;
+        let sync = perf::blocking("sync_projects", move || {
+            state.project_manager.lock().sync_projects()
+        })
+        .await;
         match sync {
             Ok(Ok(_)) => {
                 self.publish_open_documents().await;
@@ -720,7 +782,9 @@ impl PklBackend {
     }
 
     /// Client asks us to download a package by URI string.
+    #[tracing::instrument(target = "lspkl::perf", level = "debug", skip_all, fields(handler_id = tracing::field::Empty, method = "download_package"))]
     pub async fn download_package(&self, uri: String) -> jsonrpc::Result<()> {
+        let _perf = perf::Handler::enter();
         let package_uri = PackageUri::create(&uri).map_err(|err| jsonrpc::Error {
             code: jsonrpc::ErrorCode::InvalidParams,
             message: err.to_string().into(),
@@ -739,7 +803,7 @@ impl PklBackend {
                 data: None,
             })?;
         let state = Arc::clone(&self.state);
-        let download = spawn_blocking(move || {
+        let download = perf::blocking("download_package", move || {
             state
                 .package_manager
                 .lock()
