@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, unquote_identifier};
+use pkl_syntax::ast::nodes;
+use pkl_syntax::ast::{NodeId, SyntaxTree, unquote_identifier};
 use thiserror::Error;
 
 use crate::file_id::{FileId, NodeRef};
@@ -85,9 +86,16 @@ impl BaseModule {
     /// Parse `base.pkl` from a source string and resolve well-known types.
     pub fn load(source: &str) -> Result<Self, BaseModuleError> {
         let tree = Arc::new(pkl_syntax::parse(source)?);
-        let classes = tree.children_matching(tree.root(), |kind| *kind == NodeKind::Class);
-
-        let aliases = tree.children_matching(tree.root(), |kind| *kind == NodeKind::TypeAlias);
+        let classes: Vec<_> = nodes::Module::cast(&tree, tree.root())
+            .into_iter()
+            .flat_map(|n| n.members(&tree))
+            .filter(|&id| nodes::Class::cast(&tree, id).is_some())
+            .collect();
+        let aliases: Vec<_> = nodes::Module::cast(&tree, tree.root())
+            .into_iter()
+            .flat_map(|n| n.members(&tree))
+            .filter(|&id| nodes::TypeAlias::cast(&tree, id).is_some())
+            .collect();
 
         Ok(Self {
             tree: tree.clone(),
@@ -187,7 +195,13 @@ impl BaseModule {
         }
         let fn_class_name = format!("Function{}", n);
         let tree = self.tree.clone();
-        let classes = tree.children_matching(tree.root(), |kind| *kind == NodeKind::Class);
+        let id = nodes::Module::cast(&tree, tree.root())?
+            .members(&tree)
+            .find(|&id| {
+                nodes::Class::cast(&tree, id).is_some()
+                    && tree.name(id) == Some(fn_class_name.as_str())
+            })?;
+        let classes = [id];
         let Ok(fn_class) = find_class(tree, &classes, fn_class_name.as_str()) else {
             return None;
         };
@@ -368,15 +382,12 @@ fn find_class_member(
     let Some(class_id) = classes.iter().find(|c| tree.name(**c) == Some(class_name)) else {
         return Err(BaseModuleError::MissingClass(class_name.to_string()));
     };
-    let member_parent = tree
-        .child(*class_id, |k| matches!(k, NodeKind::ClassBody))
-        .unwrap_or(*class_id);
-    let member = tree
-        .children_matching(member_parent, |k| {
-            matches!(k, NodeKind::ClassProperty | NodeKind::ClassMethod)
-        })
+    let member = nodes::Class::cast(&tree, *class_id)
+        .and_then(|n| n.body(&tree))
+        .and_then(|id| nodes::ClassBody::cast(&tree, id))
         .into_iter()
-        .find(|n| tree.name(*n) == Some(member_name));
+        .flat_map(|n| n.members(&tree))
+        .find(|&n| tree.name(n) == Some(member_name));
     let Some(member_id) = member else {
         return Err(BaseModuleError::MissingMember {
             class: class_name.to_string(),

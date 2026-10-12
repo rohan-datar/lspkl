@@ -203,6 +203,7 @@ impl Type {
             //         ..
             //     },
             // ) => resolver::is_subclass(*a, *b) && type_args_match(a_args, b_args, ctx),
+            (Type::StringLiteral { value: a, .. }, Type::StringLiteral { value: b, .. }) => a == b,
             (Type::StringLiteral { .. }, Type::Class { .. }) => {
                 other.class_equals(ctx.base.string_type())
                     || other.class_equals(ctx.base.any_type())
@@ -407,7 +408,9 @@ impl Type {
             let Some(tree) = ctx.tree_for(alias_node.file_id) else {
                 return Type::Unknown;
             };
-            let Some(body) = tree.type_alias_body(alias_node.node_id) else {
+            let Some(body) = pkl_syntax::ast::nodes::TypeAlias::cast(tree, alias_node.node_id)
+                .and_then(|n| n.ty(tree))
+            else {
                 return Type::Unknown;
             };
             current = to_type(

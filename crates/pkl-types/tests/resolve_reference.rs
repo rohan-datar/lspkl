@@ -170,10 +170,9 @@ fn unresolved_and_glob_imports_and_unrelated_strings_have_no_target() {
         &base,
         "import \"missing.pkl\" as dep\nimport* \"*.pkl\" as all\nvalue = \"plain\"\n",
         |ctx| {
-            for &import in
-                ctx.tree.children(ctx.tree.root()).iter().filter(|&&id| {
-                    matches!(ctx.tree.kind(id), NodeKind::Import | NodeKind::ImportGlob)
-                })
+            for import in pkl_syntax::ast::nodes::Module::cast(ctx.tree, ctx.tree.root())
+                .unwrap()
+                .imports(ctx.tree)
             {
                 let alias = ctx.tree.identifier(import).unwrap();
                 let span = ctx.tree.span(alias);

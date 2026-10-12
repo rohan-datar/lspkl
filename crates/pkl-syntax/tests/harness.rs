@@ -52,8 +52,8 @@ fn render_ast_from_node(tree: &SyntaxTree, node: NodeId, depth: usize) -> String
     let mut out = String::new();
     out.push_str(&"  ".repeat(depth));
     out.push_str(tree.kind(node).name());
-    if let NodeKind::Unmapped(raw) = tree.kind(node) {
-        out.push_str(&format!(" /* unmapped: {raw} */"));
+    if let NodeKind::Unmapped(_) = tree.kind(node) {
+        out.push_str(&format!(" /* unmapped: {} */", tree.kind(node).name()));
     }
     out.push('\n');
     for child in tree.children(node).iter().copied() {

@@ -5,7 +5,7 @@
 use crate::analyzer::Analyzer;
 use crate::effective_pkl_version;
 use crate::holder::DiagnosticsHolder;
-use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, TokenType, nodes};
 use pkl_types::compute_expr::{compute_expr_type, compute_this_type};
 use pkl_types::resolver::{
     ResolvedType, find_member_on_type, resolve_type_name, resolve_unqualified_access,
@@ -24,7 +24,9 @@ impl Analyzer for AccessExprAnalyzer {
     ) -> bool {
         match ctx.tree.kind(node) {
             NodeKind::QualifiedAccessExpr => {
-                let Some(receiver) = ctx.tree.child(node, |c| c.is_expr_node()) else {
+                let Some(receiver) = nodes::QualifiedAccessExpr::cast(ctx.tree, node)
+                    .and_then(|expr| expr.receiver(ctx.tree))
+                else {
                     return true;
                 };
                 let receiver_type = compute_expr_type(receiver, &TypeBindings::new(), ctx);
@@ -67,7 +69,9 @@ impl Analyzer for AccessExprAnalyzer {
                 // computed by its parent.
                 if let Some(parent) = ctx.tree.parent(node)
                     && matches!(ctx.tree.kind(parent), NodeKind::QualifiedAccessExpr)
-                    && ctx.tree.children(parent).first() == Some(&node)
+                    && nodes::QualifiedAccessExpr::cast(ctx.tree, parent)
+                        .and_then(|expr| expr.receiver(ctx.tree))
+                        == Some(node)
                 {
                     return true;
                 }
@@ -242,30 +246,39 @@ fn check_argument_count(
         return;
     }
 
-    let Some(method_header) = tree.child(target.node_id, |k| matches!(k, NodeKind::MethodHeader))
+    let Some(method_header) = nodes::ClassMethod::cast(tree, target.node_id)
+        .and_then(|method| method.header(tree))
+        .or_else(|| {
+            nodes::ObjectMethod::cast(tree, target.node_id).and_then(|method| method.header(tree))
+        })
     else {
         return;
     };
 
-    let param_list = tree.child(method_header, |k| matches!(k, NodeKind::ParameterList));
+    let param_list =
+        nodes::MethodHeader::cast(tree, method_header).and_then(|header| header.parameters(tree));
 
     let declared_params = match param_list {
-        Some(pl) => tree
-            .children_matching(pl, |k| matches!(k, NodeKind::TypedIdentifier))
-            .len(),
+        Some(pl) => {
+            nodes::ParameterList::cast(tree, pl).map_or(0, |list| list.parameters(tree).count())
+        }
         None => 0,
     };
 
-    let Some(arg_list) = ctx
-        .tree
-        .child(access, |k| matches!(k, NodeKind::ArgumentList))
+    let Some(arg_list) = nodes::QualifiedAccessExpr::cast(ctx.tree, access)
+        .and_then(|expr| expr.arguments(ctx.tree))
+        .or_else(|| {
+            nodes::UnqualifiedAccessExpr::cast(ctx.tree, access)
+                .and_then(|expr| expr.arguments(ctx.tree))
+        })
+        .or_else(|| {
+            nodes::SuperAccessExpr::cast(ctx.tree, access).and_then(|expr| expr.arguments(ctx.tree))
+        })
     else {
         return;
     };
-    let args = ctx
-        .tree
-        .children_matching(arg_list, |k| k.is_expr_node())
-        .len();
+    let args = nodes::ArgumentList::cast(ctx.tree, arg_list)
+        .map_or(0, |list| list.arguments(ctx.tree).count());
     if args == declared_params {
         return;
     }
@@ -289,11 +302,12 @@ fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
     let Some(tree) = ctx.tree_for(method_decl.file_id) else {
         return false;
     };
-    let annotation_children =
-        tree.children_matching(method_decl.node_id, |k| matches!(k, NodeKind::Annotation));
+    let annotation_children = nodes::ClassMethod::cast(tree, method_decl.node_id)
+        .into_iter()
+        .flat_map(|method| method.annotations(tree));
     for annotation in annotation_children {
         let Some(name_node) =
-            tree.child(annotation, |c| matches!(c, NodeKind::QualifiedIdentifier))
+            nodes::Annotation::cast(tree, annotation).and_then(|annotation| annotation.name(tree))
         else {
             continue;
         };
@@ -396,7 +410,9 @@ fn check_redundant_conversion(
     if !matches!(ctx.tree.kind(receiver), NodeKind::QualifiedAccessExpr) {
         return;
     }
-    let Some(receiver_receiver) = ctx.tree.child(receiver, |k| k.is_expr_node()) else {
+    let Some(receiver_receiver) = nodes::QualifiedAccessExpr::cast(ctx.tree, receiver)
+        .and_then(|expr| expr.receiver(ctx.tree))
+    else {
         return;
     };
     let Some(receiver_name) = ctx.tree.name(receiver) else {

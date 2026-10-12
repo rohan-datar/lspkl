@@ -1,5 +1,6 @@
 //! Type inference for expressions.
 
+use pkl_syntax::ast::nodes;
 use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
 
 use crate::NodeRef;
@@ -42,11 +43,11 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
         NodeKind::NullLiteralExpr => ctx.base.null_type().clone(),
         NodeKind::ThrowExpr => Type::Nothing,
         NodeKind::SingleLineStringLiteral | NodeKind::MultiLineStringLiteral => {
-            if ctx
-                .tree
-                .child(node, |n| matches!(n, NodeKind::StringInterpolation))
-                .is_some()
-            {
+            let interpolated = nodes::SingleLineStringLiteral::cast(ctx.tree, node)
+                .is_some_and(|n| n.interpolations(ctx.tree).next().is_some())
+                || nodes::MultiLineStringLiteral::cast(ctx.tree, node)
+                    .is_some_and(|n| n.interpolations(ctx.tree).next().is_some());
+            if interpolated {
                 ctx.base.string_type().clone()
             } else {
                 ctx.tree
@@ -55,31 +56,43 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
                     .unwrap_or(Type::Unknown)
             }
         }
-        NodeKind::ParenthesizedExpr | NodeKind::TraceExpr => {
-            compute_expr_type(child_exprs(ctx, node)[0], bindings, ctx)
+        NodeKind::ParenthesizedExpr | NodeKind::TraceExpr | NodeKind::UnaryMinusExpr => {
+            let operand = nodes::ParenthesizedExpr::cast(ctx.tree, node)
+                .and_then(|n| n.inner(ctx.tree))
+                .or_else(|| nodes::TraceExpr::cast(ctx.tree, node).and_then(|n| n.value(ctx.tree)))
+                .or_else(|| {
+                    nodes::UnaryExpr::cast(ctx.tree, node).and_then(|n| n.operand(ctx.tree))
+                });
+            operand
+                .map(|n| compute_expr_type(n, bindings, ctx))
+                .unwrap_or(Type::Unknown)
         }
-        NodeKind::LetExpr => {
-            compute_expr_type(*child_exprs(ctx, node).last().unwrap(), bindings, ctx)
-        }
+        NodeKind::LetExpr => nodes::LetExpr::cast(ctx.tree, node)
+            .and_then(|n| n.body(ctx.tree))
+            .map(|n| compute_expr_type(n, bindings, ctx))
+            .unwrap_or(Type::Unknown),
         NodeKind::IfExpr => {
-            let expr_children = child_exprs(ctx, node);
+            let Some(expr) = nodes::IfExpr::cast(ctx.tree, node) else {
+                return Type::Unknown;
+            };
+            let (Some(then_branch), Some(else_branch)) =
+                (expr.then_branch(ctx.tree), expr.else_branch(ctx.tree))
+            else {
+                return Type::Unknown;
+            };
             Type::Union {
-                left: Box::new(compute_expr_type(expr_children[0], bindings, ctx)),
-                right: Box::new(compute_expr_type(expr_children[1], bindings, ctx)),
+                left: Box::new(compute_expr_type(then_branch, bindings, ctx)),
+                right: Box::new(compute_expr_type(else_branch, bindings, ctx)),
                 constraints: vec![],
             }
         }
-        NodeKind::UnaryMinusExpr => compute_expr_type(
-            ctx.tree
-                .child(node, |n| !matches!(n, NodeKind::Terminal(TokenType::Minus)))
-                .expect("Unary minus did not have inner expression"),
-            bindings,
-            ctx,
-        ),
         NodeKind::AdditiveExpr => additive_expr_type(node, bindings, ctx),
         NodeKind::MultiplicativeExpr => multiplicative_expr_type(node, bindings, ctx),
         NodeKind::QualifiedAccessExpr => {
-            let Some(reciever) = ctx.tree.child(node, |k| k.is_expr_node()) else {
+            let Some(access) = nodes::QualifiedAccessExpr::cast(ctx.tree, node) else {
+                return Type::Unknown;
+            };
+            let Some(reciever) = access.receiver(ctx.tree) else {
                 return Type::Unknown;
             };
             let Some(name) = ctx.tree.name(node) else {
@@ -87,17 +100,7 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
             };
             let reciever_type = compute_expr_type(reciever, bindings, ctx);
 
-            let is_null_safe = ctx
-                .tree
-                .child(node, |k| {
-                    matches!(k, NodeKind::Terminal(TokenType::Identifier))
-                })
-                .map(|accessor| {
-                    let between = usize::from(ctx.tree.span(reciever).end())
-                        ..usize::from(ctx.tree.span(accessor).start());
-                    ctx.tree.source()[between].contains("?.")
-                })
-                .unwrap_or(false);
+            let is_null_safe = access.is_null_safe(ctx.tree);
             let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx)
                 .map_or(Type::Unknown, |r| r.ty);
             if is_null_safe {
@@ -124,9 +127,8 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
             })
             .map(|r| r.ty)
             .unwrap_or(Type::Unknown),
-        NodeKind::SubscriptExpr => ctx
-            .tree
-            .child(node, |k| k.is_expr_node())
+        NodeKind::SubscriptExpr => nodes::SubscriptExpr::cast(ctx.tree, node)
+            .and_then(|n| n.receiver(ctx.tree))
             .map(|e| compute_expr_type(e, bindings, ctx))
             .and_then(|t| crate::resolver::container_value_type(&t, ctx))
             .unwrap_or(Type::Unknown),
@@ -135,9 +137,8 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
             reference_name: "".to_string(),
             constraints: vec![],
         },
-        NodeKind::NewExpr => ctx
-            .tree
-            .child(node, |k| k.is_type_node())
+        NodeKind::NewExpr => nodes::NewExpr::cast(ctx.tree, node)
+            .and_then(|n| n.ty(ctx.tree))
             .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx))
             .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
@@ -159,7 +160,9 @@ pub fn compute_this_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
             }
             NodeKind::Class => return Type::class(NodeRef::new(ctx.file_id, id)),
             NodeKind::ConstrainedType => {
-                let Some(inner) = ctx.tree.child(id, |k| k.is_type_node()) else {
+                let Some(inner) =
+                    nodes::ConstrainedType::cast(ctx.tree, id).and_then(|n| n.inner(ctx.tree))
+                else {
                     return Type::Unknown;
                 };
                 return to_type(NodeRef::new(ctx.file_id, inner), bindings, ctx);
@@ -172,15 +175,11 @@ pub fn compute_this_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisCo
     Type::Unknown
 }
 
-// find non-terminal children of an expression
-fn child_exprs(ctx: &AnalysisContext, node: NodeId) -> Vec<NodeId> {
-    ctx.tree
-        .children_matching(node, |n| !matches!(n, NodeKind::Terminal(_)))
-}
-
 fn additive_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
     use NumKind::*;
-    let (left, op, right) = binary_expr(node, bindings, ctx);
+    let Some((left, op, right)) = binary_expr(node, bindings, ctx) else {
+        return Type::Unknown;
+    };
     let l = classify(&left, ctx);
     let r = classify(&right, ctx);
 
@@ -214,7 +213,9 @@ fn additive_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
 
 fn multiplicative_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
     use NumKind::*;
-    let (left, op, right) = binary_expr(node, bindings, ctx);
+    let Some((left, op, right)) = binary_expr(node, bindings, ctx) else {
+        return Type::Unknown;
+    };
     let l = classify(&left, ctx);
     let r = classify(&right, ctx);
 
@@ -329,23 +330,11 @@ fn binary_expr(
     node: NodeId,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
-) -> (Type, TokenType, Type) {
-    // break down an expression of the form expr OP expr
-    let expr_children = child_exprs(ctx, node);
-    if expr_children.len() != 2 {
-        panic!("Not a binary expression");
-    }
-    let op_node = ctx
-        .tree
-        .child(node, |n| matches!(n, NodeKind::Terminal(_)))
-        .expect("No operator in binary expression!");
-
-    let NodeKind::Terminal(op) = ctx.tree.kind(op_node) else {
-        panic!("invalid operator in binary expression")
-    };
-    (
-        compute_expr_type(expr_children[0], bindings, ctx),
-        *op,
-        compute_expr_type(expr_children[1], bindings, ctx),
-    )
+) -> Option<(Type, TokenType, Type)> {
+    let expr = nodes::BinaryExpr::cast(ctx.tree, node)?;
+    Some((
+        compute_expr_type(expr.left(ctx.tree)?, bindings, ctx),
+        expr.operator(ctx.tree)?,
+        compute_expr_type(expr.right(ctx.tree)?, bindings, ctx),
+    ))
 }

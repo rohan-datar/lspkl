@@ -1,7 +1,7 @@
 //! Validates class/object members — duplicate-name checks, override
 //! correctness, abstract members in concrete classes, etc.
 
-use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind, nodes};
 use pkl_types::{AnalysisContext, Type, TypeBindings};
 
 use pkl_types::compute_expr::compute_this_type;
@@ -28,9 +28,12 @@ impl Analyzer for MemberAnalyzer {
         }
 
         // Defining (has TypeAnnotation child) — never flag.
-        if ctx
-            .tree
-            .child(node, |k| matches!(k, NodeKind::TypeAnnotation))
+        if nodes::ClassProperty::cast(ctx.tree, node)
+            .and_then(|property| property.type_annotation(ctx.tree))
+            .or_else(|| {
+                nodes::ObjectProperty::cast(ctx.tree, node)
+                    .and_then(|property| property.type_annotation(ctx.tree))
+            })
             .is_some()
         {
             return true;

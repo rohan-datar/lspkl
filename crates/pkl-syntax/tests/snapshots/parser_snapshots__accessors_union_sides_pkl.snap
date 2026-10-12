@@ -1,0 +1,13 @@
+---
+source: crates/pkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  TypeAlias
+    BlockComment
+    UnionType
+      DeclaredType
+        QualifiedIdentifier
+      BlockComment
+      StringLiteralType
+        StringConstant

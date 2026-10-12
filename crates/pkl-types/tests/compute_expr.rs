@@ -168,11 +168,46 @@ fn find_unqualified_access_named(
 #[test]
 fn if_expr_unions_its_branches() {
     let base = harness::load_test_base();
-    harness::with_snippet(&base, r#"x = if (true) 1 else "two""#, |ctx| {
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::IfExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+    harness::with_snippet(
+        &base,
+        r#"c = true
+x = if (c) 1 else "a""#,
+        |ctx| {
+            let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::IfExpr));
+            let bindings = TypeBindings::new();
+            let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
 
-        assert!(ctx.base.int_type().is_subtype_of(&ty, ctx));
-    });
+            assert_eq!(
+                ty,
+                pkl_types::Type::Union {
+                    left: Box::new(ctx.base.int_type().clone()),
+                    right: Box::new(pkl_types::Type::string_literal("a")),
+                    constraints: vec![],
+                }
+            );
+        },
+    );
+}
+
+#[test]
+fn access_null_safety_ignores_comments() {
+    let base = harness::load_test_base();
+    for (operator, nullable) in [
+        ("/* receiver comment */ ?. /* member comment */", true),
+        ("/* not an operator: ?. */ . /* member comment */", false),
+    ] {
+        let source =
+            format!("class Foo {{ x: Int }}\nfoo: Foo = new Foo {{ x = 1 }}\ny = foo {operator} x");
+        harness::with_snippet(&base, &source, |ctx| {
+            let access =
+                harness::find_first(ctx.tree, |k| matches!(k, NodeKind::QualifiedAccessExpr));
+            let ty = compute_expr::compute_expr_type(access, &TypeBindings::new(), ctx);
+            let expected = if nullable {
+                ctx.base.int_type().nullable(ctx)
+            } else {
+                ctx.base.int_type().clone()
+            };
+            assert_eq!(ty, expected, "operator: {operator}");
+        });
+    }
 }

@@ -6,6 +6,8 @@
 use smallvec::SmallVec;
 
 use crate::{LineIndex, TextRange, TextSize};
+pub mod nodes;
+// Typed views are implemented in the nodes submodule.
 /// Opaque handle into a [`SyntaxTree`]'s node arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub(crate) u32);
@@ -19,7 +21,7 @@ impl NodeId {
 }
 
 /// All node kinds in the Pkl AST, mapped from tree-sitter's grammar.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeKind {
     // ---- Top-level ----
     Module,
@@ -125,27 +127,22 @@ pub enum NodeKind {
     ShebangComment,
 
     /// A tree-sitter node type we have not mapped to a concrete variant yet.
-    Unmapped(String),
+    Unmapped(u16),
 }
 
 impl NodeKind {
     pub fn name(&self) -> &str {
         match self {
             NodeKind::Terminal(_) => "Terminal",
-            NodeKind::Unmapped(raw) => raw.as_str(),
+            NodeKind::Unmapped(raw) => crate::parser::grammar()
+                .node_kind_for_id(*raw)
+                .unwrap_or("Unmapped"),
             other => kind_static_name(other),
         }
     }
 
     pub fn is_terminal(&self) -> bool {
         matches!(self, NodeKind::Terminal(_))
-    }
-
-    pub fn is_module_member(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::Class | NodeKind::TypeAlias | NodeKind::ClassMethod
-        )
     }
 
     pub fn is_string_literal(&self) -> bool {
@@ -155,20 +152,6 @@ impl NodeKind {
                 | NodeKind::MultiLineStringLiteral
                 | NodeKind::StringConstant
                 | NodeKind::StringLiteralType
-        )
-    }
-
-    pub fn is_object_member(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::ObjectProperty
-                | NodeKind::ObjectEntry
-                | NodeKind::MemberPredicate
-                | NodeKind::ForGenerator
-                | NodeKind::WhenGenerator
-                | NodeKind::ObjectElement
-                | NodeKind::ObjectSpread
-                | NodeKind::ObjectMethod
         )
     }
 
@@ -184,65 +167,6 @@ impl NodeKind {
                 | NodeKind::ObjectMethod
                 | NodeKind::MemberPredicate
                 | NodeKind::FunctionLiteralExpr
-        )
-    }
-
-    pub fn is_type_node(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::UnknownType
-                | NodeKind::NothingType
-                | NodeKind::ModuleType
-                | NodeKind::DeclaredType
-                | NodeKind::ParenthesizedType
-                | NodeKind::NullableType
-                | NodeKind::ConstrainedType
-                | NodeKind::UnionType
-                | NodeKind::FunctionType
-                | NodeKind::DefaultUnionType
-        )
-    }
-
-    pub fn is_expr_node(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::ModuleExpr
-                | NodeKind::NullLiteralExpr
-                | NodeKind::TrueLiteralExpr
-                | NodeKind::FalseLiteralExpr
-                | NodeKind::IntLiteralExpr
-                | NodeKind::FloatLiteralExpr
-                | NodeKind::ThrowExpr
-                | NodeKind::TraceExpr
-                | NodeKind::ImportExpr
-                | NodeKind::ReadExpr
-                | NodeKind::SingleLineStringLiteral
-                | NodeKind::MultiLineStringLiteral
-                | NodeKind::NewExpr
-                | NodeKind::AmendExpr
-                | NodeKind::UnqualifiedAccessExpr
-                | NodeKind::QualifiedAccessExpr
-                | NodeKind::SuperAccessExpr
-                | NodeKind::SuperSubscriptExpr
-                | NodeKind::SubscriptExpr
-                | NodeKind::NonNullExpr
-                | NodeKind::UnaryMinusExpr
-                | NodeKind::LogicalNotExpr
-                | NodeKind::AdditiveExpr
-                | NodeKind::MultiplicativeExpr
-                | NodeKind::ComparisonExpr
-                | NodeKind::EqualityExpr
-                | NodeKind::ExponentiationExpr
-                | NodeKind::LogicalAndExpr
-                | NodeKind::LogicalOrExpr
-                | NodeKind::NullCoalesceExpr
-                | NodeKind::PipeExpr
-                | NodeKind::TypeTestExpr
-                | NodeKind::TypeCastExpr
-                | NodeKind::IfExpr
-                | NodeKind::LetExpr
-                | NodeKind::FunctionLiteralExpr
-                | NodeKind::ParenthesizedExpr
         )
     }
 
@@ -290,6 +214,22 @@ pub enum TokenType {
     ImportGlob,
     ReadOrNull,
     ReadGlob,
+    Read,
+    Amends,
+    Extends,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Equal,
+    NotEqual,
+    LogicalAnd,
+    LogicalOr,
+    NullCoalesce,
+    Power,
+    Pipe,
+    Not,
+    Arrow,
 
     /// Anything not classified yet. Carries no data; the actual token text
     /// can be retrieved via `SyntaxTree::text(node)`.
@@ -317,6 +257,7 @@ pub(crate) struct NodeEntry {
     pub kind: NodeKind,
     pub span: TextRange,
     pub parent: Option<NodeId>,
+    pub field: Option<std::num::NonZeroU16>,
     pub children: SmallVec<[NodeId; 6]>,
     pub is_missing: bool,
 }
@@ -366,6 +307,14 @@ impl SyntaxTree {
 
     pub fn children(&self, id: NodeId) -> &[NodeId] {
         &self.nodes[id.index()].children
+    }
+    /// Find a direct child by its shared grammar field ID.
+    pub fn child_by_field(&self, id: NodeId, name: &str) -> Option<NodeId> {
+        let field = crate::parser::grammar().field_id_for_name(name)?;
+        self.children(id)
+            .iter()
+            .copied()
+            .find(|child| self.nodes[child.index()].field == Some(field))
     }
 
     pub fn is_missing(&self, id: NodeId) -> bool {
@@ -510,32 +459,17 @@ impl SyntaxTree {
             return false;
         };
 
-        self.text(header_clause).starts_with("amends")
-    }
-
-    /// For a `Class` node, return the node representing its `extends` target
-    /// (the type after the `extends` keyword), if any.
-    pub fn class_extends_target(&self, class_node: NodeId) -> Option<NodeId> {
-        if !matches!(self.kind(class_node), NodeKind::Class) {
-            return None;
-        }
-
-        let extends_clause =
-            self.child(class_node, |n| matches!(n, NodeKind::ClassExtendsClause))?;
-
-        self.child(extends_clause, |n| !matches!(n, NodeKind::Terminal(_)))
+        nodes::ModuleExtendsAmendsClause::cast(self, header_clause)
+            .is_some_and(|clause| clause.is_amend(self))
     }
 
     pub fn module_extends_or_amends_target(&self) -> Option<String> {
-        let header = self.child(self.root(), |k| matches!(k, NodeKind::ModuleHeader))?;
-        let extend_amend_clause =
-            self.child(header, |k| matches!(k, NodeKind::ModuleExtendsAmendsClause))?;
-        let target = self.child(extend_amend_clause, |k| k.is_string_literal())?;
+        let module = nodes::Module::cast(self, self.root())?;
+        let header = nodes::ModuleHeader::cast(self, module.header(self)?)?;
+        let clause =
+            nodes::ModuleExtendsAmendsClause::cast(self, header.extends_amends_clause(self)?)?;
+        let target = clause.target(self)?;
         self.escaped_string_literal(target)
-    }
-
-    pub fn type_alias_body(&self, alias_node: NodeId) -> Option<NodeId> {
-        self.child(alias_node, |c| c.is_type_node())
     }
 
     pub fn escaped_string_literal(&self, string_node: NodeId) -> Option<String> {
@@ -549,7 +483,11 @@ impl SyntaxTree {
     pub fn is_glob_import(&self, node: NodeId) -> bool {
         match self.kind(node) {
             NodeKind::ImportGlob => true,
-            NodeKind::ImportExpr => self.text(node).starts_with("import*"),
+            NodeKind::ImportExpr => self
+                .child(node, |kind| {
+                    matches!(kind, NodeKind::Terminal(TokenType::ImportGlob))
+                })
+                .is_some(),
             _ => false,
         }
     }

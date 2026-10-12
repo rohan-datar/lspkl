@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
+use pkl_syntax::ast::nodes::{Class, ClassBody, ModuleMember, ObjectMember};
+use pkl_syntax::ast::{NodeId, SyntaxTree};
 use pkl_types::resolver::{class_member_bindings, resolve_type_name};
 use pkl_types::resolver::{definition_type, module_super, module_type};
 use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
@@ -82,9 +83,10 @@ fn collect(
                 return;
             };
             let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-            let body = tree
-                .child(class_node.node_id, |k| matches!(k, NodeKind::ClassBody))
-                .unwrap_or(class_node.node_id);
+            let Some(class) = Class::cast(tree, class_node.node_id) else {
+                return;
+            };
+            let body = class.body(tree).unwrap_or(class_node.node_id);
             collect_body_members(
                 tree,
                 class_node.file_id,
@@ -96,7 +98,7 @@ fn collect(
             );
 
             // Continue up the superclass chain.
-            if let Some(target) = tree.class_extends_target(class_node.node_id) {
+            if let Some(target) = class.extends_target(tree) {
                 let segments = tree.qualified_identifier_segments(target);
                 if let Some(super_node) =
                     resolve_type_name(ctx, &segments, NodeRef::new(class_node.file_id, target))
@@ -121,15 +123,7 @@ fn collect(
             };
             // Module-level properties/methods plus nested classes/aliases —
             // all accessible as unqualified names on the module.
-            for member in tree.children_matching(module_node.node_id, |k| {
-                matches!(
-                    k,
-                    NodeKind::ClassProperty
-                        | NodeKind::ClassMethod
-                        | NodeKind::Class
-                        | NodeKind::TypeAlias
-                )
-            }) {
+            for member in ModuleMember::children(tree, module_node.node_id) {
                 push_member(
                     tree,
                     module_node.file_id,
@@ -216,9 +210,10 @@ fn collect_body_members(
     out: &mut Vec<MemberInfo>,
     seen_names: &mut HashSet<String>,
 ) {
-    for member in tree.children_matching(body, |k| {
-        matches!(k, NodeKind::ClassProperty | NodeKind::ClassMethod)
-    }) {
+    for member in ClassBody::cast(tree, body)
+        .into_iter()
+        .flat_map(|body| body.members(tree))
+    {
         push_member(tree, file_id, member, bindings, ctx, out, seen_names);
     }
 }
@@ -238,13 +233,16 @@ fn push_member(
     if !seen_names.insert(name.to_string()) {
         return; // shadowed by an override closer to the receiver
     }
-    let kind = match tree.kind(member) {
-        NodeKind::ClassProperty => MemberKind::Property,
-        NodeKind::ObjectProperty => MemberKind::Property,
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => MemberKind::Method,
-        NodeKind::Class => MemberKind::Class,
-        NodeKind::TypeAlias => MemberKind::TypeAlias,
-        _ => return,
+    let kind = match ModuleMember::cast(tree, member) {
+        Some(ModuleMember::ClassProperty(_)) => MemberKind::Property,
+        Some(ModuleMember::ClassMethod(_)) => MemberKind::Method,
+        Some(ModuleMember::Class(_)) => MemberKind::Class,
+        Some(ModuleMember::TypeAlias(_)) => MemberKind::TypeAlias,
+        None => match ObjectMember::cast(tree, member) {
+            Some(ObjectMember::ObjectProperty(_)) => MemberKind::Property,
+            Some(ObjectMember::ObjectMethod(_)) => MemberKind::Method,
+            _ => return,
+        },
     };
     let ty = definition_type(NodeRef::new(file_id, member), bindings, ctx);
     out.push(MemberInfo {

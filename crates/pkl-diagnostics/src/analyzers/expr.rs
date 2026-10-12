@@ -1,7 +1,7 @@
 //! Expression-level checks: always-true / always-false conditions, redundant
 //! type casts, redundant null-safe access, etc.
 
-use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind, nodes};
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::to_type::to_type;
 use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
@@ -20,10 +20,14 @@ impl Analyzer for ExprAnalyzer {
     ) -> bool {
         match ctx.tree.kind(node) {
             NodeKind::TypeTestExpr => {
-                let Some(expr_node) = ctx.tree.child(node, |c| c.is_expr_node()) else {
+                let Some(expr_node) =
+                    nodes::BinaryExpr::cast(ctx.tree, node).and_then(|expr| expr.left(ctx.tree))
+                else {
                     return true;
                 };
-                let Some(type_node) = ctx.tree.child(node, |c| c.is_type_node()) else {
+                let Some(type_node) =
+                    nodes::BinaryExpr::cast(ctx.tree, node).and_then(|expr| expr.right(ctx.tree))
+                else {
                     return true;
                 };
                 let expr_type = compute_expr_type(expr_node, &TypeBindings::new(), ctx);
@@ -54,10 +58,14 @@ impl Analyzer for ExprAnalyzer {
                 false
             }
             NodeKind::TypeCastExpr => {
-                let Some(expr_node) = ctx.tree.child(node, |c| c.is_expr_node()) else {
+                let Some(expr_node) =
+                    nodes::BinaryExpr::cast(ctx.tree, node).and_then(|expr| expr.left(ctx.tree))
+                else {
                     return true;
                 };
-                let Some(type_node) = ctx.tree.child(node, |c| c.is_type_node()) else {
+                let Some(type_node) =
+                    nodes::BinaryExpr::cast(ctx.tree, node).and_then(|expr| expr.right(ctx.tree))
+                else {
                     return true;
                 };
                 let expr_type = compute_expr_type(expr_node, &TypeBindings::new(), ctx);
@@ -85,7 +93,9 @@ impl Analyzer for ExprAnalyzer {
                 false
             }
             NodeKind::NullCoalesceExpr => {
-                let Some(expr_node) = ctx.tree.child(node, |c| c.is_expr_node()) else {
+                let Some(expr_node) =
+                    nodes::BinaryExpr::cast(ctx.tree, node).and_then(|expr| expr.left(ctx.tree))
+                else {
                     return true;
                 };
                 let expr_type = compute_expr_type(expr_node, &TypeBindings::new(), ctx);
@@ -96,7 +106,9 @@ impl Analyzer for ExprAnalyzer {
                 false
             }
             NodeKind::NonNullExpr => {
-                let Some(expr_node) = ctx.tree.child(node, |c| c.is_expr_node()) else {
+                let Some(expr_node) =
+                    nodes::UnaryExpr::cast(ctx.tree, node).and_then(|expr| expr.operand(ctx.tree))
+                else {
                     return true;
                 };
                 let expr_type = compute_expr_type(expr_node, &TypeBindings::new(), ctx);

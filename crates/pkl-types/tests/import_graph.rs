@@ -24,9 +24,10 @@ fn graph(f: impl FnOnce(&AnalysisContext)) {
             ImportResolution::Single(target),
         );
     }
-    for id in a.children_matching(a.root(), |k| {
-        matches!(k, NodeKind::Import | NodeKind::ImportGlob)
-    }) {
+    for id in pkl_syntax::ast::nodes::Module::cast(&a, a.root())
+        .unwrap()
+        .imports(&a)
+    {
         edges.insert(
             NodeRef::new(FileId(1), id),
             if matches!(a.kind(id), NodeKind::ImportGlob) {

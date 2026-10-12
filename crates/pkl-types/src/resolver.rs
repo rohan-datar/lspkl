@@ -1,6 +1,7 @@
 //! Name resolution and class hierarchy queries.
 
 use pkl_syntax::TextSize;
+use pkl_syntax::ast::nodes;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
 use crate::FileId;
@@ -28,10 +29,10 @@ impl ResolvedType {
 /// Returns the `NodeId` of the matching `NodeKind::Class` node, or `None` if
 /// no class with that name exists at module level.
 pub fn resolve_type_name_in_module(tree: &SyntaxTree, name: &str) -> Option<NodeId> {
-    tree.children_matching(tree.root(), kind_is_class_or_alias)
-        .iter()
-        .find(|class| tree.name(**class) == Some(name))
-        .cloned()
+    nodes::Module::cast(tree, tree.root())?
+        .members(tree)
+        .filter(|&id| kind_is_class_or_alias(tree.kind(id)))
+        .find(|&id| tree.name(id) == Some(name))
 }
 
 /// Look up the definition of a declared type
@@ -95,8 +96,8 @@ pub fn module_type(module_node: NodeRef, ctx: &AnalysisContext) -> Type {
 
 pub fn module_super(module: NodeRef, ctx: &AnalysisContext) -> Option<NodeRef> {
     let tree = ctx.tree_for(module.file_id)?;
-    let header = tree.child(module.node_id, |k| matches!(k, NodeKind::ModuleHeader))?;
-    let clause = tree.child(header, |k| matches!(k, NodeKind::ModuleExtendsAmendsClause))?;
+    let header = nodes::Module::cast(tree, module.node_id)?.header(tree)?;
+    let clause = nodes::ModuleHeader::cast(tree, header)?.extends_amends_clause(tree)?;
     ctx.imports.get(&module.with_node(clause))?.single()
 }
 
@@ -104,7 +105,9 @@ pub fn import_name(tree: &SyntaxTree, import: NodeId) -> Option<String> {
     if let Some(id) = tree.identifier(import) {
         return Some(tree.text(id).to_string());
     }
-    let uri = tree.child(import, |k| k.is_string_literal())?;
+    let uri = nodes::Import::cast(tree, import)
+        .and_then(|n| n.uri(tree))
+        .or_else(|| nodes::ImportGlob::cast(tree, import).and_then(|n| n.uri(tree)))?;
     let uri = tree.escaped_string_literal(uri)?;
     let name = uri
         .rsplit('/')
@@ -117,10 +120,9 @@ pub fn import_name(tree: &SyntaxTree, import: NodeId) -> Option<String> {
 }
 
 fn find_import(tree: &SyntaxTree, name: &str) -> Option<NodeId> {
-    tree.children(tree.root()).iter().copied().find(|&id| {
-        matches!(tree.kind(id), NodeKind::Import | NodeKind::ImportGlob)
-            && import_name(tree, id).as_deref() == Some(name)
-    })
+    nodes::Module::cast(tree, tree.root())?
+        .imports(tree)
+        .find(|&id| import_name(tree, id).as_deref() == Some(name))
 }
 
 pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
@@ -154,7 +156,8 @@ pub fn is_subclass(mut a: NodeRef, b: NodeRef, ctx: &AnalysisContext) -> bool {
         let Some(tree) = ctx.tree_for(a.file_id) else {
             return false;
         };
-        let Some(target) = tree.class_extends_target(a.node_id) else {
+        let Some(target) = nodes::Class::cast(tree, a.node_id).and_then(|n| n.extends_target(tree))
+        else {
             return false;
         };
         let Some(parent) = resolve_type_name(
@@ -210,10 +213,10 @@ pub fn resolve_reference(
             let segments = tree.qualified_identifier_segments(node_id);
             if segments.len() > 1
                 && let Some(import) = find_import(tree, segments[0])
-                && let Some(identifier) = tree.children(node_id).iter().find(|&&id| {
-                    tree.kind(id).is_terminal() && tree.span(id).contains_inclusive(offset)
-                })
-                && tree.text(*identifier) == segments[0]
+                && let Some(identifier) = nodes::QualifiedIdentifier::cast(tree, node_id)?
+                    .identifiers(tree)
+                    .find(|&id| tree.span(id).contains_inclusive(offset))
+                && tree.text(identifier) == segments[0]
             {
                 return ctx
                     .imports
@@ -259,14 +262,31 @@ pub fn resolve_reference(
 }
 
 /// Find the `TypeAnnotation` child of a class/object member declaration.
-fn member_type_annotation(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
-    let holder = match tree.kind(member) {
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
-            .child(member, |k| matches!(k, NodeKind::MethodHeader))
-            .unwrap_or(member),
-        _ => member,
-    };
-    tree.child(holder, |k| matches!(k, NodeKind::TypeAnnotation))
+pub(crate) fn member_type_annotation(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
+    nodes::ClassProperty::cast(tree, member)
+        .and_then(|n| n.type_annotation(tree))
+        .or_else(|| nodes::ObjectProperty::cast(tree, member).and_then(|n| n.type_annotation(tree)))
+        .or_else(|| {
+            nodes::TypedIdentifier::cast(tree, member).and_then(|n| n.type_annotation(tree))
+        })
+        .or_else(|| {
+            method_header(tree, member)
+                .and_then(|n| nodes::MethodHeader::cast(tree, n)?.type_annotation(tree))
+        })
+}
+
+fn method_header(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
+    nodes::ClassMethod::cast(tree, member)
+        .and_then(|n| n.header(tree))
+        .or_else(|| nodes::ObjectMethod::cast(tree, member).and_then(|n| n.header(tree)))
+}
+
+fn member_value(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
+    nodes::ClassProperty::cast(tree, member)
+        .and_then(|n| n.value(tree))
+        .or_else(|| nodes::ObjectProperty::cast(tree, member).and_then(|n| n.value(tree)))
+        .or_else(|| nodes::ClassMethod::cast(tree, member).and_then(|n| n.body(tree)))
+        .or_else(|| nodes::ObjectMethod::cast(tree, member).and_then(|n| n.body(tree)))
 }
 
 /// Look up a member by name on a type. Returns the member's resolved type if
@@ -304,17 +324,12 @@ fn find_member_inner(
             }
             let tree = ctx.tree_for(class_node.file_id)?;
             let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-            let member_parent = tree
-                .child(class_node.node_id, |k| matches!(k, NodeKind::ClassBody))
-                .unwrap_or(class_node.node_id);
-
-            if let Some(&class_member) = tree
-                .children_matching(member_parent, |k| {
-                    matches!(k, NodeKind::ClassProperty | NodeKind::ClassMethod)
-                })
-                .iter()
-                .find(|&&n| tree.name(n) == Some(name))
-            {
+            let mut members = nodes::Class::cast(tree, class_node.node_id)
+                .and_then(|n| n.body(tree))
+                .and_then(|n| nodes::ClassBody::cast(tree, n))
+                .into_iter()
+                .flat_map(|n| n.members(tree));
+            if let Some(class_member) = members.find(|&n| tree.name(n) == Some(name)) {
                 let ty = definition_type(
                     NodeRef::new(class_node.file_id, class_member),
                     &member_bindings,
@@ -324,7 +339,8 @@ fn find_member_inner(
 
                 Some(ResolvedType::new(member_ref, ty))
             } else {
-                let extends_target = tree.class_extends_target(class_node.node_id)?;
+                let extends_target =
+                    nodes::Class::cast(tree, class_node.node_id)?.extends_target(tree)?;
                 let super_type_name = tree.qualified_identifier_segments(extends_target);
                 let super_type_node = resolve_type_name(
                     ctx,
@@ -346,18 +362,9 @@ fn find_member_inner(
                 return None;
             }
             let tree = ctx.tree_for(module_node.file_id)?;
-            if let Some(&module_member) = tree
-                .children_matching(module_node.node_id, |k| {
-                    matches!(
-                        k,
-                        NodeKind::ClassProperty
-                            | NodeKind::ClassMethod
-                            | NodeKind::Class
-                            | NodeKind::TypeAlias
-                    )
-                })
-                .iter()
-                .find(|&&n| tree.name(n) == Some(name))
+            if let Some(module_member) = nodes::Module::cast(tree, module_node.node_id)?
+                .members(tree)
+                .find(|&n| tree.name(n) == Some(name))
             {
                 let member_ref = NodeRef::new(module_node.file_id, module_member);
                 let ty = definition_type(member_ref, bindings, ctx);
@@ -414,12 +421,12 @@ pub fn definition_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCon
         }
         _ => {}
     }
-    if let Some(ann) =
-        member_type_annotation(tree, node.node_id).and_then(|a| tree.child(a, |k| k.is_type_node()))
+    if let Some(ann) = member_type_annotation(tree, node.node_id)
+        .and_then(|a| nodes::TypeAnnotation::cast(tree, a)?.ty(tree))
     {
         return to_type(node.with_node(ann), bindings, &local);
     }
-    tree.child(node.node_id, |k| k.is_expr_node())
+    member_value(tree, node.node_id)
         .map(|e| compute_expr_type(e, bindings, &local))
         .unwrap_or(Type::Unknown)
 }
@@ -431,7 +438,7 @@ pub fn super_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
         }
         Type::Class { class_node, .. } => {
             let tree = ctx.tree_for(class_node.file_id)?;
-            let target = tree.class_extends_target(class_node.node_id)?;
+            let target = nodes::Class::cast(tree, class_node.node_id)?.extends_target(tree)?;
             resolve_type_name(
                 ctx,
                 &tree.qualified_identifier_segments(target),
@@ -445,8 +452,7 @@ pub fn super_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
 
 /// Whether `node` is inside the body of this let expression, not its initializer.
 pub fn let_binding_is_visible(let_node: NodeId, node: NodeId, ctx: &AnalysisContext) -> bool {
-    let exprs = ctx.tree.children_matching(let_node, |k| k.is_expr_node());
-    let Some(&body) = exprs.get(1) else {
+    let Some(body) = nodes::LetExpr::cast(ctx.tree, let_node).and_then(|n| n.body(ctx.tree)) else {
         return false;
     };
     let mut current = Some(node);
@@ -476,22 +482,18 @@ pub fn resolve_local_binding(
                 match_let_binding(id, name, bindings, ctx)
             }
             NodeKind::FunctionLiteralExpr => {
-                let param_list = ctx.tree.child(id, |k| matches!(k, NodeKind::ParameterList));
+                let param_list = nodes::FunctionLiteralExpr::cast(ctx.tree, id)
+                    .and_then(|n| n.parameters(ctx.tree));
                 param_list.and_then(|pl| match_param(pl, name, bindings, ctx))
             }
             NodeKind::ClassMethod | NodeKind::ObjectMethod => {
-                let param_list = ctx
-                    .tree
-                    .child(id, |k| matches!(k, NodeKind::MethodHeader))
-                    .and_then(|mh| ctx.tree.child(mh, |k| matches!(k, NodeKind::ParameterList)));
+                let param_list = method_header(ctx.tree, id)
+                    .and_then(|n| nodes::MethodHeader::cast(ctx.tree, n)?.parameters(ctx.tree));
                 param_list.and_then(|pl| match_param(pl, name, bindings, ctx))
             }
-            NodeKind::ObjectBody => ctx
-                .tree
-                .children_matching(id, |k| {
-                    matches!(k, NodeKind::ObjectProperty | NodeKind::ObjectMethod)
-                })
+            NodeKind::ObjectBody => nodes::ObjectBody::cast(ctx.tree, id)
                 .into_iter()
+                .flat_map(|n| n.members(ctx.tree))
                 .find(|&m| ctx.tree.name(m) == Some(name))
                 .map(|m| {
                     let r = NodeRef::new(ctx.file_id, m);
@@ -523,17 +525,16 @@ fn resolve_local_type_parameter(
             tree.kind(id),
             NodeKind::Class | NodeKind::TypeAlias | NodeKind::ClassMethod
         ) {
-            let holder = if matches!(tree.kind(id), NodeKind::ClassMethod) {
-                tree.child(id, |k| matches!(k, NodeKind::MethodHeader))
-                    .unwrap_or(id)
-            } else {
-                id
-            };
-            if let Some(param_list) =
-                tree.child(holder, |k| matches!(k, NodeKind::TypeParameterList))
-                && let Some(tp) = tree
-                    .children_matching(param_list, |k| matches!(k, NodeKind::TypeParameter))
-                    .into_iter()
+            let param_list = nodes::Class::cast(tree, id)
+                .and_then(|n| n.type_parameters(tree))
+                .or_else(|| nodes::TypeAlias::cast(tree, id).and_then(|n| n.type_parameters(tree)))
+                .or_else(|| {
+                    method_header(tree, id)
+                        .and_then(|n| nodes::MethodHeader::cast(tree, n)?.type_parameters(tree))
+                });
+            if let Some(param_list) = param_list
+                && let Some(tp) = nodes::TypeParameterList::cast(tree, param_list)?
+                    .parameters(tree)
                     .find(|&n| tree.name(n) == Some(name))
             {
                 return Some(NodeRef::new(node.file_id, tp));
@@ -552,26 +553,20 @@ fn match_let_binding(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
-    let typed_identifier = ctx
-        .tree
-        .child(let_node, |k| matches!(k, NodeKind::TypedIdentifier))?;
+    let expr = nodes::LetExpr::cast(ctx.tree, let_node)?;
+    let typed_identifier = expr.binding(ctx.tree)?;
     if ctx.tree.name(typed_identifier) != Some(name) {
         return None;
     }
 
-    // Prefer the explicit annotation, fall back to inferring from the
-    // initializer (LetExpr's first expr child), else Unknown.
-    let ty_from_annotation = ctx
-        .tree
-        .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))
-        .and_then(|ann| ctx.tree.child(ann, |k| k.is_type_node()))
+    // Prefer the explicit annotation, otherwise infer from the initializer.
+    let ty_from_annotation = nodes::TypedIdentifier::cast(ctx.tree, typed_identifier)?
+        .type_annotation(ctx.tree)
+        .and_then(|ann| nodes::TypeAnnotation::cast(ctx.tree, ann)?.ty(ctx.tree))
         .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx));
 
     let ty = ty_from_annotation.unwrap_or_else(|| {
-        ctx.tree
-            .children_matching(let_node, |k| k.is_expr_node())
-            .first()
-            .copied()
+        expr.value(ctx.tree)
             .map(|expr| compute_expr_type(expr, bindings, ctx))
             .unwrap_or(Type::Unknown)
     });
@@ -590,16 +585,13 @@ fn match_param(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
-    let typed_identifier = ctx
-        .tree
-        .children_matching(param_list, |k| matches!(k, NodeKind::TypedIdentifier))
-        .into_iter()
+    let typed_identifier = nodes::ParameterList::cast(ctx.tree, param_list)?
+        .parameters(ctx.tree)
         .find(|&n| ctx.tree.name(n) == Some(name))?;
 
-    let ty = ctx
-        .tree
-        .child(typed_identifier, |k| matches!(k, NodeKind::TypeAnnotation))
-        .and_then(|ann| ctx.tree.child(ann, |k| k.is_type_node()))
+    let ty = nodes::TypedIdentifier::cast(ctx.tree, typed_identifier)?
+        .type_annotation(ctx.tree)
+        .and_then(|ann| nodes::TypeAnnotation::cast(ctx.tree, ann)?.ty(ctx.tree))
         .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx))
         .unwrap_or(Type::Unknown);
     Some(ResolvedType::new(
@@ -628,22 +620,25 @@ pub fn resolve_unqualified_access(
                 let tree = ctx.tree_for(class_node.file_id)?;
                 (
                     *class_node,
-                    tree.child(class_node.node_id, |k| matches!(k, NodeKind::ClassBody))
-                        .unwrap_or(class_node.node_id),
+                    match nodes::Class::cast(tree, class_node.node_id).and_then(|n| n.body(tree)) {
+                        Some(body) => body,
+                        None => continue,
+                    },
                 )
             }
             _ => continue,
         };
         let tree = ctx.tree_for(root.file_id)?;
-        if let Some(member) = tree.children(body).iter().copied().find(|&id| {
-            matches!(
-                tree.kind(id),
-                NodeKind::ClassProperty
-                    | NodeKind::ClassMethod
-                    | NodeKind::Class
-                    | NodeKind::TypeAlias
-            ) && tree.name(id) == Some(name)
-        }) {
+        let member = nodes::Module::cast(tree, body)
+            .into_iter()
+            .flat_map(|n| n.members(tree))
+            .chain(
+                nodes::ClassBody::cast(tree, body)
+                    .into_iter()
+                    .flat_map(|n| n.members(tree)),
+            )
+            .find(|&id| tree.name(id) == Some(name));
+        if let Some(member) = member {
             let r = root.with_node(member);
             return Some(ResolvedType::new(r, definition_type(r, bindings, ctx)));
         }
@@ -695,12 +690,13 @@ pub fn class_member_bindings(
         return caller_bindings.clone();
     };
     let mut member_bindings = caller_bindings.clone();
-    if let Some(type_param_list) = tree.child(class_node.node_id, |k| {
-        matches!(k, NodeKind::TypeParameterList)
-    }) {
-        let params =
-            tree.children_matching(type_param_list, |k| matches!(k, NodeKind::TypeParameter));
-        for (&param_node, arg) in params.iter().zip(type_args.iter()) {
+    if let Some(type_param_list) =
+        nodes::Class::cast(tree, class_node.node_id).and_then(|n| n.type_parameters(tree))
+    {
+        let params = nodes::TypeParameterList::cast(tree, type_param_list)
+            .into_iter()
+            .flat_map(|n| n.parameters(tree));
+        for (param_node, arg) in params.zip(type_args.iter()) {
             member_bindings.insert(NodeRef::new(class_node.file_id, param_node), arg.clone());
         }
     };
@@ -716,7 +712,8 @@ pub fn access_receiver_type(
     match ctx.tree.kind(access) {
         NodeKind::UnqualifiedAccessExpr => Some(compute_this_type(access, bindings, ctx)),
         NodeKind::QualifiedAccessExpr => {
-            let receiver = ctx.tree.child(access, |k| k.is_expr_node())?;
+            let receiver =
+                nodes::QualifiedAccessExpr::cast(ctx.tree, access)?.receiver(ctx.tree)?;
             Some(compute_expr_type(receiver, bindings, ctx))
         }
         NodeKind::SuperAccessExpr => super_type(&compute_this_type(access, bindings, ctx), ctx),

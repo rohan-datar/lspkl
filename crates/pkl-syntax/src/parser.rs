@@ -14,6 +14,11 @@ use tree_sitter::{Node as TsNode, Parser};
 
 use crate::ast::{NodeEntry, NodeId, NodeKind, SyntaxTree, TokenType};
 use crate::{TextRange, TextSize};
+pub(crate) fn grammar() -> &'static tree_sitter::Language {
+    static LANGUAGE: std::sync::LazyLock<tree_sitter::Language> =
+        std::sync::LazyLock::new(|| tree_sitter_pkl::LANGUAGE.into());
+    &LANGUAGE
+}
 
 #[derive(Debug, Error)]
 pub enum ParseError {
@@ -28,13 +33,13 @@ pub enum ParseError {
 pub fn parse(source: &str) -> Result<SyntaxTree, ParseError> {
     let mut parser = Parser::new();
     parser
-        .set_language(&tree_sitter_pkl::LANGUAGE.into())
+        .set_language(grammar())
         .map_err(|e| ParseError::Language(e.to_string()))?;
 
     let ts_tree = parser.parse(source, None).ok_or(ParseError::Halted)?;
 
     let mut builder = TreeBuilder::new();
-    builder.visit(ts_tree.root_node(), None);
+    builder.visit(ts_tree.root_node(), None, None);
     Ok(SyntaxTree::from_parts(source.to_string(), builder.nodes))
 }
 
@@ -50,7 +55,12 @@ impl TreeBuilder {
         }
     }
 
-    fn visit(&mut self, ts_node: TsNode<'_>, parent: Option<NodeId>) -> NodeId {
+    fn visit(
+        &mut self,
+        ts_node: TsNode<'_>,
+        parent: Option<NodeId>,
+        field: Option<std::num::NonZeroU16>,
+    ) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         let kind = ts_node_to_kind(&ts_node);
         let span = span_of(&ts_node);
@@ -61,6 +71,7 @@ impl TreeBuilder {
             kind,
             span,
             parent,
+            field,
             children: SmallVec::new(),
             is_missing,
         });
@@ -70,9 +81,14 @@ impl TreeBuilder {
         if cursor.goto_first_child() {
             loop {
                 let child = cursor.node();
-                let is_operator = cursor.field_name() == Some("operator");
-                if should_keep_child(&child, is_operator) {
-                    child_ids.push(self.visit(child, Some(id)));
+                // Named grammar fields and semantic tokens survive projection; punctuation does not.
+                if child.is_named()
+                    || child.is_error()
+                    || child.is_missing()
+                    || cursor.field_id().is_some()
+                    || operator_token(child.kind()) != TokenType::Other
+                {
+                    child_ids.push(self.visit(child, Some(id), cursor.field_id()));
                 }
                 if !cursor.goto_next_sibling() {
                     break;
@@ -82,15 +98,6 @@ impl TreeBuilder {
         self.nodes[id.index()].children = child_ids;
         id
     }
-}
-
-/// Skip whitespace and other non-semantic tokens. Tree-sitter calls these
-/// "extras" and they appear as anonymous nodes; we don't want them in the AST.
-///
-/// TODO: refine — comments belong in the AST (LineComment/BlockComment), but
-/// pure whitespace does not. For now we keep all named nodes plus ERROR.
-fn should_keep_child(ts_node: &TsNode<'_>, is_fielded_operator: bool) -> bool {
-    is_fielded_operator || ts_node.is_named() || ts_node.is_error() || ts_node.is_missing()
 }
 
 /// Convert a tree-sitter node to its [`NodeKind`].
@@ -205,17 +212,13 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
         "modifier" => NodeKind::Terminal(modifier_token(ts_node)),
         "slStringLiteralPart" => NodeKind::Terminal(TokenType::StringLiteral),
 
-        // ---- Fielded anonymous operator tokens ----
-        // These have no grammar name; match on their literal text.
-        "+" | "-" | "*" | "/" | "~/" | "%" => NodeKind::Terminal(operator_token(raw)),
-
-        // Comparisons, logic, pipes, type tests/casts — consumers match on
-        // the text via `SyntaxTree::text`, so classify them uniformly.
-        "<" | "<=" | ">" | ">=" | "==" | "!=" | "&&" | "||" | "??" | "**" | "|>" | "is" | "as" => {
-            NodeKind::Terminal(TokenType::Other)
+        "+" | "-" | "*" | "/" | "~/" | "%" | "<" | "<=" | ">" | ">=" | "==" | "!=" | "&&"
+        | "||" | "??" | "**" | "|>" | "is" | "as" | "!" | "!!" | "?." | "import" | "import*"
+        | "read" | "read*" | "read?" | "amends" | "extends" | "->" => {
+            NodeKind::Terminal(operator_token(raw))
         }
-        // Unknown — log via the snapshot output.
-        other => NodeKind::Unmapped(other.to_string()),
+        _ if !ts_node.is_named() => NodeKind::Terminal(TokenType::Other),
+        _ => NodeKind::Unmapped(ts_node.kind_id()),
     }
 }
 
@@ -251,6 +254,30 @@ fn operator_token(raw: &str) -> TokenType {
         "/" => TokenType::Slash,
         "~/" => TokenType::IntDiv,
         "%" => TokenType::Mod,
+        "<" => TokenType::Less,
+        "<=" => TokenType::LessEqual,
+        ">" => TokenType::Greater,
+        ">=" => TokenType::GreaterEqual,
+        "==" => TokenType::Equal,
+        "!=" => TokenType::NotEqual,
+        "&&" => TokenType::LogicalAnd,
+        "||" => TokenType::LogicalOr,
+        "??" => TokenType::NullCoalesce,
+        "**" => TokenType::Power,
+        "|>" => TokenType::Pipe,
+        "is" => TokenType::Is,
+        "as" => TokenType::As,
+        "!" => TokenType::Not,
+        "!!" => TokenType::NonNull,
+        "?." => TokenType::QDot,
+        "import" => TokenType::Import,
+        "import*" => TokenType::ImportGlob,
+        "read" => TokenType::Read,
+        "read*" => TokenType::ReadGlob,
+        "read?" => TokenType::ReadOrNull,
+        "amends" => TokenType::Amends,
+        "extends" => TokenType::Extends,
+        "->" => TokenType::Arrow,
         _ => TokenType::Other,
     }
 }

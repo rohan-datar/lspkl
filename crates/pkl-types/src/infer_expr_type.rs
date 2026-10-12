@@ -1,6 +1,7 @@
 //! Infer the *expected* type of an expression from its surrounding AST
 //! context.
 
+use pkl_syntax::ast::nodes;
 use pkl_syntax::ast::{NodeId, NodeKind};
 
 use crate::compute_expr::{compute_expr_type, compute_this_type};
@@ -39,14 +40,15 @@ pub fn infer_expr_type_from_context(
         //     For Mapping<K,V> → V; for Listing<E> → E.
         NodeKind::ObjectEntry => {
             let this_type = compute_this_type(parent, bindings, ctx);
-            let children = ctx.tree.children(parent);
-            if children.len() != 2 {
+            let Some(entry) = nodes::ObjectEntry::cast(ctx.tree, parent) else {
                 return Type::Unknown;
-            }
-            if node == children[0] {
+            };
+            if entry.key(ctx.tree) == Some(node) {
                 container_key_type(&this_type, ctx).unwrap_or(Type::Unknown)
-            } else {
+            } else if entry.value(ctx.tree) == Some(node) {
                 container_value_type(&this_type, ctx).unwrap_or(Type::Unknown)
+            } else {
+                Type::Unknown
             }
         }
 
@@ -58,15 +60,16 @@ pub fn infer_expr_type_from_context(
         //   - conditionExpr → Boolean
         //   - valueExpr     → element type of enclosing container
         NodeKind::MemberPredicate => {
-            let children = ctx.tree.children(parent);
-            if children.len() != 2 {
+            let Some(predicate) = nodes::MemberPredicate::cast(ctx.tree, parent) else {
                 return Type::Unknown;
-            }
-            if node == children[0] {
+            };
+            if predicate.condition(ctx.tree) == Some(node) {
                 ctx.base.boolean_type().clone()
-            } else {
+            } else if predicate.value(ctx.tree) == Some(node) {
                 let this_type = compute_this_type(parent, bindings, ctx);
                 container_value_type(&this_type, ctx).unwrap_or(Type::Unknown)
+            } else {
+                Type::Unknown
             }
         }
 
@@ -74,11 +77,9 @@ pub fn infer_expr_type_from_context(
         // Body's ObjectBody contents are checked via their own enclosing
         // context (the outer object), not via this arm.
         NodeKind::WhenGenerator => {
-            let children = ctx.tree.children(parent);
-            if children.is_empty() || children.len() != 2 {
-                return Type::Unknown;
-            }
-            if node != children[0] {
+            if nodes::WhenGenerator::cast(ctx.tree, parent).and_then(|n| n.condition(ctx.tree))
+                != Some(node)
+            {
                 Type::Unknown
             } else {
                 ctx.base.boolean_type().clone()
@@ -88,12 +89,8 @@ pub fn infer_expr_type_from_context(
         // `for (binding in iterable) { body }`. Iterable expr position:
         //   - Listing<E>, List<E>, Set<E>, Mapping<K,V>, Map<K,V>, or IntRange
         NodeKind::ForGenerator => {
-            let iterable = ctx
-                .tree
-                .children(parent)
-                .iter()
-                .find(|&&c| ctx.tree.kind(c).is_expr_node())
-                .copied();
+            let iterable =
+                nodes::ForGenerator::cast(ctx.tree, parent).and_then(|n| n.iterable(ctx.tree));
             if Some(node) == iterable {
                 ctx.base.collection_type().clone()
             } else {
@@ -117,12 +114,15 @@ pub fn infer_expr_type_from_context(
         //   - String: Int
         //   - Else: Unknown
         NodeKind::SubscriptExpr => {
-            let Some(receiver) = ctx.tree.child(parent, |k| k.is_expr_node()) else {
+            let Some(subscript) = nodes::SubscriptExpr::cast(ctx.tree, parent) else {
+                return Type::Unknown;
+            };
+            let Some(receiver) = subscript.receiver(ctx.tree) else {
                 return Type::Unknown;
             };
             let receiver_type = compute_expr_type(receiver, bindings, ctx);
 
-            if receiver == node {
+            if subscript.index(ctx.tree) != Some(node) {
                 return Type::Unknown;
             }
             if receiver_type.is_subtype_of(ctx.base.list_type(), ctx)
@@ -151,11 +151,8 @@ pub fn infer_expr_type_from_context(
 
         // `a * b`, `a / b`, `a ~/ b`, `a % b` — Number-ish.
         NodeKind::MultiplicativeExpr => {
-            let operands = operand_siblings(ctx, parent);
-            let other = if node == operands[0] {
-                operands[1]
-            } else {
-                operands[0]
+            let Some(other) = other_operand(ctx, parent, node) else {
+                return Type::Unknown;
             };
             let other_type = compute_expr_type(other, bindings, ctx);
             if other_type.is_subtype_of(ctx.base.duration_type(), ctx) {
@@ -179,11 +176,8 @@ pub fn infer_expr_type_from_context(
         // `a + b`, `a - b` — Number, String, Bytes, List, Set, or Map
         // depending on the *other* operand's type.
         NodeKind::AdditiveExpr => {
-            let operands = operand_siblings(ctx, parent);
-            let other = if node == operands[0] {
-                operands[1]
-            } else {
-                operands[0]
+            let Some(other) = other_operand(ctx, parent, node) else {
+                return Type::Unknown;
             };
             compute_expr_type(other, bindings, ctx)
         }
@@ -197,10 +191,14 @@ pub fn infer_expr_type_from_context(
         // `a |> b` — pipe. `b` must be a `(typeof(a)) -> R` function.
         //   - If `node` is the left side: Unknown (no constraint on input).
         NodeKind::PipeExpr => {
-            let operands = operand_siblings(ctx, parent);
-            let pos = operands.iter().position(|&c| c == node);
-            if Some(1) == pos {
-                let input_type = compute_expr_type(operands[0], bindings, ctx);
+            let Some(expr) = nodes::BinaryExpr::cast(ctx.tree, parent) else {
+                return Type::Unknown;
+            };
+            if expr.right(ctx.tree) == Some(node) {
+                let Some(left) = expr.left(ctx.tree) else {
+                    return Type::Unknown;
+                };
+                let input_type = compute_expr_type(left, bindings, ctx);
                 let Some(fn1_type) = ctx.base.function_n_type(1) else {
                     return Type::Unknown;
                 };
@@ -228,7 +226,9 @@ pub fn infer_expr_type_from_context(
         //   - c → Boolean
         //   - t, e → recurse on outer context (infer_expr_type_from_context(parent, ...))
         NodeKind::IfExpr => {
-            if let Some(0) = ctx.tree.children(parent).iter().position(|&c| c == node) {
+            if nodes::IfExpr::cast(ctx.tree, parent).and_then(|n| n.condition(ctx.tree))
+                == Some(node)
+            {
                 ctx.base.boolean_type().clone()
             } else {
                 infer_expr_type_from_context(parent, bindings, ctx)
@@ -239,24 +239,19 @@ pub fn infer_expr_type_from_context(
         //   - init → the TypedIdentifier's declared type (via to_type)
         //   - body → recurse on outer context
         NodeKind::LetExpr => {
-            let children = ctx.tree.children(parent);
-            if children.len() != 3 {
+            let Some(expr) = nodes::LetExpr::cast(ctx.tree, parent) else {
                 return Type::Unknown;
-            }
-
-            if node == children[1] {
-                let typed_ident = children[0];
-                let Some(type_annotation) = ctx
-                    .tree
-                    .child(typed_ident, |k| matches!(k, NodeKind::TypeAnnotation))
-                else {
-                    return Type::Unknown;
-                };
-                let Some(type_node) = ctx.tree.child(type_annotation, |k| k.is_type_node()) else {
-                    return Type::Unknown;
-                };
-                to_type(NodeRef::new(ctx.file_id, type_node), bindings, ctx)
-            } else if node == children[2] {
+            };
+            if expr.value(ctx.tree) == Some(node) {
+                let ty = expr
+                    .binding(ctx.tree)
+                    .and_then(|n| nodes::TypedIdentifier::cast(ctx.tree, n))
+                    .and_then(|n| n.type_annotation(ctx.tree))
+                    .and_then(|n| nodes::TypeAnnotation::cast(ctx.tree, n))
+                    .and_then(|n| n.ty(ctx.tree));
+                ty.map(|n| to_type(NodeRef::new(ctx.file_id, n), bindings, ctx))
+                    .unwrap_or(Type::Unknown)
+            } else if expr.body(ctx.tree) == Some(node) {
                 infer_expr_type_from_context(parent, bindings, ctx)
             } else {
                 Type::Unknown
@@ -294,14 +289,16 @@ pub fn infer_expr_type_from_context(
     }
 }
 
-/// The operand expressions of a binary-expression `parent`, in source order.
-fn operand_siblings(ctx: &AnalysisContext, parent: NodeId) -> Vec<NodeId> {
-    ctx.tree
-        .children(parent)
-        .iter()
-        .copied()
-        .filter(|&c| !matches!(ctx.tree.kind(c), NodeKind::Terminal(_)))
-        .collect()
+/// Return the opposite named operand only when the node is an operand.
+fn other_operand(ctx: &AnalysisContext, parent: NodeId, node: NodeId) -> Option<NodeId> {
+    let expr = nodes::BinaryExpr::cast(ctx.tree, parent)?;
+    if expr.left(ctx.tree) == Some(node) {
+        expr.right(ctx.tree)
+    } else if expr.right(ctx.tree) == Some(node) {
+        expr.left(ctx.tree)
+    } else {
+        None
+    }
 }
 
 /// Find the type annotation attached to a *member-like* parent
@@ -310,20 +307,8 @@ fn parent_declared_type(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<Type> {
-    let _ = (parent, bindings, ctx);
-    let wrapper = if matches!(
-        ctx.tree.kind(parent),
-        NodeKind::ClassMethod | NodeKind::ObjectMethod
-    ) {
-        ctx.tree
-            .child(parent, |k| matches!(k, NodeKind::MethodHeader))?
-    } else {
-        parent
-    };
-    let annotation = ctx
-        .tree
-        .child(wrapper, |k| matches!(k, NodeKind::TypeAnnotation))?;
-    let type_node = ctx.tree.child(annotation, |k| k.is_type_node())?;
+    let annotation = crate::resolver::member_type_annotation(ctx.tree, parent)?;
+    let type_node = nodes::TypeAnnotation::cast(ctx.tree, annotation)?.ty(ctx.tree)?;
 
     Some(to_type(NodeRef::new(ctx.file_id, type_node), bindings, ctx))
 }
@@ -338,13 +323,21 @@ fn infer_type_from_arg_list(
     let receiver_type = access_receiver_type(access, bindings, ctx)?;
     let name = ctx.tree.name(access).unwrap_or("");
     let method = find_member_on_type(&receiver_type, name, bindings, ctx)?;
-    let arg_index = ctx.tree.children(parent).iter().position(|&c| c == node)?;
+    let arg_index = nodes::ArgumentList::cast(ctx.tree, parent)?
+        .arguments(ctx.tree)
+        .position(|c| c == node)?;
     let tree = ctx.tree_for(method.node.file_id)?;
-    let header = tree.child(method.node.node_id, |k| matches!(k, NodeKind::MethodHeader))?;
-    let param_list = tree.child(header, |k| matches!(k, NodeKind::ParameterList))?;
-    let &param_decl = tree.children(param_list).get(arg_index)?;
-    let type_annotation = tree.child(param_decl, |k| matches!(k, NodeKind::TypeAnnotation))?;
-    let type_node = tree.child(type_annotation, |k| k.is_type_node())?;
+    let header = nodes::ClassMethod::cast(tree, method.node.node_id)
+        .and_then(|n| n.header(tree))
+        .or_else(|| {
+            nodes::ObjectMethod::cast(tree, method.node.node_id).and_then(|n| n.header(tree))
+        })?;
+    let param_list = nodes::MethodHeader::cast(tree, header)?.parameters(tree)?;
+    let param_decl = nodes::ParameterList::cast(tree, param_list)?
+        .parameters(tree)
+        .nth(arg_index)?;
+    let type_annotation = nodes::TypedIdentifier::cast(tree, param_decl)?.type_annotation(tree)?;
+    let type_node = nodes::TypeAnnotation::cast(tree, type_annotation)?.ty(tree)?;
     Some(to_type(
         NodeRef::new(method.node.file_id, type_node),
         bindings,

@@ -3,6 +3,10 @@
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
+use pkl_syntax::ast::nodes::{
+    ClassBody, ClassMethod, Expr, FunctionLiteralExpr, LetExpr, MethodHeader, Module, ModuleMember,
+    ObjectBody, ObjectMember, ObjectMethod, ParameterList, TypedIdentifier,
+};
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_types::compute_expr::compute_this_type;
 use pkl_types::infer_expr_type::infer_expr_type_from_context;
@@ -80,7 +84,8 @@ fn add_definition_completions(
             out.extend(super::definition_level_keywords());
 
             let tree = ctx.tree;
-            if !matches!(tree.kind(node), NodeKind::ObjectBody) && !tree.kind(node).is_expr_node() {
+            if !matches!(tree.kind(node), NodeKind::ObjectBody) && !Expr::can_cast(tree.kind(node))
+            {
                 if ancestor_matches(node, ctx, |k| matches!(k, NodeKind::Class)) {
                     out.extend(super::class_level_keywords());
                 } else if matches!(tree.kind(node), NodeKind::Module) {
@@ -116,7 +121,7 @@ fn enclosing_def_is_class(node: NodeId, ctx: &AnalysisContext) -> bool {
     let mut current = tree.parent(node);
     while let Some(id) = current {
         match tree.kind(id) {
-            k if k.is_expr_node() || matches!(k, NodeKind::ObjectBody) => return false,
+            k if Expr::can_cast(k) || matches!(k, NodeKind::ObjectBody) => return false,
             NodeKind::Module => return !tree.is_amend(),
             NodeKind::Class => return true,
             _ => current = tree.parent(id),
@@ -344,18 +349,20 @@ fn collect_defined_property_names(node: NodeId, ctx: &AnalysisContext) -> Vec<St
     while let Some(id) = current {
         match tree.kind(id) {
             NodeKind::Module | NodeKind::Class | NodeKind::ObjectBody => {
-                return tree
-                    .children_matching(id, |k| {
+                return ModuleMember::children(tree, id)
+                    .filter(|&member| {
                         matches!(
-                            k,
-                            NodeKind::ClassProperty
-                                | NodeKind::ObjectProperty
-                                | NodeKind::ObjectMethod
-                                | NodeKind::ClassMethod
+                            ModuleMember::cast(tree, member),
+                            Some(ModuleMember::ClassProperty(_) | ModuleMember::ClassMethod(_))
                         )
                     })
-                    .iter()
-                    .filter_map(|&m| tree.name(m).map(str::to_string))
+                    .chain(ObjectMember::children(tree, id).filter(|&member| {
+                        matches!(
+                            ObjectMember::cast(tree, member),
+                            Some(ObjectMember::ObjectProperty(_) | ObjectMember::ObjectMethod(_))
+                        )
+                    }))
+                    .filter_map(|member| tree.name(member).map(str::to_string))
                     .collect();
             }
             _ => current = tree.parent(id),
@@ -486,8 +493,9 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
         match tree.kind(id) {
             NodeKind::LetExpr => {
                 if pkl_types::resolver::let_binding_is_visible(id, node, ctx)
-                    && let Some(binding) = tree.children(id).first()
-                    && let Some(name) = tree.name(*binding)
+                    && let Some(binding) =
+                        LetExpr::cast(tree, id).and_then(|expr| expr.binding(tree))
+                    && let Some(name) = tree.name(binding)
                 {
                     scopes.push((name.to_string(), CompletionItemKind::VARIABLE));
                 }
@@ -499,23 +507,29 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
                 collect_params(id, ctx, &mut scopes);
             }
             NodeKind::ObjectBody | NodeKind::ClassBody => {
-                for member in tree.children_matching(id, |k| {
-                    matches!(
-                        k,
-                        NodeKind::ObjectProperty
-                            | NodeKind::ObjectMethod
-                            | NodeKind::ClassProperty
-                            | NodeKind::ClassMethod
+                for member in ClassBody::cast(tree, id)
+                    .into_iter()
+                    .flat_map(|body| body.members(tree))
+                    .chain(
+                        ObjectBody::cast(tree, id)
+                            .into_iter()
+                            .flat_map(|body| body.members(tree)),
                     )
-                }) {
+                {
                     if let Some(name) = tree.name(member) {
-                        let kind = if matches!(
-                            tree.kind(member),
-                            NodeKind::ObjectMethod | NodeKind::ClassMethod
+                        let kind = match (
+                            ModuleMember::cast(tree, member),
+                            ObjectMember::cast(tree, member),
                         ) {
-                            CompletionItemKind::METHOD
-                        } else {
-                            CompletionItemKind::PROPERTY
+                            (Some(ModuleMember::ClassMethod(_)), _)
+                            | (_, Some(ObjectMember::ObjectMethod(_))) => {
+                                CompletionItemKind::METHOD
+                            }
+                            (Some(ModuleMember::ClassProperty(_)), _)
+                            | (_, Some(ObjectMember::ObjectProperty(_))) => {
+                                CompletionItemKind::PROPERTY
+                            }
+                            _ => continue,
                         };
                         scopes.push((name.to_string(), kind));
                     }
@@ -562,8 +576,9 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
                         inherited_scopes.push((member.name, kind));
                     }
                 }
-                for import in tree
-                    .children_matching(id, |k| matches!(k, NodeKind::Import | NodeKind::ImportGlob))
+                for import in Module::cast(tree, id)
+                    .into_iter()
+                    .flat_map(|module| module.imports(tree))
                 {
                     if let Some(name) = pkl_types::resolver::import_name(tree, import) {
                         scopes.push((name, CompletionItemKind::MODULE));
@@ -577,8 +592,11 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
     scopes.extend(inherited_scopes);
     // Base-module classes and typealiases (e.g. `String`, `List`).
     let base_tree = ctx.base.tree();
-    for def in base_tree.children_matching(base_tree.root(), |k| {
-        matches!(k, NodeKind::Class | NodeKind::TypeAlias)
+    for def in ModuleMember::children(base_tree, base_tree.root()).filter(|&member| {
+        matches!(
+            ModuleMember::cast(base_tree, member),
+            Some(ModuleMember::Class(_) | ModuleMember::TypeAlias(_))
+        )
     }) {
         if let Some(name) = base_tree.name(def) {
             scopes.push((name.to_string(), CompletionItemKind::CLASS));
@@ -604,16 +622,22 @@ fn collect_params(
     out: &mut Vec<(String, CompletionItemKind)>,
 ) {
     let tree = ctx.tree;
-    let holder = match tree.kind(owner) {
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
-            .child(owner, |k| matches!(k, NodeKind::MethodHeader))
-            .unwrap_or(owner),
-        _ => owner,
-    };
-    let Some(params) = tree.child(holder, |k| matches!(k, NodeKind::ParameterList)) else {
+    let params = FunctionLiteralExpr::cast(tree, owner)
+        .and_then(|function| function.parameters(tree))
+        .or_else(|| {
+            ClassMethod::cast(tree, owner)
+                .and_then(|method| method.header(tree))
+                .or_else(|| ObjectMethod::cast(tree, owner).and_then(|method| method.header(tree)))
+                .and_then(|header| MethodHeader::cast(tree, header))
+                .and_then(|header| header.parameters(tree))
+        });
+    let Some(params) = params.and_then(|params| ParameterList::cast(tree, params)) else {
         return;
     };
-    for tid in tree.children_matching(params, |k| matches!(k, NodeKind::TypedIdentifier)) {
+    for tid in params
+        .parameters(tree)
+        .filter(|&tid| TypedIdentifier::cast(tree, tid).is_some())
+    {
         if let Some(name) = tree.name(tid) {
             out.push((name.to_string(), CompletionItemKind::VARIABLE));
         }

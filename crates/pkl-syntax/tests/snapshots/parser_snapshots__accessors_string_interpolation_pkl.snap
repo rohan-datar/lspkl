@@ -1,0 +1,17 @@
+---
+source: crates/pkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    SingleLineStringLiteral
+      StringInterpolation
+        BlockComment
+        IntLiteralExpr
+  ClassProperty
+    MultiLineStringLiteral
+      mlStringLiteralPart /* unmapped: mlStringLiteralPart */
+      StringInterpolation
+        BlockComment
+        IntLiteralExpr
+      mlStringLiteralPart /* unmapped: mlStringLiteralPart */

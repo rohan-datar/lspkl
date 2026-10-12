@@ -2,7 +2,7 @@
 //! aliases.
 
 use pkl_syntax::TextRange;
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType, nodes};
 use pkl_types::AnalysisContext;
 use semver::Version;
 
@@ -89,7 +89,7 @@ impl Analyzer for ModifierAnalyzer {
 
         if ctx.tree.has_modifier(node, Const)
             && !ctx.tree.has_modifier(node, Local)
-            && ctx.tree.kind(node).is_object_member()
+            && nodes::ObjectMember::can_cast(ctx.tree.kind(node))
             && effective_pkl_version(ctx) >= Version::new(0, 27, 0)
         {
             holder.add_error_with_fix(
@@ -148,7 +148,12 @@ impl Analyzer for ModifierAnalyzer {
 }
 
 fn has_type_annotation(tree: &SyntaxTree, node: NodeId) -> bool {
-    tree.child(node, |c| matches!(c, NodeKind::TypeAnnotation))
+    nodes::ClassProperty::cast(tree, node)
+        .and_then(|property| property.type_annotation(tree))
+        .or_else(|| {
+            nodes::ObjectProperty::cast(tree, node)
+                .and_then(|property| property.type_annotation(tree))
+        })
         .is_some()
 }
 
@@ -159,9 +164,15 @@ fn modifier_span(tree: &SyntaxTree, parent_node: NodeId, modifier: TokenType) ->
 }
 fn modifier_node(tree: &SyntaxTree, parent_node: NodeId, modifier: TokenType) -> NodeId {
     let holder = match tree.kind(parent_node) {
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
-            .child(parent_node, |k| matches!(k, NodeKind::MethodHeader))
-            .unwrap_or(parent_node),
+        NodeKind::ClassMethod | NodeKind::ObjectMethod => {
+            nodes::ClassMethod::cast(tree, parent_node)
+                .and_then(|method| method.header(tree))
+                .or_else(|| {
+                    nodes::ObjectMethod::cast(tree, parent_node)
+                        .and_then(|method| method.header(tree))
+                })
+                .unwrap_or(parent_node)
+        }
         _ => parent_node,
     };
     let Some(m) = tree.child(

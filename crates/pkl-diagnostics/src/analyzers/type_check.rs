@@ -2,7 +2,7 @@
 //! property defaults, function return types, parameter types, etc. The
 //! workhorse analyzer.
 
-use pkl_syntax::ast::NodeId;
+use pkl_syntax::ast::{NodeId, nodes};
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::infer_expr_type::infer_expr_type_from_context;
 use pkl_types::{AnalysisContext, Type, TypeBindings};
@@ -19,7 +19,7 @@ impl Analyzer for TypeCheckAnalyzer {
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
-        if !ctx.tree.kind(node).is_expr_node() {
+        if !nodes::Expr::can_cast(ctx.tree.kind(node)) {
             return true;
         }
 

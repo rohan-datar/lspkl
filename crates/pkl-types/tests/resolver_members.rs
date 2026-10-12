@@ -101,9 +101,7 @@ fn type_parameter_resolves_inside_typealias_body() {
 fn find_declared_type_named(tree: &SyntaxTree, target: &str) -> Option<NodeId> {
     fn go(tree: &SyntaxTree, id: NodeId, target: &str) -> Option<NodeId> {
         if matches!(tree.kind(id), NodeKind::DeclaredType) {
-            let segments = tree.qualified_identifier_segments(
-                tree.child(id, |k| matches!(k, NodeKind::QualifiedIdentifier))?,
-            );
+            let segments = tree.declared_type_parts(id);
             if segments.last().copied() == Some(target) && segments.len() == 1 {
                 return Some(id);
             }

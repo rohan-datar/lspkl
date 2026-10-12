@@ -5,3 +5,4 @@ expression: rendered
 5:7 error: too few arguments (expected 3, got 0)
 7:8 error: too few arguments (expected 3, got 2)
 9:8 error: too many arguments (expected 3, got 4)
+11:8 error: too few arguments (expected 1, got 0)

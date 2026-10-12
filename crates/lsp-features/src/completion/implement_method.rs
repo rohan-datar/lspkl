@@ -3,29 +3,25 @@
 
 use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
-use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::NodeId;
+use pkl_syntax::ast::nodes::{
+    Class, ClassBody, ClassMethod, MethodHeader, ParameterList, TypeAnnotation, TypedIdentifier,
+};
 use pkl_types::resolver::resolve_type_name;
 use pkl_types::{AnalysisContext, NodeRef};
 
 pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<CompletionItem> {
     let tree = ctx.tree;
-    let body = if matches!(tree.kind(node), NodeKind::ClassBody) {
-        node
-    } else {
-        match tree.parent(node) {
-            Some(p) if matches!(tree.kind(p), NodeKind::ClassBody) => p,
-            _ => return Vec::new(),
-        }
-    };
-    let Some(def_class) = tree.parent(body) else {
+    let body = ClassBody::cast(tree, node).or_else(|| ClassBody::cast(tree, tree.parent(node)?));
+    let Some(body) = body else {
         return Vec::new();
     };
-    if !matches!(tree.kind(def_class), NodeKind::Class) {
+    let Some(def_class) = tree.parent(body.id()).and_then(|id| Class::cast(tree, id)) else {
         return Vec::new();
-    }
+    };
 
     // The superclass whose abstract members we're completing.
-    let Some(extends_target) = tree.class_extends_target(def_class) else {
+    let Some(extends_target) = def_class.extends_target(tree) else {
         return Vec::new();
     };
     let segments = tree.qualified_identifier_segments(extends_target);
@@ -36,24 +32,25 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<Completion
     };
 
     // Methods already declared in this class body.
-    let declared: std::collections::HashSet<String> = tree
-        .children_matching(body, |k| {
-            matches!(k, NodeKind::ClassMethod | NodeKind::ClassProperty)
-        })
-        .iter()
-        .filter_map(|&m| tree.name(m).map(str::to_string))
+    let declared: std::collections::HashSet<String> = body
+        .members(tree)
+        .filter_map(|m| tree.name(m).map(str::to_string))
         .collect();
 
     let super_tree = match ctx.tree_for(super_class.file_id) {
         Some(t) => t,
         None => return Vec::new(),
     };
-    let super_body = super_tree
-        .child(super_class.node_id, |k| matches!(k, NodeKind::ClassBody))
+    let super_body = Class::cast(super_tree, super_class.node_id)
+        .and_then(|class| class.body(super_tree))
         .unwrap_or(super_class.node_id);
 
     let mut out = Vec::new();
-    for method in super_tree.children_matching(super_body, |k| matches!(k, NodeKind::ClassMethod)) {
+    for method in ClassBody::cast(super_tree, super_body)
+        .into_iter()
+        .flat_map(|body| body.members(super_tree))
+        .filter(|id| ClassMethod::cast(super_tree, *id).is_some())
+    {
         let Some(name) = super_tree.name(method) else {
             continue;
         };
@@ -80,22 +77,24 @@ fn is_abstract(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -> bool {
         return true;
     }
     // Bodiless method: no expression after the method header.
-    tree.children_matching(method, |k| k.is_expr_node())
-        .is_empty()
+    ClassMethod::cast(tree, method)
+        .and_then(|method| method.body(tree))
+        .is_none()
 }
 
 fn render_method_signature(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -> String {
-    let header = tree.child(method, |k| matches!(k, NodeKind::MethodHeader));
+    let header = ClassMethod::cast(tree, method)
+        .and_then(|method| method.header(tree))
+        .and_then(|header| MethodHeader::cast(tree, header));
     let name = tree.name(method).unwrap_or("");
 
     let mut sig = format!("function {name}(");
-    if let Some(params) =
-        header.and_then(|h| tree.child(h, |k| matches!(k, NodeKind::ParameterList)))
-    {
-        let rendered: Vec<String> = tree
-            .children_matching(params, |k| matches!(k, NodeKind::TypedIdentifier))
-            .iter()
-            .map(|&tid| {
+    if let Some(params) = header.and_then(|h| h.parameters(tree)) {
+        let rendered: Vec<String> = ParameterList::cast(tree, params)
+            .into_iter()
+            .flat_map(|params| params.parameters(tree))
+            .filter(|tid| TypedIdentifier::cast(tree, *tid).is_some())
+            .map(|tid| {
                 let name = tree.name(tid).unwrap_or("");
                 match param_type_text(tree, tid) {
                     Some(ty) => format!("{name}: {ty}"),
@@ -107,7 +106,7 @@ fn render_method_signature(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -
     }
     sig.push(')');
 
-    if let Some(ret) = header.and_then(|h| member_return_type_text(tree, h)) {
+    if let Some(ret) = header.and_then(|h| member_return_type_text(tree, h.id())) {
         sig.push_str(": ");
         sig.push_str(&ret);
     }
@@ -115,13 +114,13 @@ fn render_method_signature(tree: &pkl_syntax::ast::SyntaxTree, method: NodeId) -
 }
 
 fn param_type_text(tree: &pkl_syntax::ast::SyntaxTree, typed_ident: NodeId) -> Option<String> {
-    let ann = tree.child(typed_ident, |k| matches!(k, NodeKind::TypeAnnotation))?;
-    let type_node = tree.child(ann, |k| k.is_type_node())?;
+    let ann = TypedIdentifier::cast(tree, typed_ident)?.type_annotation(tree)?;
+    let type_node = TypeAnnotation::cast(tree, ann)?.ty(tree)?;
     Some(tree.text(type_node).to_string())
 }
 
 fn member_return_type_text(tree: &pkl_syntax::ast::SyntaxTree, header: NodeId) -> Option<String> {
-    let ann = tree.child(header, |k| matches!(k, NodeKind::TypeAnnotation))?;
-    let type_node = tree.child(ann, |k| k.is_type_node())?;
+    let ann = MethodHeader::cast(tree, header)?.type_annotation(tree)?;
+    let type_node = TypeAnnotation::cast(tree, ann)?.ty(tree)?;
     Some(tree.text(type_node).to_string())
 }

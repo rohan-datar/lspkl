@@ -1,0 +1,30 @@
+---
+source: crates/pkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    TypeAnnotation
+      BlockComment
+      NullableType
+        ParenthesizedType
+          BlockComment
+          DeclaredType
+            QualifiedIdentifier
+    IntLiteralExpr
+  TypeAlias
+    BlockComment
+    UnionType
+      DefaultUnionType
+        DeclaredType
+          QualifiedIdentifier
+      DeclaredType
+        QualifiedIdentifier
+  TypeAlias
+    ConstrainedType
+      DeclaredType
+        QualifiedIdentifier
+      BlockComment
+      ComparisonExpr
+        ThisExpr
+        IntLiteralExpr

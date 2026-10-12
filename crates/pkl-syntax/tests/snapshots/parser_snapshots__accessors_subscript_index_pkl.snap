@@ -1,0 +1,14 @@
+---
+source: crates/pkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    SubscriptExpr
+      UnqualifiedAccessExpr
+      BlockComment
+      BlockComment
+      IntLiteralExpr
+  ClassProperty
+    SuperSubscriptExpr
+      IntLiteralExpr

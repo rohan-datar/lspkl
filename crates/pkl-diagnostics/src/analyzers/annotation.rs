@@ -1,6 +1,6 @@
 //! Validates `@Annotation` usage
 
-use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind, nodes};
 use pkl_types::{AnalysisContext, NodeRef, Type, resolver};
 
 use crate::analyzer::Analyzer;
@@ -19,9 +19,8 @@ impl Analyzer for AnnotationAnalyzer {
             return true;
         }
 
-        let Some(name_node) = ctx
-            .tree
-            .child(node, |c| matches!(c, NodeKind::QualifiedIdentifier))
+        let Some(name_node) = nodes::Annotation::cast(ctx.tree, node)
+            .and_then(|annotation| annotation.name(ctx.tree))
         else {
             return true;
         };

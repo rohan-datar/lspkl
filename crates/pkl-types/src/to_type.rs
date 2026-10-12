@@ -1,6 +1,7 @@
 //! Convert AST `PklType` syntax nodes into resolved [`Type`] values.
 
 use pkl_syntax::ast::NodeKind;
+use pkl_syntax::ast::nodes;
 
 use crate::ConstraintExpr;
 
@@ -34,9 +35,8 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
                 module_node: type_node,
                 reference_name: ctx
                     .tree_for(type_node.file_id)
-                    .unwrap()
-                    .name(type_node.node_id)
-                    .unwrap()
+                    .and_then(|t| t.name(type_node.node_id))
+                    .unwrap_or("")
                     .to_string(),
                 constraints: Vec::new(),
             }
@@ -52,16 +52,13 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
             let Some(decl_tree) = ctx.tree_for(type_node.file_id) else {
                 return Type::Unknown;
             };
-            let type_args = tree.child(node.node_id, |c| matches!(c, NodeKind::TypeArgumentList));
-            let args = match type_args {
-                Some(type_args) => tree
-                    .children_matching(type_args, |c| c.is_type_node())
-                    .iter()
-                    .map(|&n| to_type(node.with_node(n), bindings, ctx))
-                    .collect(),
-
-                None => vec![],
+            let Some(declared) = nodes::DeclaredType::cast(tree, node.node_id) else {
+                return Type::Unknown;
             };
+            let args = declared
+                .arguments(tree)
+                .map(|n| to_type(node.with_node(n), bindings, ctx))
+                .collect();
             match decl_tree.kind(type_node.node_id) {
                 Class => Type::class_with_args(type_node, args),
                 TypeAlias => Type::Alias {
@@ -72,69 +69,71 @@ pub fn to_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) ->
                 TypeParameter => bindings.get(&type_node).cloned().unwrap_or(Type::Unknown),
                 Module => Type::Module {
                     module_node: type_node,
-                    reference_name: decl_tree
-                        .name(type_node.node_id)
-                        .expect("unable to find name for module")
-                        .to_string(),
+                    reference_name: decl_tree.name(type_node.node_id).unwrap_or("").to_string(),
                     constraints: Vec::new(),
                 },
                 _ => Type::Unknown,
             }
         }
-        ParenthesizedType | DefaultUnionType => to_type(
-            node.with_node(tree.children(node.node_id)[0]),
-            bindings,
-            ctx,
-        ),
-        NullableType => to_type(
-            node.with_node(tree.children(node.node_id)[0]),
-            bindings,
-            ctx,
-        )
-        .nullable(ctx),
+        ParenthesizedType | DefaultUnionType | NullableType => {
+            let inner = nodes::ParenthesizedType::cast(tree, node.node_id)
+                .and_then(|n| n.inner(tree))
+                .or_else(|| {
+                    nodes::DefaultUnionType::cast(tree, node.node_id).and_then(|n| n.inner(tree))
+                })
+                .or_else(|| {
+                    nodes::NullableType::cast(tree, node.node_id).and_then(|n| n.inner(tree))
+                });
+            let Some(inner) = inner else {
+                return Type::Unknown;
+            };
+            let ty = to_type(node.with_node(inner), bindings, ctx);
+            if matches!(tree.kind(node.node_id), NullableType) {
+                ty.nullable(ctx)
+            } else {
+                ty
+            }
+        }
         ConstrainedType => {
-            let Some(inner) = tree.child(node.node_id, |c| c.is_type_node()) else {
+            let Some(constrained) = nodes::ConstrainedType::cast(tree, node.node_id) else {
+                return Type::Unknown;
+            };
+            let Some(inner) = constrained.inner(tree) else {
                 return Type::Unknown;
             };
             let inner_ty = to_type(node.with_node(inner), bindings, ctx);
-            let cs = tree
-                .children_matching(node.node_id, |c| c.is_expr_node())
-                .iter()
-                .map(|&n| ConstraintExpr::opaque(tree.text(n)))
+            let cs = constrained
+                .constraints(tree)
+                .map(|n| ConstraintExpr::opaque(tree.text(n)))
                 .collect();
             inner_ty.with_constraints(cs)
         }
         UnionType => {
-            let type_children = tree.children_matching(node.node_id, |c| c.is_type_node());
-            if type_children.len() != 2 {
+            let Some(union) = nodes::UnionType::cast(tree, node.node_id) else {
                 return Type::Unknown;
-            }
-
+            };
+            let (Some(left), Some(right)) = (union.left(tree), union.right(tree)) else {
+                return Type::Unknown;
+            };
             Type::Union {
-                left: Box::new(to_type(node.with_node(type_children[0]), bindings, ctx)),
-                right: Box::new(to_type(node.with_node(type_children[1]), bindings, ctx)),
+                left: Box::new(to_type(node.with_node(left), bindings, ctx)),
+                right: Box::new(to_type(node.with_node(right), bindings, ctx)),
                 constraints: Vec::new(),
             }
         }
         FunctionType => {
-            let types = tree.children_matching(node.node_id, |c| c.is_type_node());
-            let n_params = types.len().saturating_sub(1);
-            let return_type = to_type(
-                node.with_node(*types.last().expect("Function must have return type")),
-                bindings,
-                ctx,
-            );
-            let param_nodes = &types[..types.len() - 1];
-            let param_types: Vec<Type> = param_nodes
-                .iter()
-                .map(|&n| to_type(node.with_node(n), bindings, ctx))
+            let Some(function) = nodes::FunctionType::cast(tree, node.node_id) else {
+                return Type::Unknown;
+            };
+            let Some(return_node) = function.return_type(tree) else {
+                return Type::Unknown;
+            };
+            let mut args: Vec<Type> = function
+                .parameters(tree)
+                .map(|n| to_type(node.with_node(n), bindings, ctx))
                 .collect();
-
-            let args: Vec<Type> = param_types
-                .iter()
-                .cloned()
-                .chain(std::iter::once(return_type))
-                .collect();
+            let n_params = args.len();
+            args.push(to_type(node.with_node(return_node), bindings, ctx));
 
             ctx.base
                 .function_n_type(n_params)

@@ -1,7 +1,7 @@
 //! Validate module URI syntax and request-pinned import resolution.
 
 use fluent_uri::UriRef;
-use pkl_syntax::ast::{NodeId, NodeKind};
+use pkl_syntax::ast::{NodeId, NodeKind, nodes};
 use pkl_types::{AnalysisContext, ImportResolution, NodeRef};
 
 use crate::analyzer::Analyzer;
@@ -20,7 +20,23 @@ impl Analyzer for ModuleUriAnalyzer {
         if !ctx.tree.kind(node).is_module_uri_owner() {
             return true;
         }
-        let Some(literal) = ctx.tree.child(node, NodeKind::is_string_literal) else {
+        let literal = match ctx.tree.kind(node) {
+            NodeKind::Import => {
+                nodes::Import::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
+            }
+            NodeKind::ImportGlob => {
+                nodes::ImportGlob::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
+            }
+            NodeKind::ImportExpr => {
+                nodes::ImportExpr::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
+            }
+            NodeKind::ModuleExtendsAmendsClause => {
+                nodes::ModuleExtendsAmendsClause::cast(ctx.tree, node)
+                    .and_then(|clause| clause.target(ctx.tree))
+            }
+            _ => None,
+        };
+        let Some(literal) = literal else {
             return true;
         };
         let Some(uri) = ctx.tree.escaped_string_literal(literal) else {

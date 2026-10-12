@@ -115,3 +115,17 @@ fn type_is_subtype_of_itself() {
     assert!(Type::Unknown.is_subtype_of(&Type::Unknown, &ctx));
     assert!(Type::Nothing.is_subtype_of(&Type::Nothing, &ctx));
 }
+
+#[test]
+fn string_literal_union_accepts_only_its_values() {
+    let base = harness::load_test_base();
+    let dummy = pkl_syntax::parse("").unwrap();
+    let ctx = ctx(&base, &dummy);
+    let union = Type::Union {
+        left: Box::new(Type::string_literal("foo")),
+        right: Box::new(Type::string_literal("bar")),
+        constraints: vec![],
+    };
+    assert!(Type::string_literal("bar").is_subtype_of(&union, &ctx));
+    assert!(!Type::string_literal("baz").is_subtype_of(&union, &ctx));
+}

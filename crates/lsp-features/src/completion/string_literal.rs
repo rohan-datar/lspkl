@@ -5,6 +5,10 @@ use lsp_types::{
     Documentation, MarkupContent, MarkupKind, Range, TextEdit,
 };
 
+use pkl_syntax::ast::nodes::{
+    ClassMethod, ClassProperty, MethodHeader, ObjectMethod, ObjectProperty, TypeAlias,
+    TypeAnnotation, TypeNode,
+};
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_syntax::{TextRange, TextSize};
 use pkl_types::infer_expr_type::infer_expr_type_from_context;
@@ -38,7 +42,7 @@ pub(crate) fn completions(
     };
     let detail_text = ctx.tree.text(annotation).to_string();
     let mut values = Vec::new();
-    annotation_literal_values(annotation, ctx, &mut values, 0);
+    annotation_literal_values(NodeRef::new(ctx.file_id, annotation), ctx, &mut values, 0);
     for value in values {
         out.push(literal_item(&value, &detail_text, literal, ctx, range_for));
     }
@@ -130,26 +134,25 @@ fn enclosing_type_annotation(start: NodeId, ctx: &AnalysisContext) -> Option<Nod
         )
     })
     .and_then(|member| {
-        let holder = match ctx.tree.kind(member) {
-            NodeKind::ClassMethod | NodeKind::ObjectMethod => ctx
-                .tree
-                .child(member, |k| matches!(k, NodeKind::MethodHeader))
-                .unwrap_or(member),
-            _ => member,
-        };
-        ctx.tree
-            .child(holder, |k| matches!(k, NodeKind::TypeAnnotation))
-            .and_then(|ann| ctx.tree.child(ann, is_type_like))
+        let tree = ctx.tree;
+        let annotation = match tree.kind(member) {
+            NodeKind::ClassProperty => ClassProperty::cast(tree, member)?.type_annotation(tree),
+            NodeKind::ObjectProperty => ObjectProperty::cast(tree, member)?.type_annotation(tree),
+            NodeKind::ClassMethod => ClassMethod::cast(tree, member)?
+                .header(tree)
+                .and_then(|header| MethodHeader::cast(tree, header)?.type_annotation(tree)),
+            NodeKind::ObjectMethod => ObjectMethod::cast(tree, member)?
+                .header(tree)
+                .and_then(|header| MethodHeader::cast(tree, header)?.type_annotation(tree)),
+            _ => None,
+        }?;
+        TypeAnnotation::cast(tree, annotation)?.ty(tree)
     })
-}
-
-fn is_type_like(kind: &NodeKind) -> bool {
-    kind.is_type_node() || matches!(kind, NodeKind::StringLiteralType)
 }
 
 /// Collect the string-literal values mentioned in a type annotation.
 fn annotation_literal_values(
-    type_node: NodeId,
+    type_node: NodeRef,
     ctx: &AnalysisContext,
     out: &mut Vec<String>,
     depth: u8,
@@ -157,35 +160,55 @@ fn annotation_literal_values(
     if depth > 16 {
         return;
     }
-    let tree = ctx.tree;
-    match tree.kind(type_node) {
-        NodeKind::StringLiteralType => {
-            if let Some(value) = tree.escaped_string_literal(type_node) {
+    let Some(tree) = ctx.tree_for(type_node.file_id) else {
+        return;
+    };
+    match TypeNode::cast(tree, type_node.node_id) {
+        Some(TypeNode::StringLiteralType(literal)) => {
+            if let Some(value) = tree.escaped_string_literal(literal.id()) {
                 out.push(value);
             }
         }
-        NodeKind::UnionType | NodeKind::DefaultUnionType => {
-            for child in tree.children_matching(type_node, is_type_like) {
-                annotation_literal_values(child, ctx, out, depth + 1);
+        Some(TypeNode::UnionType(union)) => {
+            for child in [union.left(tree), union.right(tree)].into_iter().flatten() {
+                annotation_literal_values(
+                    NodeRef::new(type_node.file_id, child),
+                    ctx,
+                    out,
+                    depth + 1,
+                );
             }
         }
-        NodeKind::NullableType | NodeKind::ParenthesizedType | NodeKind::ConstrainedType => {
-            if let Some(inner) = tree.child(type_node, is_type_like) {
-                annotation_literal_values(inner, ctx, out, depth + 1);
+        Some(
+            ty @ (TypeNode::DefaultUnionType(_)
+            | TypeNode::NullableType(_)
+            | TypeNode::ParenthesizedType(_)
+            | TypeNode::ConstrainedType(_)),
+        ) => {
+            let inner = match ty {
+                TypeNode::DefaultUnionType(ty) => ty.inner(tree),
+                TypeNode::NullableType(ty) => ty.inner(tree),
+                TypeNode::ParenthesizedType(ty) => ty.inner(tree),
+                TypeNode::ConstrainedType(ty) => ty.inner(tree),
+                _ => unreachable!(),
+            };
+            if let Some(inner) = inner {
+                annotation_literal_values(
+                    NodeRef::new(type_node.file_id, inner),
+                    ctx,
+                    out,
+                    depth + 1,
+                );
             }
         }
-        NodeKind::DeclaredType => {
-            // Alias: expand through to the aliased type body.
-            let target = pkl_types::resolver::resolve_declared_type(
-                ctx,
-                NodeRef::new(ctx.file_id, type_node),
-            );
-            if let Some(alias) = target
+        Some(TypeNode::DeclaredType(_)) => {
+            // Alias: preserve its file identity while expanding the type body.
+            if let Some(alias) = pkl_types::resolver::resolve_declared_type(ctx, type_node)
                 && let Some(body) = ctx
                     .tree_for(alias.file_id)
-                    .and_then(|t| t.type_alias_body(alias.node_id))
+                    .and_then(|tree| TypeAlias::cast(tree, alias.node_id)?.ty(tree))
             {
-                annotation_literal_values(body, ctx, out, depth + 1);
+                annotation_literal_values(NodeRef::new(alias.file_id, body), ctx, out, depth + 1);
             }
         }
         _ => {}

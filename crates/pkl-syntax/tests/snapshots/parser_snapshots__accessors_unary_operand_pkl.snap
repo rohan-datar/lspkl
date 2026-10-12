@@ -1,0 +1,17 @@
+---
+source: crates/pkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    UnaryMinusExpr
+      BlockComment
+      IntLiteralExpr
+  ClassProperty
+    LogicalNotExpr
+      BlockComment
+      FalseLiteralExpr
+  ClassProperty
+    NonNullExpr
+      UnqualifiedAccessExpr
+      BlockComment

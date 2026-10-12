@@ -3,6 +3,10 @@
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use pkl_syntax::TextSize;
+use pkl_syntax::ast::nodes::{
+    ClassMethod, ClassProperty, MethodHeader, ObjectMethod, ParameterList, TypeAnnotation,
+    TypeParameterList, TypedIdentifier,
+};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::compute_expr::compute_expr_type;
 use pkl_types::to_type::to_type;
@@ -109,9 +113,10 @@ pub fn render_markdown(
 /// Falls back to inferring the initializer's type (`x = 1` → `Int`) via
 /// `compute_expr_type`. Returns `None` when neither yields anything useful.
 fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) -> Option<String> {
-    let annotated = tree
-        .child(property.node_id, |k| matches!(k, NodeKind::TypeAnnotation))
-        .and_then(|ann| tree.child(ann, |k| k.is_type_node()));
+    let declaration = ClassProperty::cast(tree, property.node_id)?;
+    let annotated = declaration
+        .type_annotation(tree)
+        .and_then(|ann| TypeAnnotation::cast(tree, ann)?.ty(tree));
     if let Some(type_node) = annotated {
         let ty = to_type(
             NodeRef::new(property.file_id, type_node),
@@ -123,7 +128,7 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
 
     // No annotation: infer from the initializer.
     let local = AnalysisContext::new(tree, property.file_id, ctx.base, ctx.trees, ctx.imports);
-    let expr = tree.child(property.node_id, |k| k.is_expr_node())?;
+    let expr = declaration.value(tree)?;
     let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
     if ty != Type::Unknown {
         return Some(ty.render(ctx));
@@ -138,18 +143,21 @@ fn method_signature(
     file_id: FileId,
     ctx: &AnalysisContext,
 ) -> Option<String> {
-    let header = tree.child(node_id, |k| matches!(k, NodeKind::MethodHeader))?;
+    let header = ClassMethod::cast(tree, node_id)
+        .and_then(|method| method.header(tree))
+        .or_else(|| ObjectMethod::cast(tree, node_id)?.header(tree))?;
+    let header = MethodHeader::cast(tree, header)?;
     let name = tree.name(node_id)?;
 
-    let type_params = tree
-        .child(header, |k| matches!(k, NodeKind::TypeParameterList))
+    let type_params = header
+        .type_parameters(tree)
         .map(|list| type_parameters_text(tree, list))
         .unwrap_or_default();
-    let params = tree
-        .child(header, |k| matches!(k, NodeKind::ParameterList))
+    let params = header
+        .parameters(tree)
         .map(|list| parameters_text(tree, list))
         .unwrap_or_else(|| "()".to_string());
-    let ret = return_type_text(tree, node_id, header, file_id, ctx);
+    let ret = return_type_text(tree, node_id, header.id(), file_id, ctx);
 
     Some(format!("function {name}{type_params}{params}: {ret}"))
 }
@@ -159,10 +167,10 @@ fn method_signature(
 /// Variance markers (`in`/`out`) are anonymous grammar tokens the parser
 /// does not keep, so only names are rendered.
 fn type_parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
-    let parts: Vec<&str> = tree
-        .children_matching(list, |k| matches!(k, NodeKind::TypeParameter))
-        .iter()
-        .filter_map(|&tp| tree.name(tp))
+    let parts: Vec<&str> = TypeParameterList::cast(tree, list)
+        .into_iter()
+        .flat_map(|list| list.parameters(tree))
+        .filter_map(|tp| tree.name(tp))
         .collect();
     format!("<{}>", parts.join(", "))
 }
@@ -171,23 +179,22 @@ fn type_parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
 /// `PklParameterList` arm (each element through the `PklTypedIdentifier`
 /// arm; blank identifiers render as `_`).
 fn parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
-    let params: Vec<String> = tree
-        .children_matching(list, |k| {
-            matches!(k, NodeKind::TypedIdentifier | NodeKind::BlankIdentifier)
-        })
-        .iter()
-        .map(|&p| match tree.kind(p) {
+    let params: Vec<String> = ParameterList::cast(tree, list)
+        .into_iter()
+        .flat_map(|list| list.parameters(tree))
+        .map(|p| match tree.kind(p) {
             NodeKind::BlankIdentifier => "_".to_string(),
             _ => {
                 let name = tree.name(p).unwrap_or("_");
-                match tree.child(p, |k| matches!(k, NodeKind::TypeAnnotation)) {
+                match TypedIdentifier::cast(tree, p).and_then(|p| p.type_annotation(tree)) {
                     // Raw source text: `to_type` currently drops explicit
                     // type arguments (`Function1<A, B>` renders as
                     // `Function1`), so the slice is more faithful for
                     // parameters.
                     Some(ann) => format!(
                         "{name}: {}",
-                        tree.child(ann, |k| k.is_type_node())
+                        TypeAnnotation::cast(tree, ann)
+                            .and_then(|ann| ann.ty(tree))
                             .map(|ty| tree.text(ty))
                             .unwrap_or(""),
                     ),
@@ -209,10 +216,13 @@ fn return_type_text(
     file_id: FileId,
     ctx: &AnalysisContext,
 ) -> String {
-    if let Some(ann) = tree.child(header, |k| matches!(k, NodeKind::TypeAnnotation)) {
+    if let Some(ann) = MethodHeader::cast(tree, header).and_then(|h| h.type_annotation(tree)) {
         return annotation_text(tree, ann, file_id, ctx);
     }
-    if let Some(expr) = tree.child(method_id, |k| k.is_expr_node()) {
+    let body = ClassMethod::cast(tree, method_id)
+        .and_then(|method| method.body(tree))
+        .or_else(|| ObjectMethod::cast(tree, method_id)?.body(tree));
+    if let Some(expr) = body {
         let local = AnalysisContext::new(tree, file_id, ctx.base, ctx.trees, ctx.imports);
         let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
         if ty != Type::Unknown {
@@ -231,7 +241,7 @@ fn annotation_text(
     file_id: FileId,
     ctx: &AnalysisContext,
 ) -> String {
-    match tree.child(ann, |k| k.is_type_node()) {
+    match TypeAnnotation::cast(tree, ann).and_then(|ann| ann.ty(tree)) {
         Some(ty_node) => {
             let ty = to_type(NodeRef::new(file_id, ty_node), &TypeBindings::new(), ctx);
             if ty != Type::Unknown {
@@ -248,12 +258,10 @@ fn annotation_text(
 fn modifiers_prefix(tree: &SyntaxTree, node_id: NodeId) -> String {
     // For methods the modifiers live on the MethodHeader, matching
     // `SyntaxTree::modifiers`.
-    let holder = match tree.kind(node_id) {
-        NodeKind::ClassMethod | NodeKind::ObjectMethod => tree
-            .child(node_id, |k| matches!(k, NodeKind::MethodHeader))
-            .unwrap_or(node_id),
-        _ => node_id,
-    };
+    let holder = ClassMethod::cast(tree, node_id)
+        .and_then(|method| method.header(tree))
+        .or_else(|| ObjectMethod::cast(tree, node_id)?.header(tree))
+        .unwrap_or(node_id);
     let mods: Vec<&str> = tree
         .children_matching(
             holder,

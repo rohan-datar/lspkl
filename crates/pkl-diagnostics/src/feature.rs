@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeId, NodeKind, TokenType, nodes};
 use pkl_types::AnalysisContext;
 use semver::Version;
 
@@ -56,42 +56,27 @@ pub fn effective_pkl_version(ctx: &AnalysisContext) -> Version {
 }
 
 fn declared_pkl_version(ctx: &AnalysisContext) -> Option<Version> {
-    let module_header = ctx
-        .tree
-        .child(ctx.tree.root(), |k| matches!(k, NodeKind::ModuleHeader))?;
-
-    let &module_annotation = ctx
-        .tree
-        .children_matching(module_header, |k| matches!(k, NodeKind::Annotation))
-        .iter()
-        .find(|&&n| {
-            ctx.tree
-                .child(n, |c| matches!(c, NodeKind::QualifiedIdentifier))
-                .map(|name_node| {
-                    ctx.tree
-                        .qualified_identifier_segments(name_node)
-                        .last()
-                        .copied()
+    let tree = ctx.tree;
+    let header = nodes::Module::cast(tree, tree.root())?.header(tree)?;
+    let annotation = nodes::ModuleHeader::cast(tree, header)?
+        .annotations(tree)
+        .find(|&node| {
+            nodes::Annotation::cast(tree, node)
+                .and_then(|annotation| annotation.name(tree))
+                .is_some_and(|name| {
+                    tree.qualified_identifier_segments(name).last().copied()
                         == Some(MODULE_INFO_ANNOTATION)
                 })
-                .unwrap_or(false)
         })?;
-
-    let annotation_body = ctx
-        .tree
-        .child(module_annotation, |k| matches!(k, NodeKind::ObjectBody))?;
-
-    let &min_version_property = ctx
-        .tree
-        .children_matching(annotation_body, |k| matches!(k, NodeKind::ObjectProperty))
-        .iter()
-        .find(|&&n| ctx.tree.name(n) == Some(MIN_VERSION_ATTR))?;
-
-    let version_node = ctx
-        .tree
-        .child(min_version_property, |k| k.is_string_literal())?;
-
-    let version_text = ctx.tree.escaped_string_literal(version_node)?;
+    let body = nodes::Annotation::cast(tree, annotation)?.body(tree)?;
+    let property = nodes::ObjectBody::cast(tree, body)?
+        .members(tree)
+        .find(|&node| {
+            nodes::ObjectProperty::cast(tree, node).is_some()
+                && tree.name(node) == Some(MIN_VERSION_ATTR)
+        })?;
+    let version_node = nodes::ObjectProperty::cast(tree, property)?.value(tree)?;
+    let version_text = tree.escaped_string_literal(version_node)?;
     let padded = match version_text.matches('.').count() {
         1 => format!("{version_text}.0"),
         _ => version_text,

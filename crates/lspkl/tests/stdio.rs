@@ -529,3 +529,38 @@ async fn close_reopen_during_edits_publishes_and_serves_the_new_epoch() {
     assert_eq!(contents["result"], source);
     client.shutdown().await;
 }
+
+#[tokio::test]
+async fn typed_syntax_uses_if_branches_and_real_null_safe_tokens() {
+    let temp = tempfile::tempdir().unwrap();
+    let main = uri(&temp.path().join("typed-syntax.pkl"));
+    let source = concat!(
+        "c = true\n",
+        "choice = if (c) 1 else \"a\"\n",
+        "receiver: String = \"hello\"\n",
+        "ordinary = receiver /* ?. is only a comment */ . /* gap */ length\n",
+        "safe = receiver /* before */ ?. /* after */ length\n",
+        "chosen = choice\n",
+        "ordinaryValue = ordinary\n",
+        "safeValue = safe\n",
+    );
+    let mut client = start(temp.path(), json!({})).await;
+    open(&mut client, &main, source).await;
+    let published = diagnostics(&mut client, &main).await;
+    assert_eq!(published["diagnostics"], json!([]), "{published}");
+    for (name, expected) in [
+        ("choice", "choice: Int|\"a\""),
+        ("ordinary", "ordinary: Int"),
+        ("safe", "safe: Int?"),
+    ] {
+        let hover = at(&mut client, "textDocument/hover", &main, source, name).await;
+        let declaration = hover["contents"]["value"]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing hover for {name}: {hover}"))
+            .split("\n")
+            .nth(1)
+            .unwrap();
+        assert_eq!(declaration, expected, "{hover}");
+    }
+    client.shutdown().await;
+}
