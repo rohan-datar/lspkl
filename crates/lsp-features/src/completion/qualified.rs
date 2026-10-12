@@ -1,19 +1,24 @@
 //! Qualified access completion: members of the receiver's type.
 
+use pkl_types::NodeRef;
+
 use lsp_types::{CompletionItem, CompletionItemKind};
 
 use pkl_syntax::ast::nodes::{Import, Module, QualifiedAccessExpr};
 use pkl_syntax::ast::{NodeId, NodeKind};
-use pkl_types::{AnalysisContext, Type, TypeBindings};
+use pkl_types::{AnalysisContext, Type};
 
-use super::members::{MemberKind, members_of_type};
+use pkl_types::{MemberKind, members_of_type};
 
 /// Complete members of the receiver of a qualified access expression.
-pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<CompletionItem> {
-    let tree = ctx.tree;
-    let bindings = TypeBindings::new();
+pub(crate) fn completions(
+    node: NodeId,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    file: pkl_types::FileId,
+    ctx: &AnalysisContext,
+) -> Vec<CompletionItem> {
     let mut type_position = false;
-    let receiver_ty = if let Some(access) = super::ancestor_or_self(node, ctx, |k| {
+    let receiver_ty = if let Some(access) = super::ancestor_or_self(node, tree, |k| {
         matches!(k, NodeKind::QualifiedAccessExpr | NodeKind::SuperAccessExpr)
     }) {
         if let Some(receiver) =
@@ -30,12 +35,13 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<Completion
                 current = tree.parent(id);
             }
         }
-        let Some(ty) = pkl_types::resolver::access_receiver_type(access, &bindings, ctx) else {
+        let Some(ty) = pkl_types::resolver::access_receiver_type(NodeRef::new(file, access), ctx)
+        else {
             return Vec::new();
         };
         ty
     } else if let Some(identifier) =
-        super::ancestor_or_self(node, ctx, |k| matches!(k, NodeKind::QualifiedIdentifier))
+        super::ancestor_or_self(node, tree, |k| matches!(k, NodeKind::QualifiedIdentifier))
     {
         let parts = tree.qualified_identifier_segments(identifier);
         if parts.len() != 2 {
@@ -52,12 +58,12 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<Completion
         else {
             return Vec::new();
         };
-        pkl_types::resolver::import_type(pkl_types::NodeRef::new(ctx.file_id, import), ctx)
+        pkl_types::resolver::import_type(pkl_types::NodeRef::new(file, import), ctx)
     } else {
         return Vec::new();
     };
 
-    members_of_type(&receiver_ty, &TypeBindings::new(), ctx)
+    members_of_type(&receiver_ty, ctx)
         .into_iter()
         .filter(|member| {
             !type_position || matches!(member.kind, MemberKind::Class | MemberKind::TypeAlias)

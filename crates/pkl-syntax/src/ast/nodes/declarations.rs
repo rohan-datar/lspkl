@@ -6,6 +6,19 @@ impl Module {
     }
 }
 
+impl Module {
+    /// Short display name from the module declaration, not an import spelling.
+    pub fn name(self, tree: &SyntaxTree) -> Option<&str> {
+        let header = self.header(tree)?;
+        let clause = of_kind(tree, header, NodeKind::ModuleClause)?;
+        let qualified = of_kind(tree, clause, NodeKind::QualifiedIdentifier)?;
+        let name = QualifiedIdentifier::cast(tree, qualified)?
+            .identifiers(tree)
+            .last()?;
+        Some(crate::ast::unquote_identifier(tree.text(name)))
+    }
+}
+
 impl ParameterList {
     pub fn parameters(self, tree: &SyntaxTree) -> impl Iterator<Item = NodeId> + '_ {
         tree.children(self.0).iter().copied().filter(|id| {

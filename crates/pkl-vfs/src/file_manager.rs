@@ -142,11 +142,10 @@ impl FileManager {
         Ok(file.clone())
     }
 
-    /// Remove a file from the registry. Implements the `didClose` flow.
-    /// No-op if the file isn't tracked.
+    /// Evict mutable backing files on close; immutable SDK sources stay cached.
     pub fn close(&self, url: &Uri<String>) {
         if let Ok(url) = crate::effective_uri(url) {
-            self.files.remove(&url);
+            self.files.remove_if(&url, |_, file| !file.is_read_only());
         }
     }
 
@@ -156,10 +155,26 @@ impl FileManager {
         if let Some(file) = self.get(&url) {
             return Ok(file);
         }
+        self.load_source(url)
+    }
+
+    /// Load backing source without the captured editor overlay.
+    pub fn get_or_load_source(&self, url: &Uri<String>) -> Result<Arc<VirtualFile>, FileError> {
+        let url = crate::effective_uri(url)?;
+        if let Some(file) = self.files.get(&url) {
+            return Ok(Arc::clone(file.value()));
+        }
+        self.load_source(url)
+    }
+
+    fn load_source(&self, url: Uri<String>) -> Result<Arc<VirtualFile>, FileError> {
+        if url.scheme().as_str() == "pkl" {
+            let contents = crate::stdlib::source(url.path().as_str())
+                .ok_or_else(|| FileError::InvalidSource(url.to_string()))?;
+            let file = Arc::new(VirtualFile::from_embedded_source(url.clone(), contents));
+            return Ok(self.files.entry(url).or_insert(file).clone());
+        }
         let contents = match url.scheme().as_str() {
-            "pkl" => crate::stdlib::source(url.path().as_str())
-                .ok_or_else(|| FileError::InvalidSource(url.to_string()))?
-                .to_owned(),
             "jar" => crate::sources::archive_contents(&url)?,
             "https" => {
                 let client = self.http_client()?;
@@ -171,7 +186,7 @@ impl FileManager {
             }
             scheme => return Err(FileError::UnsupportedScheme(scheme.to_owned())),
         };
-        // An editor buffer opened while loading always wins.
+        // Retain an already cached source if another loader won the race.
         let file = Arc::new(VirtualFile::new(
             url.clone(),
             Self::origin_for(&url),

@@ -1,9 +1,7 @@
 mod harness;
 use pkl_syntax::ast::{NodeKind, SyntaxTree};
-use pkl_types::resolver::{
-    find_member_on_type, module_type, resolve_type_name, resolve_unqualified_access,
-};
-use pkl_types::{AnalysisContext, FileId, ImportResolution, NodeRef, Type, TypeBindings};
+use pkl_types::resolver::{module_type, resolve_type_name, resolve_unqualified_access};
+use pkl_types::{AnalysisContext, FileId, ImportResolution, NodeRef, Type};
 use std::{collections::HashMap, sync::Arc};
 fn root(file: u32, tree: &SyntaxTree) -> NodeRef {
     NodeRef::new(FileId(file), tree.root())
@@ -38,25 +36,45 @@ fn graph(f: impl FnOnce(&AnalysisContext)) {
         );
     }
     let trees = HashMap::from([(FileId(1), a.clone()), (FileId(2), b), (FileId(3), lib)]);
-    let ctx = AnalysisContext::new(&a, FileId(1), &base, &trees, &edges);
+    let mut trees = trees;
+    trees.insert(pkl_types::FileId(1), a.clone());
+    trees.insert(base.file_id(), base.tree().clone());
+    let ctx = AnalysisContext::new(&base, &trees, &edges);
     f(&ctx);
 }
 #[test]
 fn aliases_module_values_and_qualified_types() {
     graph(|ctx| {
-        let bindings = TypeBindings::new();
         for name in ["library", "lib"] {
-            let r = resolve_unqualified_access(ctx.tree.root(), name, &bindings, ctx).unwrap();
-            assert_eq!(r.node.file_id, FileId(3));
+            let r = resolve_unqualified_access(
+                pkl_types::NodeRef::new(
+                    pkl_types::FileId(1),
+                    ctx.tree(pkl_types::FileId(1)).unwrap().root(),
+                ),
+                name,
+                ctx,
+            )
+            .unwrap();
+            assert_eq!(r.node.file, FileId(3));
             assert!(matches!(r.ty, Type::Module { .. }));
-            let v = find_member_on_type(&r.ty, "value", &bindings, ctx).unwrap();
+            let v = pkl_types::find_member(&r.ty, "value", ctx).unwrap();
             assert_eq!(v.ty, *ctx.base.int_type());
         }
-        let ty = resolve_type_name(ctx, &["library", "SomeClass"], root(1, ctx.tree)).unwrap();
-        assert_eq!(ty.file_id, FileId(3));
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::QualifiedAccessExpr));
+        let ty = resolve_type_name(
+            ctx,
+            &["library", "SomeClass"],
+            root(1, ctx.tree(pkl_types::FileId(1)).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(ty.file, FileId(3));
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::QualifiedAccessExpr)
+        });
         assert_eq!(
-            pkl_types::compute_expr::compute_expr_type(node, &bindings, ctx),
+            pkl_types::expr_type(
+                harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+                ctx
+            ),
             *ctx.base.int_type()
         );
     });
@@ -64,21 +82,20 @@ fn aliases_module_values_and_qualified_types() {
 #[test]
 fn inherited_members_overrides_and_cycles() {
     graph(|ctx| {
-        let ty = module_type(root(1, ctx.tree), ctx);
-        let bindings = TypeBindings::new();
-        let inherited = find_member_on_type(&ty, "inherited", &bindings, ctx).unwrap();
-        assert_eq!(inherited.node.file_id, FileId(2));
+        let ty = module_type(root(1, ctx.tree(pkl_types::FileId(1)).unwrap()), ctx);
+        let inherited = pkl_types::find_member(&ty, "inherited", ctx).unwrap();
+        assert_eq!(inherited.node.file, FileId(2));
         assert_eq!(inherited.ty, *ctx.base.int_type());
-        let overridden = find_member_on_type(&ty, "overrideValue", &bindings, ctx).unwrap();
-        assert_eq!(overridden.node.file_id, FileId(1));
+        let overridden = pkl_types::find_member(&ty, "overrideValue", ctx).unwrap();
+        assert_eq!(overridden.node.file, FileId(1));
         assert_eq!(overridden.ty, *ctx.base.string_type());
-        assert!(find_member_on_type(&ty, "missing", &bindings, ctx).is_none());
+        assert!(pkl_types::find_member(&ty, "missing", ctx).is_none());
         let parent = pkl_types::resolver::super_type(&ty, ctx).unwrap();
         assert_eq!(
-            find_member_on_type(&parent, "overrideValue", &bindings, ctx)
+            pkl_types::find_member(&parent, "overrideValue", ctx)
                 .unwrap()
                 .node
-                .file_id,
+                .file,
             FileId(2)
         );
     });
@@ -86,12 +103,19 @@ fn inherited_members_overrides_and_cycles() {
 #[test]
 fn glob_import_is_mapping_of_modules() {
     graph(|ctx| {
-        let ty = resolve_unqualified_access(ctx.tree.root(), "libs", &TypeBindings::new(), ctx)
-            .unwrap()
-            .ty;
+        let ty = resolve_unqualified_access(
+            pkl_types::NodeRef::new(
+                pkl_types::FileId(1),
+                ctx.tree(pkl_types::FileId(1)).unwrap().root(),
+            ),
+            "libs",
+            ctx,
+        )
+        .unwrap()
+        .ty;
         assert!(ty.class_equals(ctx.base.mapping_type()));
         let value = pkl_types::resolver::container_value_type(&ty, ctx).unwrap();
-        assert!(matches!(value,Type::Module{module_node,..} if module_node.file_id==FileId(3)));
+        assert!(matches!(value,Type::Module{module_node,..} if module_node.file==FileId(3)));
     });
 }
 #[test]
@@ -101,15 +125,24 @@ fn cyclic_classes_and_initializers_terminate() {
         &base,
         "class A extends B {}\nclass B extends A {}\nx = y\ny = x\n",
         |ctx| {
-            let a = resolve_type_name(ctx, &["A"], root(1, ctx.tree)).unwrap();
-            assert!(
-                find_member_on_type(&Type::class(a), "missing", &TypeBindings::new(), ctx)
-                    .is_none()
-            );
+            let a = resolve_type_name(
+                ctx,
+                &["A"],
+                root(1, ctx.tree(pkl_types::FileId(1)).unwrap()),
+            )
+            .unwrap();
+            assert!(pkl_types::find_member(&Type::class(a), "missing", ctx).is_none());
             assert_eq!(
-                resolve_unqualified_access(ctx.tree.root(), "x", &TypeBindings::new(), ctx)
-                    .unwrap()
-                    .ty,
+                resolve_unqualified_access(
+                    pkl_types::NodeRef::new(
+                        pkl_types::FileId(1),
+                        ctx.tree(pkl_types::FileId(1)).unwrap().root()
+                    ),
+                    "x",
+                    ctx
+                )
+                .unwrap()
+                .ty,
                 Type::Unknown
             );
         },
@@ -119,7 +152,7 @@ fn cyclic_classes_and_initializers_terminate() {
 #[test]
 fn import_expressions_and_super_use_pinned_edges() {
     let base = harness::load_test_base();
-    let tree=pkl_syntax::parse("extends \"parent.pkl\"\nx = import(\"lib.pkl\").value\ny = import*(\"*.pkl\")[\"lib.pkl\"].value\nz = super.value\n").unwrap();
+    let tree=Arc::new(pkl_syntax::parse("extends \"parent.pkl\"\nx = import(\"lib.pkl\").value\ny = import*(\"*.pkl\")[\"lib.pkl\"].value\nz = super.value\n").unwrap());
     let target = Arc::new(pkl_syntax::parse("value: Int = 42\n").unwrap());
     let mut edges = HashMap::new();
     fn collect(t: &SyntaxTree, n: pkl_syntax::ast::NodeId, v: &mut Vec<pkl_syntax::ast::NodeId>) {
@@ -137,7 +170,7 @@ fn import_expressions_and_super_use_pinned_edges() {
     collect(&tree, tree.root(), &mut nodes);
     for n in nodes {
         edges.insert(
-            root(1, &tree).with_node(n),
+            root(1, &tree).with_value(n),
             if tree.is_glob_import(n) {
                 ImportResolution::Glob(vec![root(2, &target)])
             } else {
@@ -146,12 +179,19 @@ fn import_expressions_and_super_use_pinned_edges() {
         );
     }
     let trees = HashMap::from([(FileId(2), target)]);
-    let ctx = AnalysisContext::new(&tree, FileId(1), &base, &trees, &edges);
+    let mut trees = trees;
+    trees.insert(pkl_types::FileId(1), tree.clone());
+    trees.insert(base.file_id(), base.tree().clone());
+    let ctx = AnalysisContext::new(&base, &trees, &edges);
     for name in ["x", "y", "z"] {
         assert_eq!(
-            resolve_unqualified_access(tree.root(), name, &TypeBindings::new(), &ctx)
-                .unwrap()
-                .ty,
+            resolve_unqualified_access(
+                pkl_types::NodeRef::new(pkl_types::FileId(1), tree.root()),
+                name,
+                &ctx
+            )
+            .unwrap()
+            .ty,
             *base.int_type()
         );
     }
@@ -163,19 +203,31 @@ fn imported_alias_is_shadowed_by_parameters_and_let_bindings() {
         &base,
         "import \"lib.pkl\" as library\nfunction f(library: Int): Int = library\nx = let (library = 42) library\n",
         |ctx| {
-            let access =
-                harness::find_first(ctx.tree, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
-            let resolved =
-                resolve_unqualified_access(access, "library", &TypeBindings::new(), ctx).unwrap();
+            let access = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+                matches!(k, NodeKind::UnqualifiedAccessExpr)
+            });
+            let resolved = resolve_unqualified_access(
+                pkl_types::NodeRef::new(pkl_types::FileId(1), access),
+                "library",
+                ctx,
+            )
+            .unwrap();
             assert_eq!(resolved.ty, *base.int_type());
             assert_eq!(
-                ctx.tree.kind(resolved.node.node_id),
+                ctx.tree(pkl_types::FileId(1))
+                    .unwrap()
+                    .kind(resolved.node.value),
                 &NodeKind::TypedIdentifier
             );
 
-            let expr = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::LetExpr));
+            let expr = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+                matches!(k, NodeKind::LetExpr)
+            });
             assert_eq!(
-                pkl_types::compute_expr::compute_expr_type(expr, &TypeBindings::new(), ctx),
+                pkl_types::expr_type(
+                    harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), expr), ctx),
+                    ctx
+                ),
                 *base.int_type()
             );
         },
@@ -184,7 +236,8 @@ fn imported_alias_is_shadowed_by_parameters_and_let_bindings() {
 
 #[test]
 fn unresolved_import_remains_unknown_not_an_empty_glob() {
-    let tree = pkl_syntax::parse(r#"import "missing.pkl" as missing"#).unwrap();
+    let tree =
+        std::sync::Arc::new(pkl_syntax::parse(r#"import "missing.pkl" as missing"#).unwrap());
     let base = harness::load_test_base();
     let node = harness::find_first(&tree, |kind| matches!(kind, NodeKind::Import));
     let reference = NodeRef::new(FileId(1), node);
@@ -194,7 +247,10 @@ fn unresolved_import_remains_unknown_not_an_empty_glob() {
     assert!(failure.single().is_none());
     let imports = HashMap::from([(reference, failure)]);
     let trees = HashMap::new();
-    let ctx = AnalysisContext::new(&tree, FileId(1), &base, &trees, &imports);
+    let mut trees = trees;
+    trees.insert(pkl_types::FileId(1), tree.clone());
+    trees.insert(base.file_id(), base.tree().clone());
+    let ctx = AnalysisContext::new(&base, &trees, &imports);
     assert_eq!(
         pkl_types::resolver::import_type(reference, &ctx),
         Type::Unknown

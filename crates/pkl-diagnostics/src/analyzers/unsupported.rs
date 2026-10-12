@@ -1,6 +1,7 @@
 //! Flags Pkl features that aren't supported in the target Pkl version.
 
-use pkl_syntax::ast::NodeId;
+use pkl_types::NodeRef;
+
 use pkl_types::AnalysisContext;
 
 use crate::analyzer::Analyzer;
@@ -12,13 +13,20 @@ pub struct UnsupportedFeatureAnalyzer;
 impl Analyzer for UnsupportedFeatureAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
         for feat in FEATURES.iter() {
-            if (feat.predicate)(node, ctx) && effective_pkl_version(ctx) < feat.required_version {
-                holder.add_error(ctx.tree.span(node), feat.message);
+            if (feat.predicate)(NodeRef::new(file, node), ctx)
+                && effective_pkl_version(ctx, file) < feat.required_version
+            {
+                holder.add_error(source_tree.span(node), feat.message);
                 return true;
             }
         }

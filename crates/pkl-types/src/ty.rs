@@ -6,7 +6,7 @@ use crate::constraint::ConstraintExpr;
 use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 use crate::resolver::is_subclass;
-use crate::to_type::to_type;
+use crate::to_type::to_type_with_bindings;
 use crate::{BaseModule, resolver};
 
 /// A resolved type. Names are already resolved to declarations; aliases are
@@ -323,9 +323,9 @@ impl Type {
                 constraints,
             } => {
                 let mut name = String::from(
-                    ctx.tree_for(type_param.file_id)
+                    ctx.tree(type_param.file)
                         .expect("unable to find tree for file_id for rendering")
-                        .name(type_param.node_id)
+                        .name(type_param.value)
                         .unwrap_or(""),
                 );
                 if !constraints.is_empty() {
@@ -405,18 +405,18 @@ impl Type {
             if !seen.insert(alias_node) {
                 return Type::Unknown;
             }
-            let Some(tree) = ctx.tree_for(alias_node.file_id) else {
+            let Some(tree) = ctx.tree(alias_node.file) else {
                 return Type::Unknown;
             };
-            let Some(body) = pkl_syntax::ast::nodes::TypeAlias::cast(tree, alias_node.node_id)
+            let Some(body) = pkl_syntax::ast::nodes::TypeAlias::cast(tree, alias_node.value)
                 .and_then(|n| n.ty(tree))
             else {
                 return Type::Unknown;
             };
-            current = to_type(
+            current = to_type_with_bindings(
                 NodeRef {
-                    file_id: alias_node.file_id,
-                    node_id: body,
+                    file: alias_node.file,
+                    value: body,
                 },
                 &TypeBindings::new(),
                 ctx,
@@ -428,7 +428,7 @@ impl Type {
 
 /// Type-parameter substitution table. Maps a type-parameter declaration's
 /// `NodeRef` to the concrete `Type` it has been bound to.
-pub type TypeBindings = HashMap<NodeRef, Type>;
+pub(crate) type TypeBindings = HashMap<NodeRef, Type>;
 
 fn render_resolved_type(
     ctx: &AnalysisContext,
@@ -437,9 +437,9 @@ fn render_resolved_type(
     constraints: &[ConstraintExpr],
 ) -> String {
     let mut resolved = String::from(
-        ctx.tree_for(node.file_id)
+        ctx.tree(node.file)
             .expect("unable to find tree for file_id for rendering")
-            .name(node.node_id)
+            .name(node.value)
             .unwrap_or(""),
     );
     if !type_args.is_empty() {

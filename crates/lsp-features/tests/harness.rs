@@ -12,16 +12,19 @@ pub fn load_test_base() -> BaseModule {
 }
 
 /// Parse a snippet and run `f` with an `AnalysisContext`. Uses `FileId(1)`
-/// so it doesn't collide with `FileId::BASE` (which is 0).
+/// with the embedded base tree pinned under its own file identity.
 pub fn with_snippet<R>(
     base: &BaseModule,
     source: &str,
     f: impl FnOnce(&SyntaxTree, &AnalysisContext) -> R,
 ) -> R {
-    let tree = pkl_syntax::parse(source).expect("snippet should parse");
-    let trees = HashMap::new();
+    let tree = std::sync::Arc::new(pkl_syntax::parse(source).expect("snippet should parse"));
+    let trees = HashMap::from([
+        (FileId(1), tree.clone()),
+        (base.file_id(), base.tree().clone()),
+    ]);
     let imports = HashMap::new();
-    let ctx = AnalysisContext::new(&tree, FileId(1), base, &trees, &imports);
+    let ctx = AnalysisContext::new(base, &trees, &imports);
     f(&tree, &ctx)
 }
 

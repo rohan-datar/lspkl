@@ -1,7 +1,4 @@
-//! Server-owned URI identities for semantic `FileId`s.
-//!
-//! The VFS owns live file handles; this registry owns only URI-to-ID mappings.
-//! Keys use the same URI equality as `FileManager`, not filesystem canonicalization.
+//! Server-owned URI identities for semantic files, including the embedded SDK.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,16 +6,22 @@ use std::sync::Arc;
 use fluent_uri::Uri;
 use pkl_types::FileId;
 
-/// Stable identities for the lifetime of one server state.
-///
-/// `FileId::BASE` is reserved for the separately managed standard library.
-/// User IDs start at 1 and are never reused, including after document close.
-#[derive(Debug, Default)]
+/// Stable identities for the server lifetime; close never erases an identity.
+#[derive(Debug)]
 pub struct FileRegistry {
-    // One owned URI allocation shared by both lookup directions.
     by_uri: HashMap<Arc<Uri<String>>, FileId>,
-    // Index `id - 1` contains that user file's URI.
+    /// Indexed directly by FileId, including the pre-registered base module.
     uris: Vec<Arc<Uri<String>>>,
+}
+
+impl Default for FileRegistry {
+    fn default() -> Self {
+        let base = Arc::new(Uri::parse("pkl:base".to_owned()).expect("static base URI"));
+        Self {
+            by_uri: HashMap::from([(Arc::clone(&base), FileId::BASE)]),
+            uris: vec![base],
+        }
+    }
 }
 
 impl FileRegistry {
@@ -26,34 +29,20 @@ impl FileRegistry {
         Self::default()
     }
 
-    /// Return the existing ID for this URI, or allocate its permanent identity.
-    /// Registering an existing URI must not allocate another URI or change its ID.
-    /// Panics if the u32 user-ID space is exhausted; never wraps into BASE.
+    /// Reuse the URI's identity or allocate the next permanent one.
     pub fn register(&mut self, uri: &Uri<String>) -> FileId {
         if let Some(&id) = self.by_uri.get(uri) {
-            id
-        } else {
-            let current_id = self.uris.len() as u32;
-            if current_id == u32::MAX {
-                panic!("too many files open");
-            }
-
-            let id: u32 = current_id + 1;
-            let uri = Arc::new(uri.clone());
-            let id = FileId(id);
-            self.uris.push(uri.clone());
-            self.by_uri.insert(uri, id);
-            id
+            return id;
         }
+        let id = FileId(u32::try_from(self.uris.len()).expect("too many files open"));
+        let uri = Arc::new(uri.clone());
+        self.uris.push(Arc::clone(&uri));
+        self.by_uri.insert(uri, id);
+        id
     }
 
-    /// Look up a user file's URI without consulting disk or the live VFS.
-    /// BASE and unknown IDs return None. Closing a document does not erase its URI.
-    pub fn uri_for(&self, file_id: FileId) -> Option<&Uri<String>> {
-        if file_id == FileId::BASE {
-            return None;
-        }
-        let FileId(id) = file_id;
-        self.uris.get((id - 1) as usize).map(|v| &**v)
+    /// Resolve any registered file, without disk or live-buffer access.
+    pub fn uri_for(&self, file: FileId) -> Option<&Uri<String>> {
+        self.uris.get(file.0 as usize).map(Arc::as_ref)
     }
 }

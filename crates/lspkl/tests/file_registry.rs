@@ -20,8 +20,9 @@ fn distinct_uris_with_the_same_basename_have_distinct_non_base_ids() {
     let first_id = registry.register(&first);
     let second_id = registry.register(&second);
 
-    assert_ne!(first_id, FileId::BASE);
-    assert_ne!(second_id, FileId::BASE);
+    let base = registry.register(&uri("pkl:base"));
+    assert_ne!(first_id, base);
+    assert_ne!(second_id, base);
     assert_ne!(first_id, second_id);
     assert_eq!(registry.uri_for(first_id), Some(&first));
     assert_eq!(registry.uri_for(second_id), Some(&second));
@@ -83,15 +84,18 @@ fn closing_and_reopening_preserves_identity_without_reusing_it_for_another_uri()
 }
 
 #[test]
-fn base_and_unknown_ids_have_no_user_uri() {
+fn base_is_registered_and_addressable_like_every_other_file() {
     let mut registry = FileRegistry::new();
-    assert!(registry.uri_for(FileId::BASE).is_none());
+    let base = uri("pkl:base");
+    let base_id = registry.register(&base);
+    assert_eq!(registry.uri_for(base_id), Some(&base));
     assert!(registry.uri_for(FileId(u32::MAX)).is_none());
 
-    let id = registry.register(&uri("file:///workspace/main.pkl"));
-    assert_ne!(id, FileId::BASE);
-    assert!(registry.uri_for(FileId::BASE).is_none());
-    assert!(registry.uri_for(FileId(u32::MAX)).is_none());
+    let main = uri("file:///workspace/main.pkl");
+    let main_id = registry.register(&main);
+    assert_ne!(main_id, base_id);
+    assert_eq!(registry.uri_for(main_id), Some(&main));
+    assert_eq!(registry.register(&base), base_id);
 }
 
 fn open(

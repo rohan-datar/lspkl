@@ -1,17 +1,11 @@
 //! Tests for `BaseModule::load` and well-known type lookup.
 //!
 //! These pin the contract: after `load`, every cached type accessor returns a
-//! `Type::Class` whose `class_node` lives in `FileId::BASE`.
+//! `Type::Class` whose `class_node` lives in `base.file_id()`.
 
 mod harness;
 
-use pkl_types::{FileId, Type};
-
-#[test]
-fn file_id_is_base() {
-    let base = harness::load_test_base();
-    assert_eq!(base.file_id(), FileId::BASE);
-}
+use pkl_types::Type;
 
 #[test]
 fn string_type_points_into_base_module() {
@@ -19,9 +13,9 @@ fn string_type_points_into_base_module() {
     match base.string_type() {
         Type::Class { class_node, .. } => {
             assert_eq!(
-                class_node.file_id,
-                FileId::BASE,
-                "well-known types must reference FileId::BASE"
+                class_node.file,
+                base.file_id(),
+                "well-known types must reference base.file_id()"
             );
         }
         other => panic!("string_type must be Type::Class, got: {other:?}"),
@@ -53,15 +47,12 @@ fn int_extends_number() {
     // Sanity-check that subtyping over the base hierarchy works at all.
     // Requires Type::is_subtype_of to be implemented.
     let base = harness::load_test_base();
-    let dummy_tree = pkl_syntax::parse("").expect("empty parse");
+    let dummy_tree = std::sync::Arc::new(pkl_syntax::parse("").expect("empty parse"));
     let trees = std::collections::HashMap::new();
-    let ctx = pkl_types::AnalysisContext::new(
-        &dummy_tree,
-        FileId(1),
-        &base,
-        &trees,
-        harness::empty_imports(),
-    );
+    let mut trees = trees;
+    trees.insert(pkl_types::FileId(1), dummy_tree.clone());
+    trees.insert(base.file_id(), base.tree().clone());
+    let ctx = pkl_types::AnalysisContext::new(&base, &trees, harness::empty_imports());
 
     assert!(
         base.int_type().is_subtype_of(base.number_type(), &ctx),

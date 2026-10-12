@@ -10,8 +10,12 @@ use pkl_syntax::ast::nodes::{
 use pkl_types::resolver::resolve_type_name;
 use pkl_types::{AnalysisContext, NodeRef};
 
-pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<CompletionItem> {
-    let tree = ctx.tree;
+pub(crate) fn completions(
+    node: NodeId,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    file: pkl_types::FileId,
+    ctx: &AnalysisContext,
+) -> Vec<CompletionItem> {
     let body = ClassBody::cast(tree, node).or_else(|| ClassBody::cast(tree, tree.parent(node)?));
     let Some(body) = body else {
         return Vec::new();
@@ -25,8 +29,7 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<Completion
         return Vec::new();
     };
     let segments = tree.qualified_identifier_segments(extends_target);
-    let Some(super_class) =
-        resolve_type_name(ctx, &segments, NodeRef::new(ctx.file_id, extends_target))
+    let Some(super_class) = resolve_type_name(ctx, &segments, NodeRef::new(file, extends_target))
     else {
         return Vec::new();
     };
@@ -37,13 +40,13 @@ pub(crate) fn completions(node: NodeId, ctx: &AnalysisContext) -> Vec<Completion
         .filter_map(|m| tree.name(m).map(str::to_string))
         .collect();
 
-    let super_tree = match ctx.tree_for(super_class.file_id) {
+    let super_tree = match ctx.tree(super_class.file) {
         Some(t) => t,
         None => return Vec::new(),
     };
-    let super_body = Class::cast(super_tree, super_class.node_id)
+    let super_body = Class::cast(super_tree, super_class.value)
         .and_then(|class| class.body(super_tree))
-        .unwrap_or(super_class.node_id);
+        .unwrap_or(super_class.value);
 
     let mut out = Vec::new();
     for method in ClassBody::cast(super_tree, super_body)

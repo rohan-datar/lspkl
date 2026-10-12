@@ -1,7 +1,6 @@
 //! `Analyzer` trait + the recursive walker that drives it.
 
-use pkl_syntax::ast::NodeId;
-use pkl_types::AnalysisContext;
+use pkl_types::{AnalysisContext, NodeRef};
 
 use crate::holder::DiagnosticsHolder;
 
@@ -14,7 +13,7 @@ pub trait Analyzer: Send + Sync {
     /// or short-circuit on certain shapes).
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool;
@@ -28,13 +27,16 @@ pub trait Analyzer: Send + Sync {
 /// Drive `analyzer` recursively over the subtree rooted at `node`.
 pub fn run_analyzer(
     analyzer: &dyn Analyzer,
-    node: NodeId,
+    node: NodeRef,
     holder: &mut DiagnosticsHolder,
     ctx: &AnalysisContext,
 ) {
     if analyzer.analyze_node(node, holder, ctx) {
-        for &child in ctx.tree.children(node) {
-            run_analyzer(analyzer, child, holder, ctx);
+        let Some(tree) = ctx.tree(node.file) else {
+            return;
+        };
+        for &child in tree.children(node.value) {
+            run_analyzer(analyzer, node.with_value(child), holder, ctx);
         }
     }
 }

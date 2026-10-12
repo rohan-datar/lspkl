@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use pkl_syntax::ast::SyntaxTree;
-use pkl_types::{AnalysisContext, BaseModule, FileId, NodeRef};
+use pkl_types::{BaseModule, FileId};
 
 pub fn crate_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -48,20 +48,10 @@ fn walk(root: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-/// Build an `AnalysisContext` over `tree`. Uses `FileId(1)` (won't collide
-/// with `FileId::BASE`).
-pub fn make_ctx<'a>(tree: &'a SyntaxTree, base: &'a BaseModule) -> AnalysisContext<'a> {
-    AnalysisContext::new(tree, FileId(1), base, empty_trees(), empty_imports())
-}
-
-/// Shared empty registry for contexts returned by the test harness.
-fn empty_trees() -> &'static HashMap<FileId, Arc<SyntaxTree>> {
-    static TREES: LazyLock<HashMap<FileId, Arc<SyntaxTree>>> = LazyLock::new(HashMap::new);
-    &TREES
-}
-
-fn empty_imports() -> &'static HashMap<NodeRef, pkl_types::ImportResolution> {
-    static IMPORTS: LazyLock<HashMap<NodeRef, pkl_types::ImportResolution>> =
-        LazyLock::new(HashMap::new);
-    &IMPORTS
+/// Pin the analyzed document and embedded base tree for an analysis context.
+pub fn pinned_trees(tree: &Arc<SyntaxTree>, base: &BaseModule) -> HashMap<FileId, Arc<SyntaxTree>> {
+    HashMap::from([
+        (FileId(1), tree.clone()),
+        (base.file_id(), base.tree().clone()),
+    ])
 }

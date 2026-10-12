@@ -14,12 +14,6 @@ use std::sync::{Arc, LazyLock};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 use pkl_types::{AnalysisContext, BaseModule, FileId, NodeRef};
 
-/// Shared empty registry for helpers that return a borrowed context.
-pub fn empty_trees() -> &'static HashMap<FileId, Arc<SyntaxTree>> {
-    static TREES: LazyLock<HashMap<FileId, Arc<SyntaxTree>>> = LazyLock::new(HashMap::new);
-    &TREES
-}
-
 /// Single-file tests have no import edges.
 pub fn empty_imports() -> &'static HashMap<NodeRef, pkl_types::ImportResolution> {
     static IMPORTS: LazyLock<HashMap<NodeRef, pkl_types::ImportResolution>> =
@@ -33,15 +27,15 @@ pub fn load_test_base() -> BaseModule {
 }
 
 /// Parse a small Pkl snippet and run `f` with an `AnalysisContext` over it.
-/// Uses `FileId(1)` so it doesn't collide with [`FileId::BASE`] (which is 0).
+/// Uses `FileId(1)` alongside the pinned base module.
 pub fn with_snippet<R>(
     base: &BaseModule,
     source: &str,
     f: impl FnOnce(&AnalysisContext) -> R,
 ) -> R {
-    let tree = pkl_syntax::parse(source).expect("snippet should parse");
-    let trees = HashMap::new();
-    let ctx = AnalysisContext::new(&tree, FileId(1), base, &trees, empty_imports());
+    let tree = Arc::new(pkl_syntax::parse(source).expect("snippet should parse"));
+    let trees = pinned(base, tree);
+    let ctx = AnalysisContext::new(base, &trees, empty_imports());
     f(&ctx)
 }
 
@@ -67,4 +61,16 @@ pub fn find_first<F: Fn(&NodeKind) -> bool>(tree: &SyntaxTree, predicate: F) -> 
         None
     }
     go(tree, tree.root(), &predicate).expect("expected node kind not found in tree")
+}
+
+pub fn pinned(base: &BaseModule, tree: Arc<SyntaxTree>) -> HashMap<FileId, Arc<SyntaxTree>> {
+    HashMap::from([(FileId(1), tree), (base.file_id(), base.tree().clone())])
+}
+
+pub fn expr(
+    node: NodeRef,
+    ctx: &AnalysisContext,
+) -> pkl_types::InFile<pkl_syntax::ast::nodes::Expr> {
+    node.cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+        .expect("expression")
 }

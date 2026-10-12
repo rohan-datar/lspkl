@@ -7,7 +7,6 @@ use crate::{
 };
 use lsp_features::positions::PositionConverter;
 use lsp_types::{Diagnostic, DiagnosticSeverity};
-use pkl_types::AnalysisContext;
 
 pub(super) fn open_document_analysis(
     snapshot: &Snapshot,
@@ -25,14 +24,10 @@ pub(super) fn analyze_document(
         return Ok(None);
     };
     let _compute = perf::Compute::start("diagnostics");
-    let ctx = AnalysisContext::new(
-        &analysis.module.tree,
-        analysis.module.file_id,
-        snapshot.base_module(),
-        &analysis.trees,
-        &analysis.imports,
-    );
-    let diagnostics = snapshot.diagnostics().analyze(&ctx);
+    let ctx = analysis.context(snapshot.base_module());
+    let diagnostics = snapshot
+        .diagnostics()
+        .analyze(&ctx, analysis.module.file_id);
     Ok(Some((analysis, diagnostics)))
 }
 pub fn diagnostics(snapshot: &Snapshot, uri: &str) -> Result<Vec<Diagnostic>> {

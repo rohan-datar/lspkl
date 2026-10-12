@@ -1,6 +1,8 @@
 //! Validates modifier combinations on classes, methods, properties, and type
 //! aliases.
 
+use pkl_types::NodeRef;
+
 use pkl_syntax::TextRange;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType, nodes};
 use pkl_types::AnalysisContext;
@@ -15,59 +17,64 @@ pub struct ModifierAnalyzer;
 impl Analyzer for ModifierAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
         use NodeKind::*;
         use TokenType::*;
-        let modifiers = ctx.tree.modifiers(node);
+        let modifiers = source_tree.modifiers(node);
 
-        if !ctx.tree.has_modifier(node, Local) {
-            match ctx.tree.kind(node) {
+        if !source_tree.has_modifier(node, Local) {
+            match source_tree.kind(node) {
                 ClassProperty
-                    if ctx.tree.is_amend()
-                        && (ctx.tree.has_modifier(node, Hidden)
-                            || has_type_annotation(ctx.tree, node)) =>
+                    if source_tree.is_amend()
+                        && (source_tree.has_modifier(node, Hidden)
+                            || has_type_annotation(source_tree, node)) =>
                 {
                     holder.add_error_with_fix(
-                        ctx.tree.span(node),
+                        source_tree.span(node),
                         "missing modifier `local`",
                         QuickFix::single(
                             "add modifier `local`",
-                            TextEdit::insert_before(ctx.tree.span(node), "local "),
+                            TextEdit::insert_before(source_tree.span(node), "local "),
                         ),
                     );
                     return true;
                 }
-                ObjectProperty if has_type_annotation(ctx.tree, node) => {
+                ObjectProperty if has_type_annotation(source_tree, node) => {
                     holder.add_error_with_fix(
-                        ctx.tree.span(node),
+                        source_tree.span(node),
                         "missing modifier `local`",
                         QuickFix::single(
                             "add modifier `local`",
-                            TextEdit::insert_before(ctx.tree.span(node), "local "),
+                            TextEdit::insert_before(source_tree.span(node), "local "),
                         ),
                     );
                     return true;
                 }
                 ObjectMethod => {
                     holder.add_error_with_fix(
-                        ctx.tree.span(node),
+                        source_tree.span(node),
                         "missing modifier `local`",
                         QuickFix::single(
                             "add modifier `local`",
-                            TextEdit::insert_before(ctx.tree.span(node), "local "),
+                            TextEdit::insert_before(source_tree.span(node), "local "),
                         ),
                     );
                 }
-                Class | TypeAlias | ClassMethod if ctx.tree.is_amend() => {
+                Class | TypeAlias | ClassMethod if source_tree.is_amend() => {
                     holder.add_error_with_fix(
-                        ctx.tree.span(node),
+                        source_tree.span(node),
                         "missing modifier `local`",
                         QuickFix::single(
                             "add modifier `local`",
-                            TextEdit::insert_before(ctx.tree.span(node), "local "),
+                            TextEdit::insert_before(source_tree.span(node), "local "),
                         ),
                     );
                     return true;
@@ -76,35 +83,35 @@ impl Analyzer for ModifierAnalyzer {
             }
         }
 
-        if ctx.tree.has_modifier(node, Abstract) && ctx.tree.has_modifier(node, Open) {
+        if source_tree.has_modifier(node, Abstract) && source_tree.has_modifier(node, Open) {
             holder.add_error(
-                modifier_span(ctx.tree, node, Abstract),
+                modifier_span(source_tree, node, Abstract),
                 "modifer `abstract` conflicts with `open`",
             );
             holder.add_error(
-                modifier_span(ctx.tree, node, Open),
+                modifier_span(source_tree, node, Open),
                 "modifer `open` conflicts with `abstract`",
             );
         }
 
-        if ctx.tree.has_modifier(node, Const)
-            && !ctx.tree.has_modifier(node, Local)
-            && nodes::ObjectMember::can_cast(ctx.tree.kind(node))
-            && effective_pkl_version(ctx) >= Version::new(0, 27, 0)
+        if source_tree.has_modifier(node, Const)
+            && !source_tree.has_modifier(node, Local)
+            && nodes::ObjectMember::can_cast(source_tree.kind(node))
+            && effective_pkl_version(ctx, file) >= Version::new(0, 27, 0)
         {
             holder.add_error_with_fix(
-                modifier_span(ctx.tree, node, Const),
+                modifier_span(source_tree, node, Const),
                 "invalid modifier `const` without `local`",
                 QuickFix::single(
                     "add modifier `local`",
-                    TextEdit::insert_before(modifier_span(ctx.tree, node, Const), "local "),
+                    TextEdit::insert_before(modifier_span(source_tree, node, Const), "local "),
                 ),
             );
         }
 
-        let (description, applicable_modifiers) = match ctx.tree.kind(node) {
+        let (description, applicable_modifiers) = match source_tree.kind(node) {
             ModuleClause => {
-                if ctx.tree.is_amend() {
+                if source_tree.is_amend() {
                     ("amending modules", vec![])
                 } else {
                     ("modules", vec![Abstract, Open])
@@ -126,9 +133,9 @@ impl Analyzer for ModifierAnalyzer {
 
         for modifier in modifiers {
             if !applicable_modifiers.contains(&modifier) {
-                let modifier_text = ctx.tree.text(modifier_node(ctx.tree, node, modifier));
+                let modifier_text = source_tree.text(modifier_node(source_tree, node, modifier));
                 holder.add_error_with_fix(
-                    modifier_span(ctx.tree, node, modifier),
+                    modifier_span(source_tree, node, modifier),
                     format!(
                         "modifier `{}` is not applicable for {}",
                         modifier_text, description
@@ -136,9 +143,9 @@ impl Analyzer for ModifierAnalyzer {
                     QuickFix::single(
                         format!(
                             "delete `{}`",
-                            ctx.tree.text(modifier_node(ctx.tree, node, modifier))
+                            source_tree.text(modifier_node(source_tree, node, modifier))
                         ),
-                        TextEdit::replace(modifier_span(ctx.tree, node, modifier), ""),
+                        TextEdit::replace(modifier_span(source_tree, node, modifier), ""),
                     ),
                 );
             }

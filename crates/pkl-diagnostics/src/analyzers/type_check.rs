@@ -2,10 +2,11 @@
 //! property defaults, function return types, parameter types, etc. The
 //! workhorse analyzer.
 
-use pkl_syntax::ast::{NodeId, nodes};
-use pkl_types::compute_expr::compute_expr_type;
-use pkl_types::infer_expr_type::infer_expr_type_from_context;
-use pkl_types::{AnalysisContext, Type, TypeBindings};
+use pkl_types::NodeRef;
+
+use pkl_syntax::ast::nodes;
+
+use pkl_types::{AnalysisContext, Type};
 
 use crate::analyzer::Analyzer;
 use crate::holder::DiagnosticsHolder;
@@ -15,26 +16,34 @@ pub struct TypeCheckAnalyzer;
 impl Analyzer for TypeCheckAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
-        if !nodes::Expr::can_cast(ctx.tree.kind(node)) {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
+        if !nodes::Expr::can_cast(source_tree.kind(node)) {
             return true;
         }
 
-        let bindings = TypeBindings::new();
-        let expected = infer_expr_type_from_context(node, &bindings, ctx);
+        let expected = NodeRef::new(file, node)
+            .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+            .map_or(Type::Unknown, |expr| pkl_types::expected_type(expr, ctx));
         if matches!(expected, Type::Unknown) {
             return true;
         }
 
-        let actual = compute_expr_type(node, &bindings, ctx);
+        let actual = NodeRef::new(file, node)
+            .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+            .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
         if actual.is_subtype_of(&expected, ctx) {
             return true;
         }
 
-        let span = ctx.tree.span(node);
+        let span = source_tree.span(node);
         let render_actual = actual.render(ctx);
         let render_expected = expected.render(ctx);
 

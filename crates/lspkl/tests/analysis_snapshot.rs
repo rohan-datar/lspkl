@@ -8,7 +8,7 @@ use fluent_uri::Uri;
 use lspkl::Workspace;
 use lspkl::state::AnalysisSnapshot;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::{AnalysisContext, ImportResolution, NodeRef};
+use pkl_types::{ImportResolution, NodeRef};
 
 fn uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
@@ -18,6 +18,99 @@ fn prepare(state: &mut Workspace, path: &Path, source: &str) -> AnalysisSnapshot
     let file = open(state, uri(path), source.into(), Some(1));
     let module = state.snapshot().parse_module(file).unwrap();
     state.snapshot().prepare_analysis(module).unwrap()
+}
+
+#[test]
+fn sdk_document_lifecycle_keeps_builtin_metadata_and_pinned_sources_consistent() {
+    for warm in [false, true] {
+        let mut state = Workspace::new();
+        if warm {
+            let _ = state.snapshot().base_module();
+        }
+        let url = Uri::parse("pkl:base".to_owned()).unwrap();
+        let file = open(&mut state, url.clone(), "edited = 1\n".into(), Some(1));
+        let view = state.snapshot();
+        let before = view
+            .prepare_analysis(view.parse_module(file).unwrap())
+            .unwrap();
+        assert_eq!(
+            view.base_module()
+                .string_type()
+                .render(&before.context(view.base_module())),
+            "String"
+        );
+        assert_eq!(before.module.tree.source(), before.module.file.contents());
+        change(&mut state, &url, "edited = 2\n", 2);
+        let current = state.snapshot();
+        let changed = current
+            .open_document_analysis(url.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            current
+                .base_module()
+                .string_type()
+                .render(&changed.context(current.base_module())),
+            "String"
+        );
+        assert_eq!(changed.module.tree.source(), changed.module.file.contents());
+        let workspace = tempfile::tempdir().unwrap();
+        let imported = prepare(
+            &mut state,
+            &workspace.path().join("main.pkl"),
+            "import \"pkl:base\" as sdk\nresult: sdk.String = \"value\"\n",
+        );
+        let imported_view = state.snapshot();
+        let ctx = imported.context(imported_view.base_module());
+        let property = imported
+            .module
+            .tree
+            .child(imported.module.tree.root(), |kind| {
+                matches!(kind, NodeKind::ClassProperty)
+            })
+            .unwrap();
+        assert_eq!(
+            pkl_types::resolver::definition_type(
+                NodeRef::new(imported.module.file_id, property),
+                &ctx
+            )
+            .render(&ctx),
+            "String"
+        );
+        assert_eq!(
+            ctx.tree(imported_view.base_module().file_id())
+                .unwrap()
+                .source(),
+            changed.module.file.contents()
+        );
+        state
+            .apply_close(lsp_types::DidCloseTextDocumentParams {
+                text_document: lsp_types::TextDocumentIdentifier {
+                    uri: url.as_str().parse().unwrap(),
+                },
+            })
+            .unwrap();
+        let closed = state.snapshot();
+        let restored = closed
+            .parse_module(closed.file_manager.get_or_load(&url).unwrap())
+            .unwrap();
+        let after = closed.prepare_analysis(restored).unwrap();
+        assert_eq!(
+            closed
+                .base_module()
+                .string_type()
+                .render(&after.context(closed.base_module())),
+            "String"
+        );
+        assert_eq!(
+            view.base_module()
+                .string_type()
+                .render(&before.context(view.base_module())),
+            "String"
+        );
+        assert_eq!(before.module.file.version(), Some(1));
+        assert_eq!(changed.module.file.version(), Some(2));
+    }
 }
 
 #[test]
@@ -70,16 +163,10 @@ value = import("missing-expr.pkl")
         3
     );
     let view = state.snapshot();
-    let ctx = AnalysisContext::new(
-        &snapshot.module.tree,
-        snapshot.module.file_id,
-        view.base_module(),
-        &snapshot.trees,
-        &snapshot.imports,
-    );
+    let ctx = snapshot.context(view.base_module());
     let diagnostics = pkl_diagnostics::DiagnosticsEngine::new()
         .with(Box::new(pkl_diagnostics::analyzers::ModuleUriAnalyzer))
-        .analyze(&ctx);
+        .analyze(&ctx, snapshot.module.file_id);
     assert_eq!(diagnostics.len(), 5);
     let downloads: Vec<_> = diagnostics.iter().flat_map(|d| &d.quick_fixes).collect();
     assert_eq!(downloads.len(), 1);
@@ -126,15 +213,9 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
     let mut state = Workspace::new();
     let snapshot = prepare(&mut state, &dir.join("main.pkl"), main);
     let view = state.snapshot();
-    let ctx = AnalysisContext::new(
-        &snapshot.module.tree,
-        snapshot.module.file_id,
-        view.base_module(),
-        &snapshot.trees,
-        &snapshot.imports,
-    );
+    let ctx = snapshot.context(view.base_module());
 
-    assert_eq!(snapshot.trees.len(), 4);
+    assert_eq!(view.base_module().string_type().render(&ctx), "String");
     let id_for = |path: &str| {
         state
             .snapshot()
@@ -182,7 +263,7 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
             .get(&url)
             .expect("reachable file loaded");
         let id = state.snapshot().file_registry.lock().register(&url);
-        let tree = ctx.tree_for(id).expect("reachable tree belongs to request");
+        let tree = ctx.tree(id).expect("reachable tree belongs to request");
         assert_eq!(property_name(tree), expected);
         assert!(Arc::ptr_eq(
             snapshot.trees.get(&id).unwrap(),
@@ -212,14 +293,26 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
         &temp.path().join("main.pkl"),
         "import \"./good.pkl\"\nimport \"./missing.pkl\"\nimport \"ftp://example.com/remote.pkl\"\nimport* \"./glob-only.pkl\"\nmainValue = 0\n",
     );
-    let mut names: Vec<_> = snapshot
-        .trees
-        .values()
-        .map(|tree| property_name(tree))
-        .collect();
-    names.sort_unstable();
-
-    assert_eq!(names, ["globValue", "goodValue", "mainValue"]);
+    let view = state.snapshot();
+    for (path, expected) in [
+        ("main.pkl", "mainValue"),
+        ("good.pkl", "goodValue"),
+        ("glob-only.pkl", "globValue"),
+    ] {
+        let id = view
+            .file_registry
+            .lock()
+            .register(&uri(&temp.path().join(path)));
+        assert_eq!(
+            property_name(snapshot.trees.get(&id).expect("reachable module pinned")),
+            expected
+        );
+    }
+    let unrelated = view
+        .file_registry
+        .lock()
+        .register(&uri(&temp.path().join("unrelated.pkl")));
+    assert!(!snapshot.trees.contains_key(&unrelated));
     let good_id = state
         .snapshot()
         .file_registry
@@ -293,15 +386,9 @@ fn later_requests_see_editor_updates_without_replacing_previous_import_snapshots
         .unwrap();
     let imported_id = state.snapshot().file_registry.lock().register(&opened.url);
     let view = state.snapshot();
-    let before_ctx = AnalysisContext::new(
-        &before.module.tree,
-        before.module.file_id,
-        view.base_module(),
-        &before.trees,
-        &before.imports,
-    );
+    let before_ctx = before.context(view.base_module());
     assert_eq!(
-        property_name(before_ctx.tree_for(imported_id).unwrap()),
+        property_name(before_ctx.tree(imported_id).unwrap()),
         "oldValue"
     );
 
@@ -311,20 +398,14 @@ fn later_requests_see_editor_updates_without_replacing_previous_import_snapshots
         .prepare_analysis(state.snapshot().parse_module(root).unwrap())
         .unwrap();
     let view = state.snapshot();
-    let after_ctx = AnalysisContext::new(
-        &after.module.tree,
-        after.module.file_id,
-        view.base_module(),
-        &after.trees,
-        &after.imports,
-    );
+    let after_ctx = after.context(view.base_module());
 
     assert_eq!(
-        property_name(after_ctx.tree_for(imported_id).unwrap()),
+        property_name(after_ctx.tree(imported_id).unwrap()),
         "newValue"
     );
     assert_eq!(
-        property_name(before_ctx.tree_for(imported_id).unwrap()),
+        property_name(before_ctx.tree(imported_id).unwrap()),
         "oldValue"
     );
     assert_eq!(before.module.file_id, after.module.file_id);

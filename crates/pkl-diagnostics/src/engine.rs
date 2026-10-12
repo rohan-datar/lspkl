@@ -52,14 +52,22 @@ impl DiagnosticsEngine {
             .with(Box::new(analyzers::TypeAnalyzer))
     }
 
-    /// Run every registered analyzer against `ctx` and concatenate their
+    /// Run every registered analyzer against `file` and concatenate their
     /// diagnostics. Order: analyzers run in registration order; within an
     /// analyzer, diagnostics appear in tree-walk order.
-    pub fn analyze(&self, ctx: &AnalysisContext) -> Vec<Diagnostic> {
+    pub fn analyze(&self, ctx: &AnalysisContext, file: pkl_types::FileId) -> Vec<Diagnostic> {
+        let Some(tree) = ctx.tree(file) else {
+            return Vec::new();
+        };
         let mut all = Vec::new();
         for analyzer in &self.analyzers {
             let mut holder = DiagnosticsHolder::new();
-            run_analyzer(&**analyzer, ctx.tree.root(), &mut holder, ctx);
+            run_analyzer(
+                &**analyzer,
+                pkl_types::NodeRef::new(file, tree.root()),
+                &mut holder,
+                ctx,
+            );
             all.extend(holder.into_diagnostics());
         }
         all

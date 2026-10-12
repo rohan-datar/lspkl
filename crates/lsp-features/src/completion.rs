@@ -12,28 +12,32 @@ use pkl_syntax::{TextRange, TextSize};
 use pkl_types::AnalysisContext;
 
 mod implement_method;
-mod members;
 mod qualified;
 mod string_literal;
 mod unqualified;
 
-/// Compute completion candidates at a UTF-8 byte offset.
+/// Compute completion candidates at a file-qualified UTF-8 byte offset.
 pub fn completion(
     ctx: &AnalysisContext,
-    offset: TextSize,
+    offset: pkl_types::InFile<TextSize>,
     range_for: impl Fn(TextRange) -> Range,
 ) -> Option<CompletionResponse> {
     // Deepest node containing the cursor; whitespace past any token yields
     // `None`, which propagates as "no completions".
-    let node = ctx.tree.find_at(offset)?;
+    let file = offset.file;
+    let tree = ctx.tree(file)?;
+    let offset = offset.value;
+    let node = tree.find_at(offset)?;
 
     // URI completion runs in the server layer before this semantic dispatch.
     // Each provider contributes only when applicable to the current node.
     let mut collector = Vec::new();
-    collector.extend(qualified::completions(node, ctx));
-    collector.extend(unqualified::completions(node, ctx, offset));
-    collector.extend(string_literal::completions(node, ctx, &range_for));
-    collector.extend(implement_method::completions(node, ctx));
+    collector.extend(qualified::completions(node, tree, file, ctx));
+    collector.extend(unqualified::completions(node, tree, file, ctx, offset));
+    collector.extend(string_literal::completions(
+        node, tree, file, ctx, &range_for,
+    ));
+    collector.extend(implement_method::completions(node, tree, file, ctx));
     // TODO(completion-doc-link): DocCommentMemberLinkCompletionProvider slot.
 
     if collector.is_empty() {
@@ -47,15 +51,15 @@ pub fn completion(
 /// Walk up from `node` (inclusive) until `pred` matches.
 pub(crate) fn ancestor_or_self(
     node: pkl_syntax::ast::NodeId,
-    ctx: &AnalysisContext,
+    tree: &pkl_syntax::ast::SyntaxTree,
     pred: impl Fn(&pkl_syntax::ast::NodeKind) -> bool,
 ) -> Option<pkl_syntax::ast::NodeId> {
     let mut current = Some(node);
     while let Some(id) = current {
-        if pred(ctx.tree.kind(id)) {
+        if pred(tree.kind(id)) {
             return Some(id);
         }
-        current = ctx.tree.parent(id);
+        current = tree.parent(id);
     }
     None
 }

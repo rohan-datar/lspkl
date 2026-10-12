@@ -8,27 +8,27 @@ use pkl_syntax::ast::nodes::{
     TypeParameterList, TypedIdentifier,
 };
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::compute_expr::compute_expr_type;
-use pkl_types::to_type::to_type;
-use pkl_types::{
-    AnalysisContext, FileId, NodeRef, Type, TypeBindings, resolver::resolve_reference,
-};
+
+use pkl_types::{AnalysisContext, FileId, NodeRef, Type, resolve_reference};
 
 /// Resolve hover information for the given cursor byte `offset`.
 ///
 /// Returns `None` when there is nothing meaningful at the cursor — the
 /// caller should translate `None` into an empty `Hover` per the LSP spec.
 ///
-/// `offset` is a UTF-8 byte offset in the current syntax tree.
+/// `offset` identifies both the source file and its UTF-8 byte offset.
 ///
 /// Pipeline:
 ///   1. Locate the deepest node at the cursor (`find_at`).
 ///   2. Resolve what it refers to (`resolve_reference`).
 ///   3. Render the resolved declaration as Markdown (`render_markdown`).
 ///   4. Wrap as a Markdown `Hover`.
-pub fn hover(ctx: &AnalysisContext, offset: TextSize) -> Option<Hover> {
-    let node_id = ctx.tree.find_at(offset)?;
-    let original = NodeRef::new(ctx.file_id, node_id);
+pub fn hover(ctx: &AnalysisContext, offset: pkl_types::InFile<TextSize>) -> Option<Hover> {
+    let file = offset.file;
+    let tree = ctx.tree(file)?;
+    let offset = offset.value;
+    let node_id = tree.find_at(offset)?;
+    let original = NodeRef::new(file, node_id);
     let resolved = resolve_reference(original, offset, ctx)?;
     let value = render_markdown(resolved, original, ctx)?;
 
@@ -61,9 +61,9 @@ pub fn render_markdown(
     let _ = original;
 
     // `resolved` may live in another file (e.g. pkl:base), so look up its
-    // tree — never use `ctx.tree` directly here.
-    let tree = ctx.tree_for(resolved.file_id)?;
-    let node_id = resolved.node_id;
+    // tree — never use the request source tree directly here.
+    let tree = ctx.tree(resolved.file)?;
+    let node_id = resolved.value;
 
     let signature = match tree.kind(node_id) {
         NodeKind::Module => format!("module {}", tree.name(node_id).unwrap_or("")),
@@ -92,7 +92,7 @@ pub fn render_markdown(
         NodeKind::ClassMethod | NodeKind::ObjectMethod => format!(
             "{}{}",
             modifiers_prefix(tree, node_id),
-            method_signature(tree, node_id, resolved.file_id, ctx)?
+            method_signature(tree, node_id, resolved.file, ctx)?
         ),
         _ => return None,
     };
@@ -111,25 +111,24 @@ pub fn render_markdown(
 /// Prefers the explicit annotation (`x: String`), rendered through
 /// `to_type` so aliases and generics display the same way diagnostics do.
 /// Falls back to inferring the initializer's type (`x = 1` → `Int`) via
-/// `compute_expr_type`. Returns `None` when neither yields anything useful.
+/// `expr_type`. Returns `None` when neither yields anything useful.
 fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) -> Option<String> {
-    let declaration = ClassProperty::cast(tree, property.node_id)?;
+    let declaration = ClassProperty::cast(tree, property.value)?;
     let annotated = declaration
         .type_annotation(tree)
         .and_then(|ann| TypeAnnotation::cast(tree, ann)?.ty(tree));
     if let Some(type_node) = annotated {
-        let ty = to_type(
-            NodeRef::new(property.file_id, type_node),
-            &TypeBindings::new(),
-            ctx,
-        );
+        let ty = NodeRef::new(property.file, type_node)
+            .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
+            .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
         return Some(ty.render(ctx));
     }
 
     // No annotation: infer from the initializer.
-    let local = AnalysisContext::new(tree, property.file_id, ctx.base, ctx.trees, ctx.imports);
     let expr = declaration.value(tree)?;
-    let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
+    let ty = NodeRef::new(property.file, expr)
+        .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+        .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
     if ty != Type::Unknown {
         return Some(ty.render(ctx));
     }
@@ -207,7 +206,7 @@ fn parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
 }
 
 /// Render a method's return type. Prefers the declared annotation;
-/// without one, infers from the body expression via `compute_expr_type`
+/// without one, infers from the body expression via `expr_type`
 /// (as upstream does); gives up with `unknown`.
 fn return_type_text(
     tree: &SyntaxTree,
@@ -223,8 +222,9 @@ fn return_type_text(
         .and_then(|method| method.body(tree))
         .or_else(|| ObjectMethod::cast(tree, method_id)?.body(tree));
     if let Some(expr) = body {
-        let local = AnalysisContext::new(tree, file_id, ctx.base, ctx.trees, ctx.imports);
-        let ty = compute_expr_type(expr, &TypeBindings::new(), &local);
+        let ty = NodeRef::new(file_id, expr)
+            .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+            .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
         if ty != Type::Unknown {
             return ty.render(ctx);
         }
@@ -243,7 +243,9 @@ fn annotation_text(
 ) -> String {
     match TypeAnnotation::cast(tree, ann).and_then(|ann| ann.ty(tree)) {
         Some(ty_node) => {
-            let ty = to_type(NodeRef::new(file_id, ty_node), &TypeBindings::new(), ctx);
+            let ty = NodeRef::new(file_id, ty_node)
+                .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
+                .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
             if ty != Type::Unknown {
                 ty.render(ctx)
             } else {

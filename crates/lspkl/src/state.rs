@@ -1,7 +1,7 @@
 //! Process-wide state shared across LSP handlers.
 
 use std::collections::{HashMap, hash_map::Entry};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use lsp_features::positions::PositionEncoding;
 use pkl_diagnostics::DiagnosticsEngine;
@@ -9,7 +9,7 @@ use pkl_project::PklProject;
 use pkl_project::cli::PklCli;
 use pkl_project::import_resolver::ImportResolver;
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::{BaseModule, FileId, ImportResolution, NodeRef};
+use pkl_types::{AnalysisContext, BaseModule, FileId, ImportResolution, NodeRef};
 use pkl_vfs::{FileError, FileManager, VirtualFile, url_to_path};
 
 use crate::file_registry::FileRegistry;
@@ -29,6 +29,12 @@ pub struct AnalysisSnapshot {
     pub imports: HashMap<NodeRef, ImportResolution>,
 }
 
+impl AnalysisSnapshot {
+    pub fn context<'a>(&'a self, base: &'a BaseModule) -> AnalysisContext<'a> {
+        AnalysisContext::new(base, &self.trees, &self.imports)
+    }
+}
+
 type PendingModule = (FileId, Arc<VirtualFile>, Option<Arc<PklProject>>);
 
 /// Exclusive notification-side workspace owner. Requests use immutable snapshots.
@@ -44,7 +50,7 @@ pub struct Workspace {
 pub struct Snapshot {
     pub file_manager: Arc<FileManager>,
     pub file_registry: Arc<parking_lot::Mutex<FileRegistry>>,
-    base_module: Arc<LazyLock<BaseModule>>,
+    base_module: Arc<OnceLock<BaseModule>>,
     diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
     pub project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
     pub package_manager: Arc<parking_lot::Mutex<pkl_project::package_manager::PackageManager>>,
@@ -78,9 +84,7 @@ impl Default for Workspace {
             current: Snapshot {
                 file_manager,
                 file_registry: Arc::new(parking_lot::Mutex::new(FileRegistry::default())),
-                base_module: Arc::new(LazyLock::new(|| {
-                    BaseModule::load_embedded().expect("embedded pkl:base must load")
-                })),
+                base_module: Arc::new(OnceLock::new()),
                 diagnostics: Arc::new(LazyLock::new(DiagnosticsEngine::default)),
                 project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
                 package_manager: Arc::new(parking_lot::Mutex::new(
@@ -134,12 +138,7 @@ impl Workspace {
             "jar" => pkl_vfs::Origin::Jar,
             _ => pkl_vfs::Origin::Ephemeral,
         };
-        let file = Arc::new(VirtualFile::new(
-            url.clone(),
-            origin,
-            document.text,
-            Some(document.version),
-        ));
+        let file = self.capture_file(url.clone(), origin, document.text, document.version)?;
         let id = self.current.file_id(&file);
         Arc::make_mut(&mut self.buffers).insert(url, file);
         Arc::make_mut(&mut self.current.open_documents).insert(id, Arc::new(document.uri));
@@ -160,15 +159,32 @@ impl Workspace {
         let Some(change) = params.content_changes.into_iter().last() else {
             return Ok(());
         };
-        let updated = Arc::new(VirtualFile::new(
+        let updated = self.capture_file(
             url.clone(),
             file.origin.clone(),
             change.text,
-            Some(params.text_document.version),
-        ));
+            params.text_document.version,
+        )?;
         Arc::make_mut(&mut self.buffers).insert(url, updated);
         self.refresh_buffers();
         Ok(())
+    }
+
+    fn capture_file(
+        &self,
+        url: fluent_uri::Uri<String>,
+        origin: pkl_vfs::Origin,
+        contents: String,
+        version: i32,
+    ) -> Result<Arc<VirtualFile>, FileError> {
+        let file = if matches!(origin, pkl_vfs::Origin::Stdlib) {
+            // Embedded-source lookup only; parsing remains on the blocking analysis worker.
+            let source = self.current.file_manager.get_or_load_source(&url)?;
+            source.editor_epoch(contents, version)
+        } else {
+            VirtualFile::new(url, origin, contents, Some(version))
+        };
+        Ok(Arc::new(file))
     }
 
     pub fn apply_close(
@@ -284,7 +300,15 @@ impl Workspace {
 
 impl Snapshot {
     pub fn base_module(&self) -> &BaseModule {
-        &self.base_module
+        self.base_module.get_or_init(|| {
+            let uri = fluent_uri::Uri::parse("pkl:base".to_owned()).expect("static base URI");
+            let file = self
+                .file_manager
+                .get_or_load_source(&uri)
+                .expect("embedded base source");
+            let tree = file.parsed_tree().expect("embedded base syntax");
+            BaseModule::from_tree(tree).expect("embedded base declarations")
+        })
     }
     pub fn diagnostics(&self) -> &DiagnosticsEngine {
         &self.diagnostics
@@ -341,21 +365,13 @@ impl Snapshot {
     }
 
     pub(crate) fn file_id(&self, file: &VirtualFile) -> FileId {
-        if file.url.as_str() == "pkl:base" {
-            FileId::BASE
-        } else {
-            self.file_registry.lock().register(&file.url)
-        }
+        self.file_registry.lock().register(&file.url)
     }
 
-    /// `pkl:base` shares the type system's reserved identity and exact syntax tree.
+    /// Parse through the ordinary VFS cache for every registered file.
     pub fn parse_module(&self, file: Arc<VirtualFile>) -> Result<ParsedModule, FileError> {
         let file_id = self.file_id(&file);
-        let tree = if file_id == FileId::BASE {
-            Arc::clone(self.base_module().tree())
-        } else {
-            file.parsed_tree()?
-        };
+        let tree = file.parsed_tree()?;
         Ok(ParsedModule {
             file_id,
             file,
@@ -371,7 +387,8 @@ impl Snapshot {
         let cache_dir = settings.effective_cache_dir();
         let resolver =
             ImportResolver::with_settings(&self.file_manager, &settings.module_paths, cache_dir);
-        let mut trees = HashMap::new();
+        let base = self.base_module();
+        let mut trees = HashMap::from([(base.file_id(), Arc::clone(base.tree()))]);
         let mut imports = HashMap::new();
         trees.insert(module.file_id, Arc::clone(&module.tree));
         let context = self.project_for(&module.file);
@@ -446,11 +463,7 @@ impl Snapshot {
     ) -> Result<NodeRef, FileError> {
         let file_id = self.file_id(&file);
         if let Entry::Vacant(entry) = trees.entry(file_id) {
-            let tree = if file_id == FileId::BASE {
-                Arc::clone(self.base_module().tree())
-            } else {
-                file.parsed_tree()?
-            };
+            let tree = file.parsed_tree()?;
             entry.insert(tree);
             pending.push((file_id, file, context.clone()));
         }

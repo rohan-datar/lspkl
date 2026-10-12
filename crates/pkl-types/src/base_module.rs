@@ -85,7 +85,11 @@ pub struct BaseModule {
 impl BaseModule {
     /// Parse `base.pkl` from a source string and resolve well-known types.
     pub fn load(source: &str) -> Result<Self, BaseModuleError> {
-        let tree = Arc::new(pkl_syntax::parse(source)?);
+        Self::from_tree(Arc::new(pkl_syntax::parse(source)?))
+    }
+
+    /// Load well-known metadata from an already parsed base module.
+    pub fn from_tree(tree: Arc<SyntaxTree>) -> Result<Self, BaseModuleError> {
         let classes: Vec<_> = nodes::Module::cast(&tree, tree.root())
             .into_iter()
             .flat_map(|n| n.members(&tree))
@@ -102,71 +106,51 @@ impl BaseModule {
             file_id: FileId::BASE,
 
             // well-known types
-            any_type: find_class(tree.clone(), &classes, "Any")?,
-            annotation_type: find_class(tree.clone(), &classes, "Annotation")?,
-            dynamic_type: find_class(tree.clone(), &classes, "Dynamic")?,
-            null_type: find_class(tree.clone(), &classes, "Null")?,
-            boolean_type: find_class(tree.clone(), &classes, "Boolean")?,
-            int_type: find_class(tree.clone(), &classes, "Int")?,
-            float_type: find_class(tree.clone(), &classes, "Float")?,
-            duration_type: find_class(tree.clone(), &classes, "Duration")?,
-            data_size_type: find_class(tree.clone(), &classes, "DataSize")?,
-            number_type: find_class(tree.clone(), &classes, "Number")?,
-            string_type: find_class(tree.clone(), &classes, "String")?,
-            bytes_type: find_class(tree.clone(), &classes, "Bytes")?,
-            collection_type: find_class(tree.clone(), &classes, "Collection")?,
-            listing_type: find_class(tree.clone(), &classes, "Listing")?,
-            list_type: find_class(tree.clone(), &classes, "List")?,
-            set_type: find_class(tree.clone(), &classes, "Set")?,
-            mapping_type: find_class(tree.clone(), &classes, "Mapping")?,
-            map_type: find_class(tree.clone(), &classes, "Map")?,
-            object_type: find_class(tree.clone(), &classes, "Object")?,
-            module_type: find_class(tree.clone(), &classes, "Module")?,
-            function_type: find_class(tree.clone(), &classes, "Function")?,
-            non_null_type: find_alias(tree.clone(), &aliases, "NonNull")?,
-            comparable_type: find_alias(tree.clone(), &aliases, "Comparable")?,
-            varargs_type: find_class(tree.clone(), &classes, "VarArgs")?,
+            any_type: find_class(&tree, &classes, "Any")?,
+            annotation_type: find_class(&tree, &classes, "Annotation")?,
+            dynamic_type: find_class(&tree, &classes, "Dynamic")?,
+            null_type: find_class(&tree, &classes, "Null")?,
+            boolean_type: find_class(&tree, &classes, "Boolean")?,
+            int_type: find_class(&tree, &classes, "Int")?,
+            float_type: find_class(&tree, &classes, "Float")?,
+            duration_type: find_class(&tree, &classes, "Duration")?,
+            data_size_type: find_class(&tree, &classes, "DataSize")?,
+            number_type: find_class(&tree, &classes, "Number")?,
+            string_type: find_class(&tree, &classes, "String")?,
+            bytes_type: find_class(&tree, &classes, "Bytes")?,
+            collection_type: find_class(&tree, &classes, "Collection")?,
+            listing_type: find_class(&tree, &classes, "Listing")?,
+            list_type: find_class(&tree, &classes, "List")?,
+            set_type: find_class(&tree, &classes, "Set")?,
+            mapping_type: find_class(&tree, &classes, "Mapping")?,
+            map_type: find_class(&tree, &classes, "Map")?,
+            object_type: find_class(&tree, &classes, "Object")?,
+            module_type: find_class(&tree, &classes, "Module")?,
+            function_type: find_class(&tree, &classes, "Function")?,
+            non_null_type: find_alias(&tree, &aliases, "NonNull")?,
+            comparable_type: find_alias(&tree, &aliases, "Comparable")?,
+            varargs_type: find_class(&tree, &classes, "VarArgs")?,
 
             // conversion methods
-            listing_to_list_method: find_class_member(tree.clone(), &classes, "Listing", "toList")?,
-            mapping_to_map_method: find_class_member(tree.clone(), &classes, "Mapping", "toMap")?,
+            listing_to_list_method: find_class_member(&tree, &classes, "Listing", "toList")?,
+            mapping_to_map_method: find_class_member(&tree, &classes, "Mapping", "toMap")?,
 
             // List members duplicated on Listing
-            list_join_method: find_class_member(tree.clone(), &classes, "List", "join")?,
-            list_is_distinct_by_method: find_class_member(
-                tree.clone(),
-                &classes,
-                "List",
-                "isDistinctBy",
-            )?,
-            list_fold_method: find_class_member(tree.clone(), &classes, "List", "fold")?,
-            list_fold_indexed_method: find_class_member(
-                tree.clone(),
-                &classes,
-                "List",
-                "foldIndexed",
-            )?,
-            list_is_empty_property: find_class_member(tree.clone(), &classes, "List", "isEmpty")?,
-            list_length_property: find_class_member(tree.clone(), &classes, "List", "length")?,
-            list_is_distinct_property: find_class_member(
-                tree.clone(),
-                &classes,
-                "List",
-                "isDistinct",
-            )?,
+            list_join_method: find_class_member(&tree, &classes, "List", "join")?,
+            list_is_distinct_by_method: find_class_member(&tree, &classes, "List", "isDistinctBy")?,
+            list_fold_method: find_class_member(&tree, &classes, "List", "fold")?,
+            list_fold_indexed_method: find_class_member(&tree, &classes, "List", "foldIndexed")?,
+            list_is_empty_property: find_class_member(&tree, &classes, "List", "isEmpty")?,
+            list_length_property: find_class_member(&tree, &classes, "List", "length")?,
+            list_is_distinct_property: find_class_member(&tree, &classes, "List", "isDistinct")?,
 
             // Map members duplicated on Mapping
-            map_contains_key_method: find_class_member(
-                tree.clone(),
-                &classes,
-                "Map",
-                "containsKey",
-            )?,
-            map_get_or_null_method: find_class_member(tree.clone(), &classes, "Map", "getOrNull")?,
-            map_fold_method: find_class_member(tree.clone(), &classes, "Map", "fold")?,
-            map_is_empty_property: find_class_member(tree.clone(), &classes, "Map", "isEmpty")?,
-            map_length_property: find_class_member(tree.clone(), &classes, "Map", "length")?,
-            map_keys_property: find_class_member(tree.clone(), &classes, "Map", "keys")?,
+            map_contains_key_method: find_class_member(&tree, &classes, "Map", "containsKey")?,
+            map_get_or_null_method: find_class_member(&tree, &classes, "Map", "getOrNull")?,
+            map_fold_method: find_class_member(&tree, &classes, "Map", "fold")?,
+            map_is_empty_property: find_class_member(&tree, &classes, "Map", "isEmpty")?,
+            map_length_property: find_class_member(&tree, &classes, "Map", "length")?,
+            map_keys_property: find_class_member(&tree, &classes, "Map", "keys")?,
         })
     }
 
@@ -193,16 +177,22 @@ impl BaseModule {
         if n > 5 {
             return None;
         }
-        let fn_class_name = format!("Function{}", n);
-        let tree = self.tree.clone();
-        let id = nodes::Module::cast(&tree, tree.root())?
-            .members(&tree)
+        let fn_class_name = [
+            "Function0",
+            "Function1",
+            "Function2",
+            "Function3",
+            "Function4",
+            "Function5",
+        ][n];
+        let tree = self.tree.as_ref();
+        let id = nodes::Module::cast(tree, tree.root())?
+            .members(tree)
             .find(|&id| {
-                nodes::Class::cast(&tree, id).is_some()
-                    && tree.name(id) == Some(fn_class_name.as_str())
+                nodes::Class::cast(tree, id).is_some() && tree.name(id) == Some(fn_class_name)
             })?;
         let classes = [id];
-        let Ok(fn_class) = find_class(tree, &classes, fn_class_name.as_str()) else {
+        let Ok(fn_class) = find_class(tree, &classes, fn_class_name) else {
             return None;
         };
         Some(fn_class)
@@ -336,26 +326,18 @@ impl BaseModule {
     }
 }
 
-fn find_class(
-    tree: Arc<SyntaxTree>,
-    classes: &[NodeId],
-    name: &str,
-) -> Result<Type, BaseModuleError> {
+fn find_class(tree: &SyntaxTree, classes: &[NodeId], name: &str) -> Result<Type, BaseModuleError> {
     let name = unquote_identifier(name);
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {
         return Err(BaseModuleError::MissingClass(name.to_string()));
     };
     Ok(Type::class(NodeRef {
-        file_id: FileId::BASE,
-        node_id: *id,
+        file: FileId::BASE,
+        value: *id,
     }))
 }
 
-fn find_alias(
-    tree: Arc<SyntaxTree>,
-    aliases: &[NodeId],
-    name: &str,
-) -> Result<Type, BaseModuleError> {
+fn find_alias(tree: &SyntaxTree, aliases: &[NodeId], name: &str) -> Result<Type, BaseModuleError> {
     let name = unquote_identifier(name);
     let Some(id) = aliases.iter().find(|&c| tree.name(*c) == Some(name)) else {
         return Err(BaseModuleError::MissingAlias(name.to_string()));
@@ -363,8 +345,8 @@ fn find_alias(
 
     Ok(Type::Alias {
         alias_node: NodeRef {
-            file_id: FileId::BASE,
-            node_id: *id,
+            file: FileId::BASE,
+            value: *id,
         },
         type_args: vec![],
         constraints: vec![],
@@ -372,7 +354,7 @@ fn find_alias(
 }
 
 fn find_class_member(
-    tree: Arc<SyntaxTree>,
+    tree: &SyntaxTree,
     classes: &[NodeId],
     class_name: &str,
     member_name: &str,
@@ -382,11 +364,11 @@ fn find_class_member(
     let Some(class_id) = classes.iter().find(|c| tree.name(**c) == Some(class_name)) else {
         return Err(BaseModuleError::MissingClass(class_name.to_string()));
     };
-    let member = nodes::Class::cast(&tree, *class_id)
-        .and_then(|n| n.body(&tree))
-        .and_then(|id| nodes::ClassBody::cast(&tree, id))
+    let member = nodes::Class::cast(tree, *class_id)
+        .and_then(|n| n.body(tree))
+        .and_then(|id| nodes::ClassBody::cast(tree, id))
         .into_iter()
-        .flat_map(|n| n.members(&tree))
+        .flat_map(|n| n.members(tree))
         .find(|&n| tree.name(n) == Some(member_name));
     let Some(member_id) = member else {
         return Err(BaseModuleError::MissingMember {
@@ -395,7 +377,7 @@ fn find_class_member(
         });
     };
     Ok(NodeRef {
-        file_id: FileId::BASE,
-        node_id: member_id,
+        file: FileId::BASE,
+        value: member_id,
     })
 }

@@ -1,6 +1,8 @@
 //! Unqualified access completion: names in scope at expression and
 //! definition positions.
 
+use pkl_types::NodeRef;
+
 use lsp_types::{CompletionItem, CompletionItemKind};
 
 use pkl_syntax::ast::nodes::{
@@ -8,24 +10,23 @@ use pkl_syntax::ast::nodes::{
     ObjectBody, ObjectMember, ObjectMethod, ParameterList, TypedIdentifier,
 };
 use pkl_syntax::ast::{NodeId, NodeKind};
-use pkl_types::compute_expr::compute_this_type;
-use pkl_types::infer_expr_type::infer_expr_type_from_context;
-use pkl_types::resolver::resolve_unqualified_access;
-use pkl_types::{AnalysisContext, Type, TypeBindings};
 
-use super::members::members_of_type;
+use pkl_types::resolver::resolve_unqualified_access;
+use pkl_types::{AnalysisContext, Type};
+
+use pkl_types::members_of_type;
 
 /// Collect completions for an unqualified position.
 pub(crate) fn completions(
     node: NodeId,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
     offset: pkl_syntax::TextSize,
 ) -> Vec<CompletionItem> {
-    let tree = ctx.tree;
-    let bindings = TypeBindings::new();
     let mut collector: Vec<CompletionItem> = Vec::new();
 
-    let this_type = compute_this_type(node, &bindings, ctx);
+    let this_type = pkl_types::this_type(NodeRef::new(file, node), ctx);
     if this_type == Type::Unknown {
         return collector;
     }
@@ -42,8 +43,8 @@ pub(crate) fn completions(
             && tree.line_index().line_col(offset).col == 0);
 
     if in_definition_position {
-        let defined = collect_defined_property_names(node, ctx);
-        if add_definition_completions(node, &this_type, &defined, ctx, &mut collector) {
+        let defined = collect_defined_property_names(node, tree);
+        if add_definition_completions(node, &this_type, &defined, tree, ctx, &mut collector) {
             return collector;
         }
     }
@@ -52,10 +53,10 @@ pub(crate) fn completions(
     // `find_at` usually lands on the access expression's identifier terminal,
     // so climb to the enclosing `UnqualifiedAccessExpr`.
     let access =
-        super::ancestor_or_self(node, ctx, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
+        super::ancestor_or_self(node, tree, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
     if let Some(access) = access {
-        add_inferred_expr_type_completions(access, ctx, &mut collector);
-        add_scope_completions(access, ctx, &mut collector);
+        add_inferred_expr_type_completions(access, file, ctx, &mut collector);
+        add_scope_completions(access, tree, file, ctx, &mut collector);
         collector.extend(super::expression_level_keywords());
     }
 
@@ -66,27 +67,26 @@ fn add_definition_completions(
     node: NodeId,
     this_type: &Type,
     already_defined: &Vec<String>,
+    tree: &pkl_syntax::ast::SyntaxTree,
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) -> bool {
     match this_type {
         Type::Unknown => false,
         Type::Union { left, right, .. } => {
-            let l = add_definition_completions(node, left, already_defined, ctx, out);
-            let r = add_definition_completions(node, right, already_defined, ctx, out);
+            let l = add_definition_completions(node, left, already_defined, tree, ctx, out);
+            let r = add_definition_completions(node, right, already_defined, tree, ctx, out);
             l && r
         }
         // Typed objects: class instances and modules. Typed objects cannot
         // have elements, so property amendments/assignments are all there is.
         ty @ (Type::Class { .. } | Type::Module { .. }) => {
-            let is_class_def = enclosing_def_is_class(node, ctx);
+            let is_class_def = enclosing_def_is_class(node, tree);
             add_typed_completions(already_defined, is_class_def, ty, ctx, out);
             out.extend(super::definition_level_keywords());
-
-            let tree = ctx.tree;
             if !matches!(tree.kind(node), NodeKind::ObjectBody) && !Expr::can_cast(tree.kind(node))
             {
-                if ancestor_matches(node, ctx, |k| matches!(k, NodeKind::Class)) {
+                if ancestor_matches(node, tree, |k| matches!(k, NodeKind::Class)) {
                     out.extend(super::class_level_keywords());
                 } else if matches!(tree.kind(node), NodeKind::Module) {
                     out.extend(super::module_level_keywords());
@@ -116,8 +116,7 @@ fn add_definition_completions(
     }
 }
 
-fn enclosing_def_is_class(node: NodeId, ctx: &AnalysisContext) -> bool {
-    let tree = ctx.tree;
+fn enclosing_def_is_class(node: NodeId, tree: &pkl_syntax::ast::SyntaxTree) -> bool {
     let mut current = tree.parent(node);
     while let Some(id) = current {
         match tree.kind(id) {
@@ -130,8 +129,12 @@ fn enclosing_def_is_class(node: NodeId, ctx: &AnalysisContext) -> bool {
     false
 }
 
-fn ancestor_matches(node: NodeId, ctx: &AnalysisContext, pred: impl Fn(&NodeKind) -> bool) -> bool {
-    ctx.tree.ancestor(node, pred).is_some()
+fn ancestor_matches(
+    node: NodeId,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    pred: impl Fn(&NodeKind) -> bool,
+) -> bool {
+    tree.ancestor(node, pred).is_some()
 }
 
 /// Property amendment / assignment suggestions for class and module
@@ -143,7 +146,7 @@ fn add_typed_completions(
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
-    for member in members_of_type(this_type, &TypeBindings::new(), ctx) {
+    for member in members_of_type(this_type, ctx) {
         if !member.is_property() {
             continue;
         }
@@ -187,12 +190,12 @@ fn add_typed_completions(
 /// modifiers — the amending element must repeat them.
 fn property_modifier_prefix(prop: &pkl_types::NodeRef, ctx: &AnalysisContext) -> String {
     use pkl_syntax::ast::TokenType;
-    let Some(tree) = ctx.tree_for(prop.file_id) else {
+    let Some(tree) = ctx.tree(prop.file) else {
         return String::new();
     };
     let mut prefix = String::new();
     for modifier in [TokenType::Fixed, TokenType::Const] {
-        if tree.has_modifier(prop.node_id, modifier) {
+        if tree.has_modifier(prop.value, modifier) {
             prefix.push_str(match modifier {
                 TokenType::Fixed => "fixed ",
                 TokenType::Const => "const ",
@@ -295,7 +298,7 @@ fn add_listing_completions(
 }
 
 fn base_member_detail(container: &Type, member: &str, ctx: &AnalysisContext) -> String {
-    pkl_types::resolver::find_member_on_type(container, member, &TypeBindings::new(), ctx)
+    pkl_types::find_member(container, member, ctx)
         .filter(|resolved| resolved.ty != Type::Unknown)
         .map(|resolved| resolved.ty.render(ctx))
         .unwrap_or_default()
@@ -343,8 +346,7 @@ fn to_class_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
 
 /// Names of properties already declared in the enclosing module/class/object
 /// body.
-fn collect_defined_property_names(node: NodeId, ctx: &AnalysisContext) -> Vec<String> {
-    let tree = ctx.tree;
+fn collect_defined_property_names(node: NodeId, tree: &pkl_syntax::ast::SyntaxTree) -> Vec<String> {
     let mut current = tree.parent(node);
     while let Some(id) = current {
         match tree.kind(id) {
@@ -379,10 +381,13 @@ fn collect_defined_property_names(node: NodeId, ctx: &AnalysisContext) -> Vec<St
 /// function type
 fn add_inferred_expr_type_completions(
     node: NodeId,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
-    let expected = infer_expr_type_from_context(node, &TypeBindings::new(), ctx);
+    let expected = NodeRef::new(file, node)
+        .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+        .map_or(Type::Unknown, |expr| pkl_types::expected_type(expr, ctx));
     add_lambda_completions(&expected, ctx, out);
 }
 
@@ -439,10 +444,10 @@ fn lambda_parameter_names(param_types: &[Type], ctx: &AnalysisContext) -> Vec<St
     for ty in param_types {
         let name = match ty {
             Type::Class { class_node, .. }
-                if class_node.file_id == pkl_types::FileId::BASE
+                if class_node.file == ctx.base.file_id()
                     && ctx
-                        .tree_for(class_node.file_id)
-                        .and_then(|t| t.name(class_node.node_id))
+                        .tree(class_node.file)
+                        .and_then(|t| t.name(class_node.value))
                         == Some("Int") =>
             {
                 let c = INT_NAMES[next_int % INT_NAMES.len()];
@@ -450,14 +455,14 @@ fn lambda_parameter_names(param_types: &[Type], ctx: &AnalysisContext) -> Vec<St
                 c.to_string()
             }
             Type::Class { class_node, .. } => ctx
-                .tree_for(class_node.file_id)
-                .and_then(|t| t.name(class_node.node_id))
+                .tree(class_node.file)
+                .and_then(|t| t.name(class_node.value))
                 .map(decapitalize)
                 .unwrap_or_else(|| "param".to_string()),
             Type::Module { reference_name, .. } => decapitalize(reference_name),
             Type::Variable { type_param, .. } => ctx
-                .tree_for(type_param.file_id)
-                .and_then(|t| t.name(type_param.node_id))
+                .tree(type_param.file)
+                .and_then(|t| t.name(type_param.value))
                 .map(decapitalize)
                 .unwrap_or_else(|| "param".to_string()),
             _ => "param".to_string(),
@@ -481,8 +486,13 @@ fn decapitalize(name: &str) -> String {
     }
 }
 
-fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<CompletionItem>) {
-    let tree = ctx.tree;
+fn add_scope_completions(
+    node: NodeId,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    file: pkl_types::FileId,
+    ctx: &AnalysisContext,
+    out: &mut Vec<CompletionItem>,
+) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Local scope walk (innermost first, so inner bindings shadow outer).
@@ -492,19 +502,22 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
     while let Some(id) = current {
         match tree.kind(id) {
             NodeKind::LetExpr => {
-                if pkl_types::resolver::let_binding_is_visible(id, node, ctx)
-                    && let Some(binding) =
-                        LetExpr::cast(tree, id).and_then(|expr| expr.binding(tree))
+                if pkl_types::resolver::let_binding_is_visible(
+                    NodeRef::new(file, id),
+                    NodeRef::new(file, node),
+                    ctx,
+                ) && let Some(binding) =
+                    LetExpr::cast(tree, id).and_then(|expr| expr.binding(tree))
                     && let Some(name) = tree.name(binding)
                 {
                     scopes.push((name.to_string(), CompletionItemKind::VARIABLE));
                 }
             }
             NodeKind::FunctionLiteralExpr => {
-                collect_params(id, ctx, &mut scopes);
+                collect_params(id, tree, &mut scopes);
             }
             NodeKind::ClassMethod | NodeKind::ObjectMethod => {
-                collect_params(id, ctx, &mut scopes);
+                collect_params(id, tree, &mut scopes);
             }
             NodeKind::ObjectBody | NodeKind::ClassBody => {
                 for member in ClassBody::cast(tree, id)
@@ -537,14 +550,12 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
                 if matches!(tree.kind(id), NodeKind::ClassBody)
                     && let Some(class) = tree.parent(id)
                 {
-                    for member in members_of_type(
-                        &Type::class(pkl_types::NodeRef::new(ctx.file_id, class)),
-                        &TypeBindings::new(),
-                        ctx,
-                    ) {
+                    for member in
+                        members_of_type(&Type::class(pkl_types::NodeRef::new(file, class)), ctx)
+                    {
                         inherited_scopes.push((
                             member.name,
-                            if matches!(member.kind, super::members::MemberKind::Method) {
+                            if matches!(member.kind, pkl_types::MemberKind::Method) {
                                 CompletionItemKind::METHOD
                             } else {
                                 CompletionItemKind::PROPERTY
@@ -555,22 +566,16 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
             }
             NodeKind::Module => {
                 for member in members_of_type(
-                    &pkl_types::resolver::module_type(
-                        pkl_types::NodeRef::new(ctx.file_id, id),
-                        ctx,
-                    ),
-                    &TypeBindings::new(),
+                    &pkl_types::resolver::module_type(pkl_types::NodeRef::new(file, id), ctx),
                     ctx,
                 ) {
                     let kind = match member.kind {
-                        super::members::MemberKind::Method => CompletionItemKind::METHOD,
-                        super::members::MemberKind::Property => CompletionItemKind::PROPERTY,
-                        super::members::MemberKind::Class => CompletionItemKind::CLASS,
-                        super::members::MemberKind::TypeAlias => CompletionItemKind::STRUCT,
+                        pkl_types::MemberKind::Method => CompletionItemKind::METHOD,
+                        pkl_types::MemberKind::Property => CompletionItemKind::PROPERTY,
+                        pkl_types::MemberKind::Class => CompletionItemKind::CLASS,
+                        pkl_types::MemberKind::TypeAlias => CompletionItemKind::STRUCT,
                     };
-                    if member.node.file_id == ctx.file_id
-                        && tree.parent(member.node.node_id) == Some(id)
-                    {
+                    if member.node.file == file && tree.parent(member.node.value) == Some(id) {
                         scopes.push((member.name, kind));
                     } else {
                         inherited_scopes.push((member.name, kind));
@@ -608,7 +613,7 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
             continue;
         }
         // Enrich with the resolved declaration's type when possible.
-        let detail = resolve_unqualified_access(node, &name, &TypeBindings::new(), ctx)
+        let detail = resolve_unqualified_access(NodeRef::new(file, node), &name, ctx)
             .filter(|r| r.ty != Type::Unknown)
             .map(|r| r.ty.render(ctx))
             .unwrap_or_default();
@@ -618,10 +623,9 @@ fn add_scope_completions(node: NodeId, ctx: &AnalysisContext, out: &mut Vec<Comp
 
 fn collect_params(
     owner: NodeId,
-    ctx: &AnalysisContext,
+    tree: &pkl_syntax::ast::SyntaxTree,
     out: &mut Vec<(String, CompletionItemKind)>,
 ) {
-    let tree = ctx.tree;
     let params = FunctionLiteralExpr::cast(tree, owner)
         .and_then(|function| function.parameters(tree))
         .or_else(|| {

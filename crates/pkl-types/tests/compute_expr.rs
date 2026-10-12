@@ -6,15 +6,18 @@
 mod harness;
 
 use pkl_syntax::ast::NodeKind;
-use pkl_types::{TypeBindings, compute_expr};
 
 #[test]
 fn int_literal_has_int_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = 42", |ctx| {
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::IntLiteralExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::IntLiteralExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+            ctx,
+        );
         assert_eq!(&ty, ctx.base.int_type());
     });
 }
@@ -23,9 +26,13 @@ fn int_literal_has_int_type() {
 fn float_literal_has_float_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = 3.14", |ctx| {
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::FloatLiteralExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::FloatLiteralExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+            ctx,
+        );
         assert_eq!(&ty, ctx.base.float_type());
     });
 }
@@ -34,17 +41,31 @@ fn float_literal_has_float_type() {
 fn bool_literals_have_boolean_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "t = true\nf = false", |ctx| {
-        let bindings = TypeBindings::new();
-
-        let true_node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::TrueLiteralExpr));
+        let true_node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::TrueLiteralExpr)
+        });
         assert_eq!(
-            &compute_expr::compute_expr_type(true_node, &bindings, ctx),
+            &pkl_types::expr_type(
+                harness::expr(
+                    pkl_types::NodeRef::new(pkl_types::FileId(1), true_node),
+                    ctx
+                ),
+                ctx
+            ),
             ctx.base.boolean_type()
         );
 
-        let false_node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::FalseLiteralExpr));
+        let false_node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::FalseLiteralExpr)
+        });
         assert_eq!(
-            &compute_expr::compute_expr_type(false_node, &bindings, ctx),
+            &pkl_types::expr_type(
+                harness::expr(
+                    pkl_types::NodeRef::new(pkl_types::FileId(1), false_node),
+                    ctx
+                ),
+                ctx
+            ),
             ctx.base.boolean_type()
         );
     });
@@ -54,9 +75,13 @@ fn bool_literals_have_boolean_type() {
 fn null_literal_has_null_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = null", |ctx| {
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::NullLiteralExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::NullLiteralExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+            ctx,
+        );
         assert_eq!(&ty, ctx.base.null_type());
     });
 }
@@ -65,10 +90,13 @@ fn null_literal_has_null_type() {
 fn string_literal_without_interpolation_has_literal_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x = "hello""#, |ctx| {
-        let node =
-            harness::find_first(ctx.tree, |k| matches!(k, NodeKind::SingleLineStringLiteral));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::SingleLineStringLiteral)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+            ctx,
+        );
         assert_eq!(ty, pkl_types::Type::string_literal("hello"));
     });
 }
@@ -77,9 +105,13 @@ fn string_literal_without_interpolation_has_literal_type() {
 fn throw_expr_has_nothing_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x = throw("boom")"#, |ctx| {
-        let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::ThrowExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+        let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::ThrowExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+            ctx,
+        );
         assert_eq!(ty, pkl_types::Type::Nothing);
     });
 }
@@ -90,10 +122,13 @@ fn unqualified_access_resolves_to_module_property_type() {
     // `y = x` references module-level `x`. The unqualified access's type
     // should equal x's declared type (Int).
     harness::with_snippet(&base, "x: Int = 1\ny = x", |ctx| {
-        let access =
-            harness::find_first(ctx.tree, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(access, &bindings, ctx);
+        let access = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::UnqualifiedAccessExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), access), ctx),
+            ctx,
+        );
         assert!(
             ctx.base.int_type().is_subtype_of(&ty, ctx),
             "expected Int (or super), got {ty:?}"
@@ -113,9 +148,13 @@ foo: Foo = new Foo { x = 1 }
 y = foo.x
 "#;
     harness::with_snippet(&base, src, |ctx| {
-        let access = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::QualifiedAccessExpr));
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(access, &bindings, ctx);
+        let access = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+            matches!(k, NodeKind::QualifiedAccessExpr)
+        });
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), access), ctx),
+            ctx,
+        );
         assert!(
             ctx.base.int_type().is_subtype_of(&ty, ctx),
             "expected Int (or super), got {ty:?}"
@@ -131,10 +170,13 @@ fn let_binding_resolves_through_inner_function() {
     let base = harness::load_test_base();
     let src = "x = let (myVar: Int = 1) (y: Int) -> myVar + y";
     harness::with_snippet(&base, src, |ctx| {
-        let my_var = find_unqualified_access_named(ctx.tree, "myVar")
-            .expect("expected an UnqualifiedAccessExpr named `myVar`");
-        let bindings = TypeBindings::new();
-        let ty = compute_expr::compute_expr_type(my_var, &bindings, ctx);
+        let my_var =
+            find_unqualified_access_named(ctx.tree(pkl_types::FileId(1)).unwrap(), "myVar")
+                .expect("expected an UnqualifiedAccessExpr named `myVar`");
+        let ty = pkl_types::expr_type(
+            harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), my_var), ctx),
+            ctx,
+        );
         assert!(
             ctx.base.int_type().is_subtype_of(&ty, ctx),
             "expected Int (or super) for `myVar`, got {ty:?}"
@@ -173,9 +215,13 @@ fn if_expr_unions_its_branches() {
         r#"c = true
 x = if (c) 1 else "a""#,
         |ctx| {
-            let node = harness::find_first(ctx.tree, |k| matches!(k, NodeKind::IfExpr));
-            let bindings = TypeBindings::new();
-            let ty = compute_expr::compute_expr_type(node, &bindings, ctx);
+            let node = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+                matches!(k, NodeKind::IfExpr)
+            });
+            let ty = pkl_types::expr_type(
+                harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), node), ctx),
+                ctx,
+            );
 
             assert_eq!(
                 ty,
@@ -199,9 +245,13 @@ fn access_null_safety_ignores_comments() {
         let source =
             format!("class Foo {{ x: Int }}\nfoo: Foo = new Foo {{ x = 1 }}\ny = foo {operator} x");
         harness::with_snippet(&base, &source, |ctx| {
-            let access =
-                harness::find_first(ctx.tree, |k| matches!(k, NodeKind::QualifiedAccessExpr));
-            let ty = compute_expr::compute_expr_type(access, &TypeBindings::new(), ctx);
+            let access = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+                matches!(k, NodeKind::QualifiedAccessExpr)
+            });
+            let ty = pkl_types::expr_type(
+                harness::expr(pkl_types::NodeRef::new(pkl_types::FileId(1), access), ctx),
+                ctx,
+            );
             let expected = if nullable {
                 ctx.base.int_type().nullable(ctx)
             } else {

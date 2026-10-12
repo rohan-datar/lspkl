@@ -1,87 +1,164 @@
-//! Cross-file syntax-tree lookup through `AnalysisContext`.
-
+//! Pinned file isolation and file-qualified semantic inputs.
 mod harness;
-
+use pkl_syntax::ast::{NodeKind, nodes};
+use pkl_types::{AnalysisContext, FileId, NodeRef, Type};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pkl_syntax::ast::NodeKind;
-use pkl_types::{AnalysisContext, FileId, NodeRef, Type};
+#[test]
+fn pinned_files_preserve_identity_and_isolate_resolution() {
+    let base = harness::load_test_base();
+    let first = Arc::new(pkl_syntax::parse("class Same { value: Int }\nx = 1\ny = x").unwrap());
+    let second =
+        Arc::new(pkl_syntax::parse("class Same { value: String }\nx = \"two\"\ny = x").unwrap());
+    let trees = HashMap::from([
+        (FileId(1), first.clone()),
+        (FileId(2), second.clone()),
+        (base.file_id(), base.tree().clone()),
+    ]);
+    let ctx = AnalysisContext::new(&base, &trees, harness::empty_imports());
+    for (file, tree, expected) in [
+        (FileId(1), &first, base.int_type().clone()),
+        (FileId(2), &second, Type::string_literal("two")),
+    ] {
+        let access =
+            harness::find_first(tree, |kind| matches!(kind, NodeKind::UnqualifiedAccessExpr));
+        let reference = NodeRef::new(file, access);
+        assert_eq!(
+            pkl_types::expr_type(reference.cast(&ctx, nodes::Expr::cast).unwrap(), &ctx),
+            expected
+        );
+        let resolved =
+            pkl_types::resolve_reference(reference, tree.span(access).start(), &ctx).unwrap();
+        assert_eq!(resolved.file, file);
+        let class = harness::find_first(tree, |kind| matches!(kind, NodeKind::Class));
+        let member =
+            pkl_types::find_member(&Type::class(NodeRef::new(file, class)), "value", &ctx).unwrap();
+        assert_eq!(member.node.file, file);
+        assert_eq!(
+            member.ty,
+            if file == FileId(1) {
+                base.int_type().clone()
+            } else {
+                base.string_type().clone()
+            }
+        );
+    }
+}
 
 #[test]
-fn imported_declaration_can_be_read_through_its_node_ref() {
+fn missing_files_never_fall_back_to_another_pinned_tree() {
     let base = harness::load_test_base();
-    let current = pkl_syntax::parse("import \"other.pkl\"\nlocal = 1\n").unwrap();
-    let imported = Arc::new(pkl_syntax::parse("class Imported { value: String }\n").unwrap());
-    let class = harness::find_first(&imported, |kind| matches!(kind, NodeKind::Class));
-    let declaration = NodeRef::new(FileId(2), class);
-    let trees = HashMap::from([(declaration.file_id, imported.clone())]);
-    let ctx = AnalysisContext::new(&current, FileId(1), &base, &trees, harness::empty_imports());
-
-    let target = ctx.tree_for(declaration.file_id).expect("imported tree");
-    assert!(std::ptr::eq(target, imported.as_ref()));
-    assert!(matches!(target.kind(declaration.node_id), NodeKind::Class));
-    assert_eq!(target.name(declaration.node_id), Some("Imported"));
+    let tree = Arc::new(pkl_syntax::parse("x = 1").unwrap());
+    let trees = harness::pinned(&base, tree.clone());
+    let ctx = AnalysisContext::new(&base, &trees, harness::empty_imports());
+    let node = harness::find_first(&tree, |kind| matches!(kind, NodeKind::IntLiteralExpr));
+    let missing = NodeRef::new(FileId(3), node);
+    assert!(ctx.tree(missing.file).is_none());
+    assert!(missing.cast(&ctx, nodes::Expr::cast).is_none());
+    assert_eq!(pkl_types::this_type(missing, &ctx), Type::Unknown);
     assert_eq!(
-        target.text(declaration.node_id),
-        "class Imported { value: String }"
+        pkl_types::resolver::definition_type(missing, &ctx),
+        Type::Unknown
     );
 }
 
 #[test]
-fn unknown_file_id_returns_none_with_a_populated_registry() {
+fn imported_generic_members_and_expected_arguments_keep_bindings_internal() {
     let base = harness::load_test_base();
-    let current = pkl_syntax::parse("local = 1\n").unwrap();
-    let imported = Arc::new(pkl_syntax::parse("imported = 2\n").unwrap());
-    let trees = HashMap::from([(FileId(2), imported)]);
-    let ctx = AnalysisContext::new(&current, FileId(1), &base, &trees, harness::empty_imports());
-
-    assert!(ctx.tree_for(FileId(3)).is_none());
-}
-
-#[test]
-fn current_and_base_trees_take_precedence_over_conflicting_registry_entries() {
-    let base = harness::load_test_base();
-    let current = pkl_syntax::parse("class Current {}\n").unwrap();
-    let conflict = Arc::new(pkl_syntax::parse("class Wrong {}\n").unwrap());
-    let trees = HashMap::from([(FileId(1), conflict.clone()), (FileId::BASE, conflict)]);
-    let ctx = AnalysisContext::new(&current, FileId(1), &base, &trees, harness::empty_imports());
-
-    let current_target = ctx.tree_for(FileId(1)).expect("current tree");
-    assert!(std::ptr::eq(current_target, &current));
-    let current_class = harness::find_first(current_target, |kind| matches!(kind, NodeKind::Class));
-    assert_eq!(current_target.name(current_class), Some("Current"));
-
-    let base_target = ctx.tree_for(FileId::BASE).expect("base tree");
-    assert!(std::ptr::eq(base_target, base.tree().as_ref()));
-    let Type::Class { class_node, .. } = base.string_type() else {
-        panic!("String must be a class");
-    };
-    assert!(matches!(
-        base_target.kind(class_node.node_id),
-        NodeKind::Class
-    ));
-    assert_eq!(base_target.name(class_node.node_id), Some("String"));
-}
-
-#[test]
-fn base_takes_precedence_when_current_file_id_is_base() {
-    let base = harness::load_test_base();
-    let current = pkl_syntax::parse("class Current {}\n").unwrap();
-    let conflict = Arc::new(pkl_syntax::parse("class Wrong {}\n").unwrap());
-    let trees = HashMap::from([(FileId::BASE, conflict)]);
-    let ctx = AnalysisContext::new(
-        &current,
-        FileId::BASE,
-        &base,
-        &trees,
-        harness::empty_imports(),
+    let user = Arc::new(pkl_syntax::parse("import \"generic.pkl\" as lib\nbox: lib.Box<Int>\nresult = box.value\ncall = box.accept(42)").unwrap());
+    let imported = Arc::new(
+        pkl_syntax::parse("class Box<T> { value: T\nfunction accept(arg: T): T = arg }").unwrap(),
     );
+    let import = harness::find_first(&user, |kind| matches!(kind, NodeKind::Import));
+    let imports = HashMap::from([(
+        NodeRef::new(FileId(1), import),
+        pkl_types::ImportResolution::Single(NodeRef::new(FileId(2), imported.root())),
+    )]);
+    let trees = HashMap::from([
+        (FileId(1), user.clone()),
+        (FileId(2), imported),
+        (base.file_id(), base.tree().clone()),
+    ]);
+    let ctx = AnalysisContext::new(&base, &trees, &imports);
+    let box_type = harness::find_first(&user, |kind| matches!(kind, NodeKind::DeclaredType));
+    let ty = pkl_types::to_type(
+        NodeRef::new(FileId(1), box_type)
+            .cast(&ctx, nodes::TypeNode::cast)
+            .unwrap(),
+        &ctx,
+    );
+    let member = pkl_types::find_member(&ty, "value", &ctx).unwrap();
+    assert_eq!(member.node.file, FileId(2));
+    assert_eq!(member.ty, *base.int_type());
+    let members = pkl_types::members_of_type(&ty, &ctx);
+    assert_eq!(
+        members
+            .iter()
+            .find(|member| member.name == "value")
+            .unwrap()
+            .ty,
+        *base.int_type()
+    );
+    let literal = harness::find_first(&user, |kind| matches!(kind, NodeKind::IntLiteralExpr));
+    let expression = NodeRef::new(FileId(1), literal)
+        .cast(&ctx, nodes::Expr::cast)
+        .unwrap();
+    assert_eq!(pkl_types::expected_type(expression, &ctx), *base.int_type());
+}
 
-    let target = ctx.tree_for(FileId::BASE).expect("base tree");
-    assert!(std::ptr::eq(target, base.tree().as_ref()));
-    let Type::Class { class_node, .. } = base.string_type() else {
-        panic!("String must be a class");
+#[test]
+fn enumeration_preserves_imported_inheritance_shadowing_and_union_intersection() {
+    let base = harness::load_test_base();
+    let child = Arc::new(
+        pkl_syntax::parse("extends \"parent.pkl\"\nvalue: String\nlocal: Boolean").unwrap(),
+    );
+    let parent = Arc::new(pkl_syntax::parse("value: Int\ninherited: Int").unwrap());
+    let clause = harness::find_first(&child, |kind| {
+        matches!(kind, NodeKind::ModuleExtendsAmendsClause)
+    });
+    let imports = HashMap::from([(
+        NodeRef::new(FileId(1), clause),
+        pkl_types::ImportResolution::Single(NodeRef::new(FileId(2), parent.root())),
+    )]);
+    let trees = HashMap::from([
+        (FileId(1), child.clone()),
+        (FileId(2), parent.clone()),
+        (base.file_id(), base.tree().clone()),
+    ]);
+    let ctx = AnalysisContext::new(&base, &trees, &imports);
+    let child_type = pkl_types::resolver::module_type(NodeRef::new(FileId(1), child.root()), &ctx);
+    let parent_type =
+        pkl_types::resolver::module_type(NodeRef::new(FileId(2), parent.root()), &ctx);
+    let members = pkl_types::members_of_type(&child_type, &ctx);
+    assert_eq!(
+        members
+            .iter()
+            .filter(|member| member.name == "value")
+            .count(),
+        1
+    );
+    let value = members
+        .iter()
+        .find(|member| member.name == "value")
+        .unwrap();
+    assert_eq!(value.node.file, FileId(1));
+    assert_eq!(value.ty, *base.string_type());
+    assert_eq!(
+        members
+            .iter()
+            .find(|member| member.name == "inherited")
+            .unwrap()
+            .node
+            .file,
+        FileId(2)
+    );
+    let union = Type::Union {
+        left: Box::new(child_type),
+        right: Box::new(parent_type),
+        constraints: vec![],
     };
-    assert_eq!(target.name(class_node.node_id), Some("String"));
+    let members = pkl_types::members_of_type(&union, &ctx);
+    assert!(members.iter().any(|member| member.name == "inherited"));
+    assert!(!members.iter().any(|member| member.name == "local"));
 }

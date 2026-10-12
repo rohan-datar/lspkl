@@ -2,15 +2,16 @@
 //! const-context violations, recursive property references, argument-count
 //! mismatches.
 
+use pkl_types::NodeRef;
+
 use crate::analyzer::Analyzer;
 use crate::effective_pkl_version;
 use crate::holder::DiagnosticsHolder;
 use pkl_syntax::ast::{NodeId, NodeKind, TokenType, nodes};
-use pkl_types::compute_expr::{compute_expr_type, compute_this_type};
-use pkl_types::resolver::{
-    ResolvedType, find_member_on_type, resolve_type_name, resolve_unqualified_access,
-};
-use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
+
+use pkl_types::find_member;
+use pkl_types::resolver::{ResolvedType, resolve_type_name, resolve_unqualified_access};
+use pkl_types::{AnalysisContext, Type};
 use semver::Version;
 
 pub struct AccessExprAnalyzer;
@@ -18,122 +19,125 @@ pub struct AccessExprAnalyzer;
 impl Analyzer for AccessExprAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
-        match ctx.tree.kind(node) {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
+        match source_tree.kind(node) {
             NodeKind::QualifiedAccessExpr => {
-                let Some(receiver) = nodes::QualifiedAccessExpr::cast(ctx.tree, node)
-                    .and_then(|expr| expr.receiver(ctx.tree))
+                let Some(receiver) = nodes::QualifiedAccessExpr::cast(source_tree, node)
+                    .and_then(|expr| expr.receiver(source_tree))
                 else {
                     return true;
                 };
-                let receiver_type = compute_expr_type(receiver, &TypeBindings::new(), ctx);
+                let receiver_type = NodeRef::new(file, receiver)
+                    .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
 
                 // Suppression: receiver type unknown, or Dynamic on property access
                 if matches!(receiver_type, Type::Unknown) {
                     return true;
                 }
                 if receiver_type.class_equals(ctx.base.dynamic_type())
-                    && ctx.tree.is_property_access(node)
+                    && source_tree.is_property_access(node)
                 {
                     return true;
                 }
 
-                let name = ctx.tree.name(node).unwrap_or("");
-                let Some(r) = find_member_on_type(&receiver_type, name, &TypeBindings::new(), ctx)
-                else {
+                let name = source_tree.name(node).unwrap_or("");
+                let Some(r) = find_member(&receiver_type, name, ctx) else {
                     // Identifier-only span if you can; else the whole expr span
-                    let ident = ctx
-                        .tree
+                    let ident = source_tree
                         .identifier(node)
-                        .map(|i| ctx.tree.span(i))
-                        .unwrap_or_else(|| ctx.tree.span(node));
+                        .map(|i| source_tree.span(i))
+                        .unwrap_or_else(|| source_tree.span(node));
                     holder.add_error(ident, format!("unresolved reference: {name}"));
                     return true;
                 };
-                if matches!(ctx.tree.kind(receiver), NodeKind::ThisExpr) {
-                    check_recursive(node, r.node, holder, ctx);
+                if matches!(source_tree.kind(receiver), NodeKind::ThisExpr) {
+                    check_recursive(node, r.node, holder, file, ctx);
                 }
 
-                if !ctx.tree.is_property_access(node) {
-                    check_argument_count(node, r.node, holder, ctx);
+                if !source_tree.is_property_access(node) {
+                    check_argument_count(node, r.node, holder, file, ctx);
                 }
-                check_const_access(node, r.node, holder, ctx);
-                check_static_body_access(node, r.node, holder, ctx);
-                check_redundant_conversion(receiver, &receiver_type, r.node, holder, ctx);
+                check_const_access(node, r.node, holder, file, ctx);
+                check_static_body_access(node, r.node, holder, file, ctx);
+                check_redundant_conversion(receiver, &receiver_type, r.node, holder, file, ctx);
             }
             NodeKind::UnqualifiedAccessExpr => {
                 // Skip when inside a QualifiedAccessExpr — the receiver was already
                 // computed by its parent.
-                if let Some(parent) = ctx.tree.parent(node)
-                    && matches!(ctx.tree.kind(parent), NodeKind::QualifiedAccessExpr)
-                    && nodes::QualifiedAccessExpr::cast(ctx.tree, parent)
-                        .and_then(|expr| expr.receiver(ctx.tree))
+                if let Some(parent) = source_tree.parent(node)
+                    && matches!(source_tree.kind(parent), NodeKind::QualifiedAccessExpr)
+                    && nodes::QualifiedAccessExpr::cast(source_tree, parent)
+                        .and_then(|expr| expr.receiver(source_tree))
                         == Some(node)
                 {
                     return true;
                 }
 
-                let name = ctx.tree.name(node).unwrap_or("");
-                let Some(r) = resolve_unqualified_access(node, name, &TypeBindings::new(), ctx)
+                let name = source_tree.name(node).unwrap_or("");
+                let Some(r) = resolve_unqualified_access(NodeRef::new(file, node), name, ctx)
                 else {
                     // Suppression on this-type:
-                    let this_ty = compute_this_type(node, &TypeBindings::new(), ctx);
+                    let this_ty = pkl_types::this_type(NodeRef::new(file, node), ctx);
                     if matches!(this_ty, Type::Unknown) {
                         return true;
                     }
                     if this_ty.class_equals(ctx.base.dynamic_type())
-                        && ctx.tree.is_property_access(node)
+                        && source_tree.is_property_access(node)
                     {
                         return true;
                     }
                     // Otherwise: unresolved
-                    let ident = ctx
-                        .tree
+                    let ident = source_tree
                         .identifier(node)
-                        .map(|i| ctx.tree.span(i))
-                        .unwrap_or_else(|| ctx.tree.span(node));
+                        .map(|i| source_tree.span(i))
+                        .unwrap_or_else(|| source_tree.span(node));
                     holder.add_error(ident, format!("unresolved reference: {name}"));
                     return true;
                 };
-                check_recursive(node, r.node, holder, ctx);
+                check_recursive(node, r.node, holder, file, ctx);
 
-                if !ctx.tree.is_property_access(node) {
-                    check_argument_count(node, r.node, holder, ctx);
+                if !source_tree.is_property_access(node) {
+                    check_argument_count(node, r.node, holder, file, ctx);
                 }
-                check_const_access(node, r.node, holder, ctx);
-                check_static_body_access(node, r.node, holder, ctx);
+                check_const_access(node, r.node, holder, file, ctx);
+                check_static_body_access(node, r.node, holder, file, ctx);
             }
             NodeKind::ModuleExpr | NodeKind::ThisExpr => {
-                if let Some(parent) = ctx.tree.parent(node)
-                    && matches!(ctx.tree.kind(parent), NodeKind::QualifiedAccessExpr)
+                if let Some(parent) = source_tree.parent(node)
+                    && matches!(source_tree.kind(parent), NodeKind::QualifiedAccessExpr)
                 {
                     return true;
                 }
-                let (is_const, is_in_const_scope) = const_scope(node, ctx);
+                let (is_const, is_in_const_scope) = const_scope(node, file, ctx);
                 if is_const && !is_in_const_scope {
                     holder.add_error(
-                        ctx.tree.span(node),
-                        format!("cannot reference {} from const", ctx.tree.text(node)),
+                        source_tree.span(node),
+                        format!("cannot reference {} from const", source_tree.text(node)),
                     );
                 }
             }
             NodeKind::SuperAccessExpr => {
                 // Skip if the super-target is itself const.
-                if let Some(r) = resolve_super_access(node, ctx)
+                if let Some(r) = resolve_super_access(node, file, ctx)
                     && target_is_const(r.node, ctx)
                 {
                     return true;
                 }
-                let (is_const, _) = const_scope(node, ctx);
+                let (is_const, _) = const_scope(node, file, ctx);
                 if is_const {
-                    let span = ctx
-                        .tree
+                    let span = source_tree
                         .identifier(node)
-                        .map(|i| ctx.tree.span(i))
-                        .unwrap_or_else(|| ctx.tree.span(node));
+                        .map(|i| source_tree.span(i))
+                        .unwrap_or_else(|| source_tree.span(node));
                     holder.add_error(span, "cannot access from const");
                 }
             }
@@ -147,17 +151,20 @@ fn check_recursive(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
 ) {
-    let enclosing = ctx.tree.ancestor(access, |k| k.is_container());
+    let Some(source_tree) = ctx.tree(file) else {
+        return;
+    };
+    let enclosing = source_tree.ancestor(access, |k| k.is_container());
     if let Some(enc) = enclosing
-        && NodeRef::new(ctx.file_id, enc) == target
+        && NodeRef::new(file, enc) == target
     {
-        let span = ctx
-            .tree
+        let span = source_tree
             .identifier(access)
-            .map(|i| ctx.tree.span(i))
-            .unwrap_or_else(|| ctx.tree.span(access));
+            .map(|i| source_tree.span(i))
+            .unwrap_or_else(|| source_tree.span(access));
         holder.add_error(span, "recursive property reference");
     };
 }
@@ -166,19 +173,22 @@ fn check_const_access(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
 ) {
+    let Some(source_tree) = ctx.tree(file) else {
+        return;
+    };
     if target_is_const(target, ctx) {
         return;
     }
 
-    let (is_const, _) = const_scope(access, ctx);
+    let (is_const, _) = const_scope(access, file, ctx);
     if is_const {
-        let span = ctx
-            .tree
+        let span = source_tree
             .identifier(access)
-            .map(|i| ctx.tree.span(i))
-            .unwrap_or_else(|| ctx.tree.span(access));
+            .map(|i| source_tree.span(i))
+            .unwrap_or_else(|| source_tree.span(access));
         holder.add_error(span, "cannot access from const");
     }
 }
@@ -187,10 +197,14 @@ fn check_static_body_access(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
 ) {
+    let Some(source_tree) = ctx.tree(file) else {
+        return;
+    };
     // find static ancestor
-    let Some(static_parent) = ctx.tree.ancestor(access, |k| {
+    let Some(static_parent) = source_tree.ancestor(access, |k| {
         matches!(
             k,
             NodeKind::Class | NodeKind::Annotation | NodeKind::TypeAlias
@@ -201,30 +215,30 @@ fn check_static_body_access(
 
     // target must be a module-level non-const property/method
     // in the same file
-    if target.file_id != ctx.file_id {
+    if target.file != file {
         return;
     }
-    if let parent = ctx.tree.parent(target.node_id)
-        && !matches!(parent.map(|p| ctx.tree.kind(p)), Some(NodeKind::Module))
+    if let parent = source_tree.parent(target.value)
+        && !matches!(parent.map(|p| source_tree.kind(p)), Some(NodeKind::Module))
     {
         return;
     }
-    if ctx.tree.has_modifier(target.node_id, TokenType::Const) {
+    if source_tree.has_modifier(target.value, TokenType::Const) {
         return;
     }
     // check version for typealias
-    if matches!(ctx.tree.kind(static_parent), NodeKind::TypeAlias)
-        && effective_pkl_version(ctx) < Version::new(0, 26, 0)
+    if matches!(source_tree.kind(static_parent), NodeKind::TypeAlias)
+        && effective_pkl_version(ctx, file) < Version::new(0, 26, 0)
     {
         holder.add_warning(
-            ctx.tree.span(access),
+            source_tree.span(access),
             "should not access non-const property from typealias",
         );
         return;
     }
 
     holder.add_error(
-        ctx.tree.span(access),
+        source_tree.span(access),
         "cannot access non-const property from static body",
     );
 }
@@ -233,23 +247,27 @@ fn check_argument_count(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
 ) {
-    let Some(tree) = ctx.tree_for(target.file_id) else {
+    let Some(source_tree) = ctx.tree(file) else {
+        return;
+    };
+    let Some(tree) = ctx.tree(target.file) else {
         return;
     };
 
     if !matches!(
-        tree.kind(target.node_id),
+        tree.kind(target.value),
         NodeKind::ClassMethod | NodeKind::ObjectMethod
     ) {
         return;
     }
 
-    let Some(method_header) = nodes::ClassMethod::cast(tree, target.node_id)
+    let Some(method_header) = nodes::ClassMethod::cast(tree, target.value)
         .and_then(|method| method.header(tree))
         .or_else(|| {
-            nodes::ObjectMethod::cast(tree, target.node_id).and_then(|method| method.header(tree))
+            nodes::ObjectMethod::cast(tree, target.value).and_then(|method| method.header(tree))
         })
     else {
         return;
@@ -265,20 +283,21 @@ fn check_argument_count(
         None => 0,
     };
 
-    let Some(arg_list) = nodes::QualifiedAccessExpr::cast(ctx.tree, access)
-        .and_then(|expr| expr.arguments(ctx.tree))
+    let Some(arg_list) = nodes::QualifiedAccessExpr::cast(source_tree, access)
+        .and_then(|expr| expr.arguments(source_tree))
         .or_else(|| {
-            nodes::UnqualifiedAccessExpr::cast(ctx.tree, access)
-                .and_then(|expr| expr.arguments(ctx.tree))
+            nodes::UnqualifiedAccessExpr::cast(source_tree, access)
+                .and_then(|expr| expr.arguments(source_tree))
         })
         .or_else(|| {
-            nodes::SuperAccessExpr::cast(ctx.tree, access).and_then(|expr| expr.arguments(ctx.tree))
+            nodes::SuperAccessExpr::cast(source_tree, access)
+                .and_then(|expr| expr.arguments(source_tree))
         })
     else {
         return;
     };
-    let args = nodes::ArgumentList::cast(ctx.tree, arg_list)
-        .map_or(0, |list| list.arguments(ctx.tree).count());
+    let args = nodes::ArgumentList::cast(source_tree, arg_list)
+        .map_or(0, |list| list.arguments(source_tree).count());
     if args == declared_params {
         return;
     }
@@ -287,22 +306,22 @@ fn check_argument_count(
     }
     if args < declared_params {
         holder.add_error(
-            ctx.tree.span(access),
+            source_tree.span(access),
             format!("too few arguments (expected {declared_params}, got {args})"),
         );
     } else {
         holder.add_error(
-            ctx.tree.span(access),
+            source_tree.span(access),
             format!("too many arguments (expected {declared_params}, got {args})"),
         );
     }
 }
 
 fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
-    let Some(tree) = ctx.tree_for(method_decl.file_id) else {
+    let Some(tree) = ctx.tree(method_decl.file) else {
         return false;
     };
-    let annotation_children = nodes::ClassMethod::cast(tree, method_decl.node_id)
+    let annotation_children = nodes::ClassMethod::cast(tree, method_decl.value)
         .into_iter()
         .flat_map(|method| method.annotations(tree));
     for annotation in annotation_children {
@@ -313,11 +332,9 @@ fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
         };
 
         let name_parts = tree.qualified_identifier_segments(name_node);
-        let Some(class_node_ref) = resolve_type_name(
-            ctx,
-            &name_parts,
-            NodeRef::new(method_decl.file_id, name_node),
-        ) else {
+        let Some(class_node_ref) =
+            resolve_type_name(ctx, &name_parts, NodeRef::new(method_decl.file, name_node))
+        else {
             continue;
         };
         let class_type = Type::class(class_node_ref);
@@ -329,44 +346,52 @@ fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
 }
 
 fn target_is_const(target: NodeRef, ctx: &AnalysisContext) -> bool {
-    let Some(tree) = ctx.tree_for(target.file_id) else {
+    let Some(tree) = ctx.tree(target.file) else {
         return false;
     };
-    tree.has_modifier(target.node_id, TokenType::Const)
+    tree.has_modifier(target.value, TokenType::Const)
 }
 
 /// Returns `(is_const, is_in_const_scope)` for the given access node.
-fn const_scope(access: NodeId, ctx: &AnalysisContext) -> (bool, bool) {
-    let mut current = ctx.tree.parent(access);
+fn const_scope(access: NodeId, file: pkl_types::FileId, ctx: &AnalysisContext) -> (bool, bool) {
+    let Some(source_tree) = ctx.tree(file) else {
+        return (false, false);
+    };
+    let mut current = source_tree.parent(access);
     while let Some(id) = current {
-        match ctx.tree.kind(id) {
+        match source_tree.kind(id) {
             NodeKind::ClassProperty | NodeKind::ClassMethod => {
-                return (ctx.tree.has_modifier(id, TokenType::Const), false);
+                return (source_tree.has_modifier(id, TokenType::Const), false);
             }
             NodeKind::ObjectBody => {
-                let mut inner = ctx.tree.parent(id);
+                let mut inner = source_tree.parent(id);
                 while let Some(iid) = inner {
-                    match ctx.tree.kind(iid) {
+                    match source_tree.kind(iid) {
                         NodeKind::ClassProperty | NodeKind::ClassMethod => {
-                            let c = ctx.tree.has_modifier(iid, TokenType::Const);
+                            let c = source_tree.has_modifier(iid, TokenType::Const);
                             return (c, c);
                         }
-                        _ => inner = ctx.tree.parent(iid),
+                        _ => inner = source_tree.parent(iid),
                     }
                 }
                 return (false, false);
             }
-            _ => current = ctx.tree.parent(id),
+            _ => current = source_tree.parent(id),
         }
     }
     (false, false)
 }
 
 /// Resolve a `SuperAccessExpr` to the inherited member it refers to.
-fn resolve_super_access(access: NodeId, ctx: &AnalysisContext) -> Option<ResolvedType> {
-    let name = ctx.tree.name(access)?;
-    let super_ty = pkl_types::resolver::access_receiver_type(access, &TypeBindings::new(), ctx)?;
-    find_member_on_type(&super_ty, name, &TypeBindings::new(), ctx)
+fn resolve_super_access(
+    access: NodeId,
+    file: pkl_types::FileId,
+    ctx: &AnalysisContext,
+) -> Option<ResolvedType> {
+    let source_tree = ctx.tree(file)?;
+    let name = source_tree.name(access)?;
+    let super_ty = pkl_types::resolver::access_receiver_type(NodeRef::new(file, access), ctx)?;
+    find_member(&super_ty, name, ctx)
 }
 
 /// If the outer access (`outer_target`) resolves to one of the `List` /
@@ -379,8 +404,12 @@ fn check_redundant_conversion(
     receiver_type: &Type,
     outer_target: NodeRef,
     holder: &mut DiagnosticsHolder,
+    file: pkl_types::FileId,
     ctx: &AnalysisContext,
 ) {
+    let Some(source_tree) = ctx.tree(file) else {
+        return;
+    };
     let base = ctx.base;
     let conversion_target = if receiver_type.class_equals(base.list_type())
         && (outer_target == base.list_join_method()
@@ -407,35 +436,31 @@ fn check_redundant_conversion(
 
     // The receiver must be a QualifiedAccessExpr whose resolved member is
     // exactly the conversion method (e.g. `Listing.toList`).
-    if !matches!(ctx.tree.kind(receiver), NodeKind::QualifiedAccessExpr) {
+    if !matches!(source_tree.kind(receiver), NodeKind::QualifiedAccessExpr) {
         return;
     }
-    let Some(receiver_receiver) = nodes::QualifiedAccessExpr::cast(ctx.tree, receiver)
-        .and_then(|expr| expr.receiver(ctx.tree))
+    let Some(receiver_receiver) = nodes::QualifiedAccessExpr::cast(source_tree, receiver)
+        .and_then(|expr| expr.receiver(source_tree))
     else {
         return;
     };
-    let Some(receiver_name) = ctx.tree.name(receiver) else {
+    let Some(receiver_name) = source_tree.name(receiver) else {
         return;
     };
-    let receiver_receiver_type = compute_expr_type(receiver_receiver, &TypeBindings::new(), ctx);
-    let Some(receiver_resolved) = find_member_on_type(
-        &receiver_receiver_type,
-        receiver_name,
-        &TypeBindings::new(),
-        ctx,
-    ) else {
+    let receiver_receiver_type = NodeRef::new(file, receiver_receiver)
+        .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
+        .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+    let Some(receiver_resolved) = find_member(&receiver_receiver_type, receiver_name, ctx) else {
         return;
     };
     if receiver_resolved.node != conversion_target {
         return;
     }
 
-    let span = ctx
-        .tree
+    let span = source_tree
         .identifier(receiver)
-        .map(|i| ctx.tree.span(i))
-        .unwrap_or_else(|| ctx.tree.span(receiver));
+        .map(|i| source_tree.span(i))
+        .unwrap_or_else(|| source_tree.span(receiver));
     let conversion_name = if conversion_target == base.listing_to_list_method() {
         "toList"
     } else {

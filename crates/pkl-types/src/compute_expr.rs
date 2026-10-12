@@ -1,12 +1,12 @@
 //! Type inference for expressions.
 
 use pkl_syntax::ast::nodes;
-use pkl_syntax::ast::{NodeId, NodeKind, TokenType};
+use pkl_syntax::ast::{NodeKind, TokenType};
 
 use crate::NodeRef;
 use crate::context::AnalysisContext;
-use crate::resolver::{find_member_on_type, resolve_unqualified_access};
-use crate::to_type::to_type;
+use crate::resolver::{find_member_on_type, resolve_unqualified_access_with_bindings};
+use crate::to_type::to_type_with_bindings;
 use crate::ty::{Type, TypeBindings};
 
 /// Infer the [`Type`] of an expression node.
@@ -14,19 +14,30 @@ use crate::ty::{Type, TypeBindings};
 /// `node` should be an expression — anything `NodeKind::*Expr` plus literals.
 /// Returns [`Type::Unknown`] for kinds the inferencer can't yet handle, so
 /// callers don't have to special-case missing arms during early development.
-pub fn compute_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+pub(crate) fn compute_expr_type(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let file = node.file;
+    let node = node.value;
     thread_local! { static ACTIVE: std::cell::RefCell<std::collections::HashSet<NodeRef>> = std::cell::RefCell::new(std::collections::HashSet::new()); }
-    let key = NodeRef::new(ctx.file_id, node);
+    let key = NodeRef::new(file, node);
     if !ACTIVE.with(|a| a.borrow_mut().insert(key)) {
         return Type::Unknown;
     }
-    let result = compute_expr_inner(node, bindings, ctx);
+    let result = compute_expr_inner(NodeRef::new(file, node), bindings, ctx);
     ACTIVE.with(|a| a.borrow_mut().remove(&key));
     result
 }
 
-fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
-    match ctx.tree.kind(node) {
+fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    let file = node.file;
+    let Some(tree) = ctx.tree(file) else {
+        return Type::Unknown;
+    };
+    let node = node.value;
+    match tree.kind(node) {
         // boolean expressions
         NodeKind::TrueLiteralExpr
         | NodeKind::FalseLiteralExpr
@@ -43,64 +54,71 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
         NodeKind::NullLiteralExpr => ctx.base.null_type().clone(),
         NodeKind::ThrowExpr => Type::Nothing,
         NodeKind::SingleLineStringLiteral | NodeKind::MultiLineStringLiteral => {
-            let interpolated = nodes::SingleLineStringLiteral::cast(ctx.tree, node)
-                .is_some_and(|n| n.interpolations(ctx.tree).next().is_some())
-                || nodes::MultiLineStringLiteral::cast(ctx.tree, node)
-                    .is_some_and(|n| n.interpolations(ctx.tree).next().is_some());
+            let interpolated = nodes::SingleLineStringLiteral::cast(tree, node)
+                .is_some_and(|n| n.interpolations(tree).next().is_some())
+                || nodes::MultiLineStringLiteral::cast(tree, node)
+                    .is_some_and(|n| n.interpolations(tree).next().is_some());
             if interpolated {
                 ctx.base.string_type().clone()
             } else {
-                ctx.tree
-                    .escaped_string_literal(node)
+                tree.escaped_string_literal(node)
                     .map(Type::string_literal)
                     .unwrap_or(Type::Unknown)
             }
         }
         NodeKind::ParenthesizedExpr | NodeKind::TraceExpr | NodeKind::UnaryMinusExpr => {
-            let operand = nodes::ParenthesizedExpr::cast(ctx.tree, node)
-                .and_then(|n| n.inner(ctx.tree))
-                .or_else(|| nodes::TraceExpr::cast(ctx.tree, node).and_then(|n| n.value(ctx.tree)))
-                .or_else(|| {
-                    nodes::UnaryExpr::cast(ctx.tree, node).and_then(|n| n.operand(ctx.tree))
-                });
+            let operand = nodes::ParenthesizedExpr::cast(tree, node)
+                .and_then(|n| n.inner(tree))
+                .or_else(|| nodes::TraceExpr::cast(tree, node).and_then(|n| n.value(tree)))
+                .or_else(|| nodes::UnaryExpr::cast(tree, node).and_then(|n| n.operand(tree)));
             operand
-                .map(|n| compute_expr_type(n, bindings, ctx))
+                .map(|n| compute_expr_type(NodeRef::new(file, n), bindings, ctx))
                 .unwrap_or(Type::Unknown)
         }
-        NodeKind::LetExpr => nodes::LetExpr::cast(ctx.tree, node)
-            .and_then(|n| n.body(ctx.tree))
-            .map(|n| compute_expr_type(n, bindings, ctx))
+        NodeKind::LetExpr => nodes::LetExpr::cast(tree, node)
+            .and_then(|n| n.body(tree))
+            .map(|n| compute_expr_type(NodeRef::new(file, n), bindings, ctx))
             .unwrap_or(Type::Unknown),
         NodeKind::IfExpr => {
-            let Some(expr) = nodes::IfExpr::cast(ctx.tree, node) else {
+            let Some(expr) = nodes::IfExpr::cast(tree, node) else {
                 return Type::Unknown;
             };
             let (Some(then_branch), Some(else_branch)) =
-                (expr.then_branch(ctx.tree), expr.else_branch(ctx.tree))
+                (expr.then_branch(tree), expr.else_branch(tree))
             else {
                 return Type::Unknown;
             };
             Type::Union {
-                left: Box::new(compute_expr_type(then_branch, bindings, ctx)),
-                right: Box::new(compute_expr_type(else_branch, bindings, ctx)),
+                left: Box::new(compute_expr_type(
+                    NodeRef::new(file, then_branch),
+                    bindings,
+                    ctx,
+                )),
+                right: Box::new(compute_expr_type(
+                    NodeRef::new(file, else_branch),
+                    bindings,
+                    ctx,
+                )),
                 constraints: vec![],
             }
         }
-        NodeKind::AdditiveExpr => additive_expr_type(node, bindings, ctx),
-        NodeKind::MultiplicativeExpr => multiplicative_expr_type(node, bindings, ctx),
+        NodeKind::AdditiveExpr => additive_expr_type(NodeRef::new(file, node), bindings, ctx),
+        NodeKind::MultiplicativeExpr => {
+            multiplicative_expr_type(NodeRef::new(file, node), bindings, ctx)
+        }
         NodeKind::QualifiedAccessExpr => {
-            let Some(access) = nodes::QualifiedAccessExpr::cast(ctx.tree, node) else {
+            let Some(access) = nodes::QualifiedAccessExpr::cast(tree, node) else {
                 return Type::Unknown;
             };
-            let Some(reciever) = access.receiver(ctx.tree) else {
+            let Some(reciever) = access.receiver(tree) else {
                 return Type::Unknown;
             };
-            let Some(name) = ctx.tree.name(node) else {
+            let Some(name) = tree.name(node) else {
                 return Type::Unknown;
             };
-            let reciever_type = compute_expr_type(reciever, bindings, ctx);
+            let reciever_type = compute_expr_type(NodeRef::new(file, reciever), bindings, ctx);
 
-            let is_null_safe = access.is_null_safe(ctx.tree);
+            let is_null_safe = access.is_null_safe(tree);
             let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx)
                 .map_or(Type::Unknown, |r| r.ty);
             if is_null_safe {
@@ -110,74 +128,88 @@ fn compute_expr_inner(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
             }
         }
         NodeKind::UnqualifiedAccessExpr => {
-            let Some(name) = ctx.tree.name(node) else {
+            let Some(name) = tree.name(node) else {
                 return Type::Unknown;
             };
-            resolve_unqualified_access(node, name, bindings, ctx)
+            resolve_unqualified_access_with_bindings(NodeRef::new(file, node), name, bindings, ctx)
                 .map(|r| r.ty)
                 .unwrap_or(Type::Unknown)
         }
-        NodeKind::ImportExpr => crate::resolver::import_type(NodeRef::new(ctx.file_id, node), ctx),
-        NodeKind::ThisExpr => compute_this_type(node, bindings, ctx),
-        NodeKind::SuperAccessExpr => crate::resolver::access_receiver_type(node, bindings, ctx)
-            .and_then(|t| {
-                ctx.tree
-                    .name(node)
-                    .and_then(|n| find_member_on_type(&t, n, bindings, ctx))
-            })
-            .map(|r| r.ty)
-            .unwrap_or(Type::Unknown),
-        NodeKind::SubscriptExpr => nodes::SubscriptExpr::cast(ctx.tree, node)
-            .and_then(|n| n.receiver(ctx.tree))
-            .map(|e| compute_expr_type(e, bindings, ctx))
+        NodeKind::ImportExpr => crate::resolver::import_type(NodeRef::new(file, node), ctx),
+        NodeKind::ThisExpr => compute_this_type(NodeRef::new(file, node), bindings, ctx),
+        NodeKind::SuperAccessExpr => crate::resolver::access_receiver_type_with_bindings(
+            NodeRef::new(file, node),
+            bindings,
+            ctx,
+        )
+        .and_then(|t| {
+            tree.name(node)
+                .and_then(|n| find_member_on_type(&t, n, bindings, ctx))
+        })
+        .map(|r| r.ty)
+        .unwrap_or(Type::Unknown),
+        NodeKind::SubscriptExpr => nodes::SubscriptExpr::cast(tree, node)
+            .and_then(|n| n.receiver(tree))
+            .map(|e| compute_expr_type(NodeRef::new(file, e), bindings, ctx))
             .and_then(|t| crate::resolver::container_value_type(&t, ctx))
             .unwrap_or(Type::Unknown),
         NodeKind::ModuleExpr => Type::Module {
-            module_node: NodeRef::new(ctx.file_id, ctx.tree.root()),
+            module_node: NodeRef::new(file, tree.root()),
             reference_name: "".to_string(),
             constraints: vec![],
         },
-        NodeKind::NewExpr => nodes::NewExpr::cast(ctx.tree, node)
-            .and_then(|n| n.ty(ctx.tree))
-            .map(|tn| to_type(NodeRef::new(ctx.file_id, tn), bindings, ctx))
+        NodeKind::NewExpr => nodes::NewExpr::cast(tree, node)
+            .and_then(|n| n.ty(tree))
+            .map(|tn| to_type_with_bindings(NodeRef::new(file, tn), bindings, ctx))
             .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
 }
 
 /// Compute the type of `this` at a given AST position.
-pub fn compute_this_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+pub(crate) fn compute_this_type(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let file = node.file;
+    let Some(tree) = ctx.tree(file) else {
+        return Type::Unknown;
+    };
+    let node = node.value;
     let _ = bindings;
     let mut current = Some(node);
     while let Some(id) = current {
-        match ctx.tree.kind(id) {
+        match tree.kind(id) {
             NodeKind::Module => {
                 return Type::Module {
-                    module_node: NodeRef::new(ctx.file_id, id),
-                    reference_name: ctx.tree.name(id).unwrap_or("").to_string(),
+                    module_node: NodeRef::new(file, id),
+                    reference_name: tree.name(id).unwrap_or("").to_string(),
                     constraints: vec![],
                 };
             }
-            NodeKind::Class => return Type::class(NodeRef::new(ctx.file_id, id)),
+            NodeKind::Class => return Type::class(NodeRef::new(file, id)),
             NodeKind::ConstrainedType => {
                 let Some(inner) =
-                    nodes::ConstrainedType::cast(ctx.tree, id).and_then(|n| n.inner(ctx.tree))
+                    nodes::ConstrainedType::cast(tree, id).and_then(|n| n.inner(tree))
                 else {
                     return Type::Unknown;
                 };
-                return to_type(NodeRef::new(ctx.file_id, inner), bindings, ctx);
+                return to_type_with_bindings(NodeRef::new(file, inner), bindings, ctx);
             }
             NodeKind::TypeAlias => return Type::Unknown,
             NodeKind::AmendExpr | NodeKind::NewExpr | NodeKind::ObjectBody => return Type::Unknown, // TODO properly handle these cases
-            _ => current = ctx.tree.parent(id),
+            _ => current = tree.parent(id),
         }
     }
     Type::Unknown
 }
 
-fn additive_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+fn additive_expr_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    let file = node.file;
+    let node = node.value;
     use NumKind::*;
-    let Some((left, op, right)) = binary_expr(node, bindings, ctx) else {
+    let Some((left, op, right)) = binary_expr(NodeRef::new(file, node), bindings, ctx) else {
         return Type::Unknown;
     };
     let l = classify(&left, ctx);
@@ -211,9 +243,11 @@ fn additive_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisConte
     }
 }
 
-fn multiplicative_expr_type(node: NodeId, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+fn multiplicative_expr_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    let file = node.file;
+    let node = node.value;
     use NumKind::*;
-    let Some((left, op, right)) = binary_expr(node, bindings, ctx) else {
+    let Some((left, op, right)) = binary_expr(NodeRef::new(file, node), bindings, ctx) else {
         return Type::Unknown;
     };
     let l = classify(&left, ctx);
@@ -327,14 +361,17 @@ fn with_type_args(mut ty: Type, args: Vec<Type>) -> Type {
 }
 
 fn binary_expr(
-    node: NodeId,
+    node: NodeRef,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<(Type, TokenType, Type)> {
-    let expr = nodes::BinaryExpr::cast(ctx.tree, node)?;
+    let file = node.file;
+    let tree = ctx.tree(file)?;
+    let node = node.value;
+    let expr = nodes::BinaryExpr::cast(tree, node)?;
     Some((
-        compute_expr_type(expr.left(ctx.tree)?, bindings, ctx),
-        expr.operator(ctx.tree)?,
-        compute_expr_type(expr.right(ctx.tree)?, bindings, ctx),
+        compute_expr_type(NodeRef::new(file, expr.left(tree)?), bindings, ctx),
+        expr.operator(tree)?,
+        compute_expr_type(NodeRef::new(file, expr.right(tree)?), bindings, ctx),
     ))
 }

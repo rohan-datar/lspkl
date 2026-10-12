@@ -2,15 +2,16 @@
 
 use std::collections::HashSet;
 
+use crate::resolver::{class_member_bindings, resolve_type_name};
+use crate::resolver::{definition_type_with_bindings, module_super, module_type};
+use crate::ty::TypeBindings;
+use crate::{AnalysisContext, NodeRef, Type};
 use pkl_syntax::ast::nodes::{Class, ClassBody, ModuleMember, ObjectMember};
 use pkl_syntax::ast::{NodeId, SyntaxTree};
-use pkl_types::resolver::{class_member_bindings, resolve_type_name};
-use pkl_types::resolver::{definition_type, module_super, module_type};
-use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
 
 /// What kind of declaration a member is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MemberKind {
+pub enum MemberKind {
     Property,
     Method,
     Class,
@@ -18,7 +19,7 @@ pub(crate) enum MemberKind {
 }
 
 /// One enumerated member of a type.
-pub(crate) struct MemberInfo {
+pub struct MemberInfo {
     pub name: String,
     /// Where the member is declared (may live in `pkl:base` or a superclass).
     pub node: NodeRef,
@@ -34,20 +35,17 @@ impl MemberInfo {
 
     pub fn is_fixed_or_const(&self, ctx: &AnalysisContext) -> bool {
         use pkl_syntax::ast::TokenType;
-        let Some(tree) = ctx.tree_for(self.node.file_id) else {
+        let Some(tree) = ctx.tree(self.node.file) else {
             return false;
         };
-        let modifiers = tree.modifiers(self.node.node_id);
-        modifiers.contains(&TokenType::Fixed) || modifiers.contains(&TokenType::Const)
+        tree.has_modifier(self.node.value, TokenType::Fixed)
+            || tree.has_modifier(self.node.value, TokenType::Const)
     }
 }
 
 /// List all members of `ty`, walking superclass chains.
-pub(crate) fn members_of_type(
-    ty: &Type,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-) -> Vec<MemberInfo> {
+pub fn members_of_type(ty: &Type, ctx: &AnalysisContext) -> Vec<MemberInfo> {
+    let bindings = &TypeBindings::new();
     let mut out = Vec::new();
     let mut seen_names = HashSet::new();
     let mut seen_nodes = HashSet::new();
@@ -79,17 +77,17 @@ fn collect(
             if !seen_nodes.insert(*class_node) {
                 return;
             }
-            let Some(tree) = ctx.tree_for(class_node.file_id) else {
+            let Some(tree) = ctx.tree(class_node.file) else {
                 return;
             };
             let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-            let Some(class) = Class::cast(tree, class_node.node_id) else {
+            let Some(class) = Class::cast(tree, class_node.value) else {
                 return;
             };
-            let body = class.body(tree).unwrap_or(class_node.node_id);
+            let body = class.body(tree).unwrap_or(class_node.value);
             collect_body_members(
                 tree,
-                class_node.file_id,
+                class_node.file,
                 body,
                 &member_bindings,
                 ctx,
@@ -101,7 +99,7 @@ fn collect(
             if let Some(target) = class.extends_target(tree) {
                 let segments = tree.qualified_identifier_segments(target);
                 if let Some(super_node) =
-                    resolve_type_name(ctx, &segments, NodeRef::new(class_node.file_id, target))
+                    resolve_type_name(ctx, &segments, NodeRef::new(class_node.file, target))
                 {
                     collect(
                         &Type::class(super_node),
@@ -118,15 +116,15 @@ fn collect(
             if !seen_nodes.insert(*module_node) {
                 return;
             }
-            let Some(tree) = ctx.tree_for(module_node.file_id) else {
+            let Some(tree) = ctx.tree(module_node.file) else {
                 return;
             };
             // Module-level properties/methods plus nested classes/aliases —
             // all accessible as unqualified names on the module.
-            for member in ModuleMember::children(tree, module_node.node_id) {
+            for member in ModuleMember::children(tree, module_node.value) {
                 push_member(
                     tree,
-                    module_node.file_id,
+                    module_node.file,
                     member,
                     bindings,
                     ctx,
@@ -203,7 +201,7 @@ fn collect(
 
 fn collect_body_members(
     tree: &SyntaxTree,
-    file_id: pkl_types::FileId,
+    file_id: crate::FileId,
     body: NodeId,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
@@ -220,7 +218,7 @@ fn collect_body_members(
 
 fn push_member(
     tree: &SyntaxTree,
-    file_id: pkl_types::FileId,
+    file_id: crate::FileId,
     member: NodeId,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
@@ -244,7 +242,7 @@ fn push_member(
             _ => return,
         },
     };
-    let ty = definition_type(NodeRef::new(file_id, member), bindings, ctx);
+    let ty = definition_type_with_bindings(NodeRef::new(file_id, member), bindings, ctx);
     out.push(MemberInfo {
         name: name.to_string(),
         node: NodeRef::new(file_id, member),

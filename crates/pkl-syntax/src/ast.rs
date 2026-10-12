@@ -9,7 +9,7 @@ use crate::{LineIndex, TextRange, TextSize};
 pub mod nodes;
 // Typed views are implemented in the nodes submodule.
 /// Opaque handle into a [`SyntaxTree`]'s node arena.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(pub(crate) u32);
 
 impl NodeId {

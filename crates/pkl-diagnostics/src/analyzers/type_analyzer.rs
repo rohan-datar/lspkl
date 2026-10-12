@@ -1,8 +1,10 @@
 //! Validates type expressions
 
-use pkl_syntax::ast::{NodeId, nodes};
-use pkl_types::to_type::to_type;
-use pkl_types::{AnalysisContext, NodeRef, Type, TypeBindings};
+use pkl_types::NodeRef;
+
+use pkl_syntax::ast::nodes;
+
+use pkl_types::{AnalysisContext, Type};
 
 use crate::analyzer::Analyzer;
 use crate::holder::DiagnosticsHolder;
@@ -12,18 +14,25 @@ pub struct TypeAnalyzer;
 impl Analyzer for TypeAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
-        let Some(declared) = nodes::DeclaredType::cast(ctx.tree, node) else {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
+        let Some(declared) = nodes::DeclaredType::cast(source_tree, node) else {
             return true;
         };
-        let arg_count = declared.arguments(ctx.tree).count();
+        let arg_count = declared.arguments(source_tree).count();
         if arg_count == 0 {
             return true;
         }
-        let node_type = to_type(NodeRef::new(ctx.file_id, node), &TypeBindings::new(), ctx);
+        let node_type = NodeRef::new(file, node)
+            .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
+            .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
 
         let param_count = match node_type {
             Type::Class { type_args, .. } => type_args.len(),
@@ -32,7 +41,7 @@ impl Analyzer for TypeAnalyzer {
         };
         if param_count != 0 && param_count != arg_count {
             holder.add_error(
-                ctx.tree.span(node),
+                source_tree.span(node),
                 format!(
                     "incorrect number of type arguments. Expected: {param_count}, Got: {arg_count}"
                 ),

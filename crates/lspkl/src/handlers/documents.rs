@@ -8,7 +8,7 @@ use crate::{perf, settings::GrammarVersion, state::Snapshot};
 use fluent_uri::Uri;
 use lsp_features::positions::PositionConverter;
 use lsp_types::*;
-use pkl_types::AnalysisContext;
+use pkl_types::InFile;
 use tracing::{error, info};
 
 pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> {
@@ -24,14 +24,11 @@ pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> 
         return Ok(None);
     };
     let _compute = perf::Compute::start("hover");
-    let ctx = AnalysisContext::new(
-        &analysis.module.tree,
-        analysis.module.file_id,
-        snapshot.base_module(),
-        &analysis.trees,
-        &analysis.imports,
-    );
-    Ok(lsp_features::hover::hover(&ctx, offset))
+    let ctx = analysis.context(snapshot.base_module());
+    Ok(lsp_features::hover::hover(
+        &ctx,
+        InFile::new(analysis.module.file_id, offset),
+    ))
 }
 pub fn definition(
     snapshot: &Snapshot,
@@ -50,24 +47,11 @@ pub fn definition(
         return Ok(None);
     };
     let _compute = perf::Compute::start("goto_definition");
-    let ctx = AnalysisContext::new(
-        &analysis.module.tree,
-        analysis.module.file_id,
-        snapshot.base_module(),
-        &analysis.trees,
-        &analysis.imports,
-    );
+    let ctx = analysis.context(snapshot.base_module());
     Ok(lsp_features::goto_definition::goto_definition(
         &ctx,
-        offset,
+        InFile::new(analysis.module.file_id, offset),
         |file_id| {
-            if file_id == pkl_types::FileId::BASE {
-                return pkl_vfs::to_editor_uri(&Uri::parse("pkl:base".to_owned()).ok()?)
-                    .ok()?
-                    .as_str()
-                    .parse()
-                    .ok();
-            }
             let registry = snapshot.file_registry.lock();
             let uri = registry.uri_for(file_id)?;
             match uri.scheme().as_str() {
@@ -99,17 +83,11 @@ pub fn completion(
         return Ok(uri_completion);
     }
     let _compute = perf::Compute::start("completion");
-    let ctx = AnalysisContext::new(
-        &analysis.module.tree,
-        analysis.module.file_id,
-        snapshot.base_module(),
-        &analysis.trees,
-        &analysis.imports,
-    );
+    let ctx = analysis.context(snapshot.base_module());
     let positions = PositionConverter::new(&analysis.module.tree, encoding);
     Ok(lsp_features::completion::completion(
         &ctx,
-        offset,
+        InFile::new(analysis.module.file_id, offset),
         |range| positions.range(range),
     ))
 }

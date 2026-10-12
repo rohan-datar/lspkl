@@ -16,7 +16,7 @@ fn owners(tree: &SyntaxTree, node: NodeId, found: &mut Vec<NodeId>) {
 }
 
 fn analyze(source: &str, resolution: Option<ImportResolution>) -> Vec<Diagnostic> {
-    let tree = pkl_syntax::parse(source).unwrap();
+    let tree = std::sync::Arc::new(pkl_syntax::parse(source).unwrap());
     let base = BaseModule::load_embedded().unwrap();
     let mut nodes = Vec::new();
     owners(&tree, tree.root(), &mut nodes);
@@ -29,11 +29,14 @@ fn analyze(source: &str, resolution: Option<ImportResolution>) -> Vec<Diagnostic
                 .map(|edge| (NodeRef::new(FileId(1), node), edge))
         })
         .collect();
-    let trees = HashMap::new();
-    let ctx = AnalysisContext::new(&tree, FileId(1), &base, &trees, &imports);
+    let trees = HashMap::from([
+        (FileId(1), tree.clone()),
+        (base.file_id(), base.tree().clone()),
+    ]);
+    let ctx = AnalysisContext::new(&base, &trees, &imports);
     let mut holder = DiagnosticsHolder::new();
     for node in nodes {
-        ModuleUriAnalyzer.analyze_node(node, &mut holder, &ctx);
+        ModuleUriAnalyzer.analyze_node(NodeRef::new(FileId(1), node), &mut holder, &ctx);
     }
     holder.into_diagnostics()
 }

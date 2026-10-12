@@ -2,8 +2,8 @@
 
 use std::sync::LazyLock;
 
-use pkl_syntax::ast::{NodeId, NodeKind, TokenType, nodes};
-use pkl_types::AnalysisContext;
+use pkl_syntax::ast::{NodeKind, TokenType, nodes};
+use pkl_types::{AnalysisContext, FileId, NodeRef};
 use semver::Version;
 
 const DEFAULT_PKL_VERSION: Version = Version::new(0, 31, 0);
@@ -22,7 +22,7 @@ pub struct Feature {
     pub message: &'static str,
 
     /// Returns `true` if `node` is a use site of this feature.
-    pub predicate: fn(NodeId, &AnalysisContext) -> bool,
+    pub predicate: fn(NodeRef, &AnalysisContext) -> bool,
 }
 
 /// Static registry of every version-gated feature.
@@ -39,24 +39,28 @@ pub static FEATURES: LazyLock<Vec<Feature>> = LazyLock::new(|| {
     }]
 });
 
-fn is_const_on_object_property(node: NodeId, ctx: &AnalysisContext) -> bool {
-    if !matches!(ctx.tree.kind(node), NodeKind::Terminal(TokenType::Const)) {
-        return false;
-    }
-    let Some(parent) = ctx.tree.parent(node) else {
+fn is_const_on_object_property(node: NodeRef, ctx: &AnalysisContext) -> bool {
+    let Some(tree) = ctx.tree(node.file) else {
         return false;
     };
-    matches!(ctx.tree.kind(parent), NodeKind::ObjectProperty)
+    let node = node.value;
+    if !matches!(tree.kind(node), NodeKind::Terminal(TokenType::Const)) {
+        return false;
+    }
+    let Some(parent) = tree.parent(node) else {
+        return false;
+    };
+    matches!(tree.kind(parent), NodeKind::ObjectProperty)
 }
 
 /// The Pkl version a module declares it targets. Used to decide whether
 /// version-gated features are supported.
-pub fn effective_pkl_version(ctx: &AnalysisContext) -> Version {
-    declared_pkl_version(ctx).unwrap_or(DEFAULT_PKL_VERSION)
+pub fn effective_pkl_version(ctx: &AnalysisContext, file: FileId) -> Version {
+    declared_pkl_version(ctx, file).unwrap_or(DEFAULT_PKL_VERSION)
 }
 
-fn declared_pkl_version(ctx: &AnalysisContext) -> Option<Version> {
-    let tree = ctx.tree;
+fn declared_pkl_version(ctx: &AnalysisContext, file: FileId) -> Option<Version> {
+    let tree = ctx.tree(file)?;
     let header = nodes::Module::cast(tree, tree.root())?.header(tree)?;
     let annotation = nodes::ModuleHeader::cast(tree, header)?
         .annotations(tree)

@@ -26,9 +26,14 @@ fn module_level_unqualified_access_suggests_sibling_properties() {
     //                ^ cursor on the partial reference `fo`
     let src = "foo = 1\nbar = fo\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let items = labels(completion(ctx, harness::offset(ctx.tree, 1, 7), |range| {
-            harness::range(ctx.tree, range)
-        }));
+        let items = labels(completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 7),
+            ),
+            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+        ));
 
         assert!(
             items.iter().any(|l| l == "foo"),
@@ -51,9 +56,14 @@ fn qualified_access_suggests_receiver_members() {
     //                    ^ cursor on the member name
     let src = "nums: List<Int> = List(1, 2)\nx = nums.isEmpty\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let items = labels(completion(ctx, harness::offset(ctx.tree, 1, 10), |range| {
-            harness::range(ctx.tree, range)
-        }));
+        let items = labels(completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 10),
+            ),
+            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+        ));
 
         assert!(
             items.iter().any(|l| l == "length"),
@@ -79,9 +89,14 @@ fn string_literal_offers_union_alternatives() {
     //                             ^^ cursor between the quotes of the value
     let src = "dir: \"dev\"|\"prod\" = \"\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let response = completion(ctx, harness::offset(ctx.tree, 0, 21), |range| {
-            harness::range(ctx.tree, range)
-        });
+        let response = completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 21),
+            ),
+            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+        );
         let Some(CompletionResponse::Array(candidates)) = &response else {
             panic!("literal candidates")
         };
@@ -89,8 +104,10 @@ fn string_literal_offers_union_alternatives() {
             let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &candidate.text_edit else {
                 continue;
             };
-            let converter =
-                lsp_features::positions::PositionConverter::new(ctx.tree, Default::default());
+            let converter = lsp_features::positions::PositionConverter::new(
+                ctx.tree(pkl_types::FileId(1)).unwrap(),
+                Default::default(),
+            );
             let bytes = converter.text_range(edit.range).unwrap();
             let mut updated = src.to_string();
             updated.replace_range(std::ops::Range::<usize>::from(bytes), &edit.new_text);
@@ -123,8 +140,11 @@ fn string_literal_in_amends_clause_yields_no_candidates_yet() {
         assert!(
             completion(
                 ctx,
-                harness::offset(ctx.tree, 0, 9),
-                |range| harness::range(ctx.tree, range)
+                pkl_types::InFile::new(
+                    pkl_types::FileId(1),
+                    harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 9)
+                ),
+                |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range)
             )
             .is_none(),
             "amends-position completion is deferred with ModuleUriCompletionProvider",
@@ -140,9 +160,14 @@ fn whitespace_returns_none() {
     harness::with_snippet(&base, src, |_tree, ctx| {
         // Column 10 is well past `x = 1`.
         assert!(
-            completion(ctx, harness::offset(ctx.tree, 0, 10), |range| {
-                harness::range(ctx.tree, range)
-            })
+            completion(
+                ctx,
+                pkl_types::InFile::new(
+                    pkl_types::FileId(1),
+                    harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 10)
+                ),
+                |range| { harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range) }
+            )
             .is_none()
         );
     });
@@ -162,9 +187,14 @@ fn implement_method_suggests_abstract_superclass_methods() {
         "}\n",                          // 5
     );
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let items = labels(completion(ctx, harness::offset(ctx.tree, 4, 1), |range| {
-            harness::range(ctx.tree, range)
-        }));
+        let items = labels(completion(
+            ctx,
+            pkl_types::InFile::new(
+                pkl_types::FileId(1),
+                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 4, 1),
+            ),
+            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+        ));
 
         let speak = items
             .iter()

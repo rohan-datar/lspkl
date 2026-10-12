@@ -1,8 +1,10 @@
 //! Validate module URI syntax and request-pinned import resolution.
 
+use pkl_types::NodeRef;
+
 use fluent_uri::UriRef;
-use pkl_syntax::ast::{NodeId, NodeKind, nodes};
-use pkl_types::{AnalysisContext, ImportResolution, NodeRef};
+use pkl_syntax::ast::{NodeKind, nodes};
+use pkl_types::{AnalysisContext, ImportResolution};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::QuickFix;
@@ -13,37 +15,40 @@ pub struct ModuleUriAnalyzer;
 impl Analyzer for ModuleUriAnalyzer {
     fn analyze_node(
         &self,
-        node: NodeId,
+        node: NodeRef,
         holder: &mut DiagnosticsHolder,
         ctx: &AnalysisContext,
     ) -> bool {
-        if !ctx.tree.kind(node).is_module_uri_owner() {
+        let file = node.file;
+        let Some(source_tree) = ctx.tree(file) else {
+            return false;
+        };
+        let node = node.value;
+        if !source_tree.kind(node).is_module_uri_owner() {
             return true;
         }
-        let literal = match ctx.tree.kind(node) {
+        let literal = match source_tree.kind(node) {
             NodeKind::Import => {
-                nodes::Import::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
+                nodes::Import::cast(source_tree, node).and_then(|import| import.uri(source_tree))
             }
-            NodeKind::ImportGlob => {
-                nodes::ImportGlob::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
-            }
-            NodeKind::ImportExpr => {
-                nodes::ImportExpr::cast(ctx.tree, node).and_then(|import| import.uri(ctx.tree))
-            }
+            NodeKind::ImportGlob => nodes::ImportGlob::cast(source_tree, node)
+                .and_then(|import| import.uri(source_tree)),
+            NodeKind::ImportExpr => nodes::ImportExpr::cast(source_tree, node)
+                .and_then(|import| import.uri(source_tree)),
             NodeKind::ModuleExtendsAmendsClause => {
-                nodes::ModuleExtendsAmendsClause::cast(ctx.tree, node)
-                    .and_then(|clause| clause.target(ctx.tree))
+                nodes::ModuleExtendsAmendsClause::cast(source_tree, node)
+                    .and_then(|clause| clause.target(source_tree))
             }
             _ => None,
         };
         let Some(literal) = literal else {
             return true;
         };
-        let Some(uri) = ctx.tree.escaped_string_literal(literal) else {
+        let Some(uri) = source_tree.escaped_string_literal(literal) else {
             return true;
         };
-        let span = ctx.tree.span(literal);
-        let glob = ctx.tree.is_glob_import(node);
+        let span = source_tree.span(literal);
+        let glob = source_tree.is_glob_import(node);
         if glob && uri.starts_with("...") {
             holder.add_error(span, "cannot glob triple imports");
             return true;
@@ -66,7 +71,7 @@ impl Analyzer for ModuleUriAnalyzer {
             return true;
         }
         // Absence means the caller supplied no graph evidence, not resolution failure.
-        match ctx.imports.get(&NodeRef::new(ctx.file_id, node)) {
+        match ctx.imports.get(&NodeRef::new(file, node)) {
             Some(ImportResolution::Unresolved {
                 package_to_download: Some(package),
             }) => {
