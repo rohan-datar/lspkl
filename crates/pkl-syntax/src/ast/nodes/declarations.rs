@@ -29,6 +29,34 @@ impl ParameterList {
         })
     }
 }
+/// Variance of a type parameter; invariant when its modifier is absent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Variance {
+    #[default]
+    Invariant,
+    Covariant,
+    Contravariant,
+}
+
+impl TypeParameter {
+    pub fn variance(self, tree: &SyntaxTree) -> Variance {
+        let Some(identifier) = tree.identifier(self.0) else {
+            return Variance::Invariant;
+        };
+        // Anonymous in/out tokens are not projected into the indexed AST. The
+        // parameter range starts at the modifier, and ends after its identifier.
+        let prefix_len = usize::from(tree.span(identifier).start() - tree.span(self.0).start());
+        let prefix = &tree.text(self.0)[..prefix_len];
+        if prefix.starts_with("out") {
+            Variance::Covariant
+        } else if prefix.starts_with("in") {
+            Variance::Contravariant
+        } else {
+            Variance::Invariant
+        }
+    }
+}
+
 impl TypeParameterList {
     pub fn parameters(self, tree: &SyntaxTree) -> impl Iterator<Item = NodeId> + '_ {
         tree.children(self.0)

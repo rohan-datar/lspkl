@@ -10,6 +10,8 @@ tree-sitter = "0.25"
 tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl", tag = "v0.21.0" }
 
 salsa = "0.28"
+la-arena = "0.3"
+bitflags = "2"
 parking_lot = "0.12"
 url = "2"
 fluent-uri = "0.4.1"

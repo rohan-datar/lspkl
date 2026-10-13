@@ -61,6 +61,7 @@ pub struct WorkspaceConfig {
     pub modulepath: Vec<PathBuf>,
 }
 #[salsa::input]
+#[derive(Debug)]
 pub struct Project {
     #[returns(ref)]
     pub metadata: Option<Arc<PklProject>>,
@@ -435,6 +436,7 @@ pub enum ImportResolution {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImportGraph {
     pub edges: HashMap<(File, NodeId), ImportResolution>,
+    pub projects: HashMap<File, Option<Project>>,
 }
 
 #[salsa::tracked(returns(ref))]
@@ -454,6 +456,7 @@ pub fn import_graph(db: &dyn Db, root: File) -> ImportGraph {
         } else {
             context
         };
+        graph.projects.insert(file, context);
         let Ok(tree) = parse(db, file) else { return };
         fn walk(
             db: &dyn Db,
@@ -544,6 +547,21 @@ pub fn resolve_import(
     let Some(reference) = reference else {
         return unresolved();
     };
+    resolve_module_uri(db, file, reference, tree.is_glob_import(owner), context)
+}
+
+/// Resolve a lowered URI without depending on the importing source tree.
+#[salsa::tracked(returns(clone))]
+pub fn resolve_module_uri(
+    db: &dyn Db,
+    file: File,
+    reference: String,
+    glob: bool,
+    context: Option<Project>,
+) -> ImportResolution {
+    let unresolved = || ImportResolution::Unresolved {
+        package_to_download: None,
+    };
     let config = db.config();
     let loader = DatabaseSourceLoader::new(db);
     let resolver =
@@ -582,9 +600,9 @@ pub fn resolve_import(
     }
     let source = Source {
         url: file.uri(db).clone(),
-        text: file.text(db).clone(),
+        text: Arc::from(""),
     };
-    if tree.is_glob_import(owner) {
+    if glob {
         let files: Vec<_> = resolver
             .resolve_glob(&reference, &source, project)
             .iter()
@@ -608,6 +626,16 @@ pub fn resolve_import(
             package_to_download: resolver.missing_package_uri(&reference, &source, project),
         }
     }
+}
+
+/// Scalar projection shields semantic queries from source-only graph changes.
+#[salsa::tracked(returns(copy))]
+pub fn contextual_project(db: &dyn Db, root: File, file: File) -> Option<Project> {
+    import_graph(db, root)
+        .projects
+        .get(&file)
+        .copied()
+        .flatten()
 }
 
 fn backing_state(root: &Uri<String>, members: &[Uri<String>]) -> Vec<(String, u64)> {

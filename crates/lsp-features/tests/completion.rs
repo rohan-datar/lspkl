@@ -16,6 +16,33 @@ fn labels(response: Option<CompletionResponse>) -> Vec<String> {
     }
 }
 
+#[test]
+fn qualified_type_completion_uses_imports_despite_expression_parameter_shadowing() {
+    let base = harness::load_test_base();
+    base.add(2, "class Widget {}\n");
+    let source =
+        "import \"2.pkl\" as dep\nfunction make(dep: String): dep.Widget = new dep.Widget {}\n";
+    harness::with_snippet(&base, source, |tree, ctx| {
+        let offset = source.find("dep.Widget").unwrap() + "dep.Wi".len();
+        let response = completion(
+            ctx,
+            pkl_types::InFile::new(
+                harness::file(ctx, 1),
+                pkl_syntax::TextSize::try_from(offset).unwrap(),
+            ),
+            |range| harness::range(tree, range),
+        );
+        let Some(CompletionResponse::Array(items)) = response else {
+            panic!("expected type completions");
+        };
+        assert!(
+            items.iter().any(|item| item.label == "Widget"
+                && item.kind == Some(lsp_types::CompletionItemKind::CLASS)),
+            "{items:?}"
+        );
+    });
+}
+
 /// Typing a partial identifier at module level should suggest the sibling
 /// properties in scope (plus keywords).
 #[test]
@@ -288,5 +315,31 @@ fn constrained_function_union_offers_every_lambda_shape() {
                 Some(lsp_types::InsertTextFormat::SNIPPET)
             );
         }
+    });
+}
+
+#[test]
+fn parameter_completion_shadows_module_property() {
+    let base = harness::load_test_base();
+    let src = "value = 1\nfunction use(value: String): String = value\n";
+    harness::with_snippet(&base, src, |tree, ctx| {
+        let offset = pkl_syntax::TextSize::from(src.rfind("value").unwrap() as u32);
+        let response = completion(
+            ctx,
+            pkl_types::InFile::new(harness::file(ctx, 1), offset),
+            |range| harness::range(tree, range),
+        )
+        .expect("parameter completion");
+        let items = match response {
+            CompletionResponse::Array(items) => items,
+            CompletionResponse::List(list) => list.items,
+        };
+        let values: Vec<_> = items.iter().filter(|item| item.label == "value").collect();
+        assert_eq!(values.len(), 1, "shadowed names should appear only once");
+        assert_eq!(
+            values[0].kind,
+            Some(lsp_types::CompletionItemKind::VARIABLE)
+        );
+        assert_eq!(values[0].detail.as_deref(), Some("String"));
     });
 }

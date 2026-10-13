@@ -1,15 +1,12 @@
-//! Enumerate the members of a resolved type.
+//! Enumerate members through the same declaration tables used by resolution.
+use crate::{
+    AnalysisContext, MemberTable, Modifiers, ModuleId, NodeRef, Type, class_id, class_members,
+    item_node, module_members,
+};
+use crate::{
+    resolver::class_member_bindings, resolver::definition_type_with_bindings, ty::TypeBindings,
+};
 
-use std::collections::HashSet;
-
-use crate::resolver::{class_member_bindings, resolve_type_name};
-use crate::resolver::{definition_type_with_bindings, module_super, module_type};
-use crate::ty::TypeBindings;
-use crate::{AnalysisContext, NodeRef, Type};
-use pkl_syntax::ast::nodes::{Class, ClassBody, ModuleMember, ObjectMember};
-use pkl_syntax::ast::{NodeId, SyntaxTree};
-
-/// What kind of declaration a member is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemberKind {
     Property,
@@ -18,235 +15,97 @@ pub enum MemberKind {
     TypeAlias,
 }
 
-/// One enumerated member of a type.
 pub struct MemberInfo {
     pub name: String,
-    /// Where the member is declared (may live in `pkl:base` or a superclass).
     pub node: NodeRef,
-    /// The member's declared type (`Unknown` when it has no annotation).
     pub ty: Type,
     pub kind: MemberKind,
+    modifiers: Modifiers,
 }
-
 impl MemberInfo {
     pub fn is_property(&self) -> bool {
         self.kind == MemberKind::Property
     }
-
-    pub fn is_fixed_or_const(&self, ctx: &AnalysisContext) -> bool {
-        use pkl_syntax::ast::TokenType;
-        let Some(tree) = ctx.tree(self.node.file) else {
-            return false;
-        };
-        tree.has_modifier(self.node.value, TokenType::Fixed)
-            || tree.has_modifier(self.node.value, TokenType::Const)
+    pub fn is_fixed_or_const(&self) -> bool {
+        self.modifiers
+            .intersects(Modifiers::FIXED | Modifiers::CONST)
     }
 }
 
-/// List all members of `ty`, walking superclass chains.
 pub fn members_of_type(ty: &Type, ctx: &AnalysisContext) -> Vec<MemberInfo> {
-    let bindings = &TypeBindings::new();
-    let mut out = Vec::new();
-    let mut seen_names = HashSet::new();
-    let mut seen_nodes = HashSet::new();
-    collect(
-        ty,
-        bindings,
-        ctx,
-        &mut out,
-        &mut seen_names,
-        &mut seen_nodes,
-    );
-    out
+    collect(ty, &TypeBindings::new(), ctx)
 }
-
-fn collect(
-    ty: &Type,
+fn table_members(
+    table: &MemberTable,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
-    out: &mut Vec<MemberInfo>,
-    seen_names: &mut HashSet<String>,
-    seen_nodes: &mut HashSet<NodeRef>,
-) {
+) -> Vec<MemberInfo> {
+    table
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let node = item_node(ctx.db, entry.declaration)?;
+            Some(MemberInfo {
+                name: entry.name.text(ctx.db).clone(),
+                node,
+                ty: definition_type_with_bindings(node, bindings, ctx),
+                kind: entry.kind,
+                modifiers: entry.modifiers,
+            })
+        })
+        .collect()
+}
+fn collect(ty: &Type, bindings: &TypeBindings, ctx: &AnalysisContext) -> Vec<MemberInfo> {
     match ty.unconstrained() {
         Type::Class {
             class_node,
             type_args,
-            ..
         } => {
-            if !seen_nodes.insert(*class_node) {
-                return;
-            }
-            let Some(tree) = ctx.tree(class_node.file) else {
-                return;
+            let Some(class) = class_id(ctx.db, *class_node, ctx.root) else {
+                return Vec::new();
             };
-            let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-            let Some(class) = Class::cast(tree, class_node.value) else {
-                return;
-            };
-            let body = class.body(tree).unwrap_or(class_node.value);
-            collect_body_members(
-                tree,
-                class_node.file,
-                body,
-                &member_bindings,
-                ctx,
-                out,
-                seen_names,
-            );
-
-            // Continue up the superclass chain.
-            if let Some(target) = class.extends_target(tree) {
-                let segments = tree.qualified_identifier_segments(target);
-                if let Some(super_node) =
-                    resolve_type_name(ctx, &segments, NodeRef::new(class_node.file, target))
-                {
-                    collect(
-                        &Type::class(super_node),
-                        &member_bindings,
-                        ctx,
-                        out,
-                        seen_names,
-                        seen_nodes,
-                    );
-                }
-            }
-        }
-        Type::Module { module_node, .. } => {
-            if !seen_nodes.insert(*module_node) {
-                return;
-            }
-            let Some(tree) = ctx.tree(module_node.file) else {
-                return;
-            };
-            // Module-level properties/methods plus nested classes/aliases —
-            // all accessible as unqualified names on the module.
-            for member in ModuleMember::children(tree, module_node.value) {
-                push_member(
-                    tree,
-                    module_node.file,
-                    member,
-                    bindings,
-                    ctx,
-                    out,
-                    seen_names,
-                );
-            }
-            if let Some(parent) = module_super(*module_node, ctx) {
-                collect(
-                    &module_type(parent, ctx),
-                    bindings,
-                    ctx,
-                    out,
-                    seen_names,
-                    seen_nodes,
-                );
+            let table = class_members(ctx.db, class);
+            if type_args.is_empty() {
+                table_members(table, bindings, ctx)
             } else {
-                collect(
-                    ctx.base.module_type(),
-                    bindings,
-                    ctx,
-                    out,
-                    seen_names,
-                    seen_nodes,
-                );
+                let bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
+                table_members(table, &bindings, ctx)
             }
         }
-        Type::Alias { .. } => collect(
-            &ty.unaliased(ctx),
+        Type::Module { module_node } => table_members(
+            module_members(ctx.db, ModuleId::new(ctx.db, module_node.file, ctx.root)),
             bindings,
             ctx,
-            out,
-            seen_names,
-            seen_nodes,
         ),
+        Type::Alias { .. } => collect(&ty.unaliased(ctx), bindings, ctx),
         Type::Union { members } => {
-            let mut common: Option<Vec<MemberInfo>> = None;
-            for member in members.iter() {
-                let mut branch = Vec::new();
-                let mut names = HashSet::new();
-                let mut nodes = HashSet::new();
-                collect(member, bindings, ctx, &mut branch, &mut names, &mut nodes);
-                if let Some(common) = &mut common {
-                    branch.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-                    common.retain_mut(|info| {
-                        let Ok(index) =
-                            branch.binary_search_by(|candidate| candidate.name.cmp(&info.name))
-                        else {
-                            return false;
-                        };
-                        if info.ty != branch[index].ty {
-                            let left = std::mem::replace(&mut info.ty, Type::Nothing);
-                            let right = std::mem::replace(&mut branch[index].ty, Type::Nothing);
-                            info.ty = Type::union([left, right], ctx);
-                        }
-                        true
-                    });
-                } else {
-                    common = Some(branch);
-                }
-                if common.as_ref().is_some_and(Vec::is_empty) {
+            let mut alternatives = members.iter();
+            let Some(first) = alternatives.next() else {
+                return Vec::new();
+            };
+            let mut common = collect(first, bindings, ctx);
+            for alternative in alternatives {
+                let mut branch = collect(alternative, bindings, ctx);
+                branch.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+                common.retain_mut(|info| {
+                    let Ok(index) =
+                        branch.binary_search_by(|candidate| candidate.name.cmp(&info.name))
+                    else {
+                        return false;
+                    };
+                    if info.ty != branch[index].ty {
+                        let left = std::mem::replace(&mut info.ty, Type::Nothing);
+                        let right = std::mem::replace(&mut branch[index].ty, Type::Nothing);
+                        info.ty = Type::union([left, right], ctx);
+                    }
+                    true
+                });
+                if common.is_empty() {
                     break;
                 }
             }
-            for info in common.into_iter().flatten() {
-                if seen_names.insert(info.name.clone()) {
-                    out.push(info);
-                }
-            }
+            common
         }
-        _ => {}
+        _ => Vec::new(),
     }
-}
-
-fn collect_body_members(
-    tree: &SyntaxTree,
-    file_id: pkl_db::File,
-    body: NodeId,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-    out: &mut Vec<MemberInfo>,
-    seen_names: &mut HashSet<String>,
-) {
-    for member in ClassBody::cast(tree, body)
-        .into_iter()
-        .flat_map(|body| body.members(tree))
-    {
-        push_member(tree, file_id, member, bindings, ctx, out, seen_names);
-    }
-}
-
-fn push_member(
-    tree: &SyntaxTree,
-    file_id: pkl_db::File,
-    member: NodeId,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-    out: &mut Vec<MemberInfo>,
-    seen_names: &mut HashSet<String>,
-) {
-    let Some(name) = tree.name(member) else {
-        return;
-    };
-    if !seen_names.insert(name.to_string()) {
-        return; // shadowed by an override closer to the receiver
-    }
-    let kind = match ModuleMember::cast(tree, member) {
-        Some(ModuleMember::ClassProperty(_)) => MemberKind::Property,
-        Some(ModuleMember::ClassMethod(_)) => MemberKind::Method,
-        Some(ModuleMember::Class(_)) => MemberKind::Class,
-        Some(ModuleMember::TypeAlias(_)) => MemberKind::TypeAlias,
-        None => match ObjectMember::cast(tree, member) {
-            Some(ObjectMember::ObjectProperty(_)) => MemberKind::Property,
-            Some(ObjectMember::ObjectMethod(_)) => MemberKind::Method,
-            _ => return,
-        },
-    };
-    let ty = definition_type_with_bindings(NodeRef::new(file_id, member), bindings, ctx);
-    out.push(MemberInfo {
-        name: name.to_string(),
-        node: NodeRef::new(file_id, member),
-        ty,
-        kind,
-    });
 }

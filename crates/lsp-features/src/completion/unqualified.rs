@@ -5,14 +5,10 @@ use pkl_types::NodeRef;
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use pkl_syntax::ast::nodes::{
-    ClassBody, ClassMethod, Expr, FunctionLiteralExpr, LetExpr, MethodHeader, Module, ModuleMember,
-    ObjectBody, ObjectMember, ObjectMethod, ParameterList, TypedIdentifier,
-};
+use pkl_syntax::ast::nodes::{Expr, Module, ModuleMember, ObjectMember};
 use pkl_syntax::ast::{NodeId, NodeKind};
 
-use pkl_types::resolver::resolve_unqualified_access;
-use pkl_types::{AnalysisContext, Type};
+use pkl_types::{AnalysisContext, ScopeKind, Type, scope_at};
 
 use pkl_types::members_of_type;
 
@@ -56,7 +52,7 @@ pub(crate) fn completions(
         super::ancestor_or_self(node, tree, |k| matches!(k, NodeKind::UnqualifiedAccessExpr));
     if let Some(access) = access {
         add_inferred_expr_type_completions(access, file, ctx, &mut collector);
-        add_scope_completions(access, tree, file, ctx, &mut collector);
+        add_scope_completions(NodeRef::new(file, access), ctx, &mut collector);
         collector.extend(super::expression_level_keywords());
     }
 
@@ -158,7 +154,7 @@ fn add_typed_completions(
         }
         // fixed/const properties can only be overridden in class or
         // non-amending module bodies.
-        if member.is_fixed_or_const(ctx) && !is_class_or_module_def {
+        if member.is_fixed_or_const() && !is_class_or_module_def {
             continue;
         }
 
@@ -494,164 +490,23 @@ fn decapitalize(name: &str) -> String {
     }
 }
 
-fn add_scope_completions(
-    node: NodeId,
-    tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_db::File,
-    ctx: &AnalysisContext,
-    out: &mut Vec<CompletionItem>,
-) {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // Local scope walk (innermost first, so inner bindings shadow outer).
-    let mut scopes: Vec<(String, CompletionItemKind)> = Vec::new();
-    let mut inherited_scopes = Vec::new();
-    let mut current = Some(node);
-    while let Some(id) = current {
-        match tree.kind(id) {
-            NodeKind::LetExpr => {
-                if pkl_types::resolver::let_binding_is_visible(
-                    NodeRef::new(file, id),
-                    NodeRef::new(file, node),
-                    ctx,
-                ) && let Some(binding) =
-                    LetExpr::cast(tree, id).and_then(|expr| expr.binding(tree))
-                    && let Some(name) = tree.name(binding)
-                {
-                    scopes.push((name.to_string(), CompletionItemKind::VARIABLE));
-                }
-            }
-            NodeKind::FunctionLiteralExpr => {
-                collect_params(id, tree, &mut scopes);
-            }
-            NodeKind::ClassMethod | NodeKind::ObjectMethod => {
-                collect_params(id, tree, &mut scopes);
-            }
-            NodeKind::ObjectBody | NodeKind::ClassBody => {
-                for member in ClassBody::cast(tree, id)
-                    .into_iter()
-                    .flat_map(|body| body.members(tree))
-                    .chain(
-                        ObjectBody::cast(tree, id)
-                            .into_iter()
-                            .flat_map(|body| body.members(tree)),
-                    )
-                {
-                    if let Some(name) = tree.name(member) {
-                        let kind = match (
-                            ModuleMember::cast(tree, member),
-                            ObjectMember::cast(tree, member),
-                        ) {
-                            (Some(ModuleMember::ClassMethod(_)), _)
-                            | (_, Some(ObjectMember::ObjectMethod(_))) => {
-                                CompletionItemKind::METHOD
-                            }
-                            (Some(ModuleMember::ClassProperty(_)), _)
-                            | (_, Some(ObjectMember::ObjectProperty(_))) => {
-                                CompletionItemKind::PROPERTY
-                            }
-                            _ => continue,
-                        };
-                        scopes.push((name.to_string(), kind));
-                    }
-                }
-                if matches!(tree.kind(id), NodeKind::ClassBody)
-                    && let Some(class) = tree.parent(id)
-                {
-                    for member in
-                        members_of_type(&Type::class(pkl_types::NodeRef::new(file, class)), ctx)
-                    {
-                        inherited_scopes.push((
-                            member.name,
-                            if matches!(member.kind, pkl_types::MemberKind::Method) {
-                                CompletionItemKind::METHOD
-                            } else {
-                                CompletionItemKind::PROPERTY
-                            },
-                        ));
-                    }
-                }
-            }
-            NodeKind::Module => {
-                for member in members_of_type(
-                    &pkl_types::resolver::module_type(pkl_types::NodeRef::new(file, id), ctx),
-                    ctx,
-                ) {
-                    let kind = match member.kind {
-                        pkl_types::MemberKind::Method => CompletionItemKind::METHOD,
-                        pkl_types::MemberKind::Property => CompletionItemKind::PROPERTY,
-                        pkl_types::MemberKind::Class => CompletionItemKind::CLASS,
-                        pkl_types::MemberKind::TypeAlias => CompletionItemKind::STRUCT,
-                    };
-                    if member.node.file == file && tree.parent(member.node.value) == Some(id) {
-                        scopes.push((member.name, kind));
-                    } else {
-                        inherited_scopes.push((member.name, kind));
-                    }
-                }
-                for import in Module::cast(tree, id)
-                    .into_iter()
-                    .flat_map(|module| module.imports(tree))
-                {
-                    if let Some(name) = pkl_types::resolver::import_name(tree, import) {
-                        scopes.push((name, CompletionItemKind::MODULE));
-                    }
-                }
-            }
-            _ => {}
-        }
-        current = tree.parent(id);
-    }
-    scopes.extend(inherited_scopes);
-    // Base-module classes and typealiases (e.g. `String`, `List`).
-    let base_tree = ctx.base.tree();
-    for def in ModuleMember::children(base_tree, base_tree.root()).filter(|&member| {
-        matches!(
-            ModuleMember::cast(base_tree, member),
-            Some(ModuleMember::Class(_) | ModuleMember::TypeAlias(_))
-        )
-    }) {
-        if let Some(name) = base_tree.name(def) {
-            scopes.push((name.to_string(), CompletionItemKind::CLASS));
-        }
-    }
-
-    for (name, kind) in scopes {
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        // Enrich with the resolved declaration's type when possible.
-        let detail = resolve_unqualified_access(NodeRef::new(file, node), &name, ctx)
-            .filter(|r| r.ty != Type::Unknown)
-            .map(|r| r.ty.render(ctx))
-            .unwrap_or_default();
-        out.push(super::simple_item(&name, &name, &detail, Some(kind)));
-    }
-}
-
-fn collect_params(
-    owner: NodeId,
-    tree: &pkl_syntax::ast::SyntaxTree,
-    out: &mut Vec<(String, CompletionItemKind)>,
-) {
-    let params = FunctionLiteralExpr::cast(tree, owner)
-        .and_then(|function| function.parameters(tree))
-        .or_else(|| {
-            ClassMethod::cast(tree, owner)
-                .and_then(|method| method.header(tree))
-                .or_else(|| ObjectMethod::cast(tree, owner).and_then(|method| method.header(tree)))
-                .and_then(|header| MethodHeader::cast(tree, header))
-                .and_then(|header| header.parameters(tree))
-        });
-    let Some(params) = params.and_then(|params| ParameterList::cast(tree, params)) else {
-        return;
-    };
-    for tid in params
-        .parameters(tree)
-        .filter(|&tid| TypedIdentifier::cast(tree, tid).is_some())
-    {
-        if let Some(name) = tree.name(tid) {
-            out.push((name.to_string(), CompletionItemKind::VARIABLE));
-        }
+fn add_scope_completions(node: NodeRef, ctx: &AnalysisContext, out: &mut Vec<CompletionItem>) {
+    for entry in scope_at(node, ctx).entries() {
+        let name = entry.name.text(ctx.db);
+        let kind = match entry.kind {
+            ScopeKind::Property => CompletionItemKind::PROPERTY,
+            ScopeKind::Method => CompletionItemKind::METHOD,
+            ScopeKind::Class => CompletionItemKind::CLASS,
+            ScopeKind::TypeAlias => CompletionItemKind::STRUCT,
+            ScopeKind::Import => CompletionItemKind::MODULE,
+            ScopeKind::Local => CompletionItemKind::VARIABLE,
+        };
+        let ty = entry.ty(ctx);
+        let detail = if ty == Type::Unknown {
+            String::new()
+        } else {
+            ty.render(ctx)
+        };
+        out.push(super::simple_item(name, name, &detail, Some(kind)));
     }
 }

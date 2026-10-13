@@ -7,7 +7,13 @@ edition = "2024"
 pkl-db.workspace = true
 pkl-syntax.workspace = true
 thiserror.workspace = true
+salsa.workspace = true
+la-arena.workspace = true
+bitflags.workspace = true
+fluent-uri.workspace = true
 
 [dev-dependencies]
 pkl-vfs.workspace = true
-fluent-uri.workspace = true
+parking_lot.workspace = true
+pkl-project.workspace = true
+tempfile.workspace = true

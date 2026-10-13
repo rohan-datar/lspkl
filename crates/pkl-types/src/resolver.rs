@@ -90,21 +90,28 @@ pub fn module_super(module: NodeRef, ctx: &AnalysisContext) -> Option<NodeRef> {
 }
 
 pub fn import_name(tree: &SyntaxTree, import: NodeId) -> Option<String> {
-    if let Some(id) = tree.identifier(import) {
-        return Some(tree.text(id).to_string());
+    if let Some(name) = tree.name(import) {
+        return Some(name.to_owned());
     }
     let uri = nodes::Import::cast(tree, import)
         .and_then(|n| n.uri(tree))
         .or_else(|| nodes::ImportGlob::cast(tree, import).and_then(|n| n.uri(tree)))?;
     let uri = tree.escaped_string_literal(uri)?;
+    Some(module_uri_name(&uri).to_owned())
+}
+
+pub(crate) fn module_uri_name(uri: &str) -> &str {
     let name = uri
         .rsplit('/')
-        .next()?
+        .next()
+        .unwrap_or(uri)
         .rsplit(':')
-        .next()?
+        .next()
+        .unwrap_or(uri)
         .split(['?', '#'])
-        .next()?;
-    Some(name.strip_suffix(".pkl").unwrap_or(name).to_string())
+        .next()
+        .unwrap_or(uri);
+    name.strip_suffix(".pkl").unwrap_or(name)
 }
 
 fn find_import(tree: &SyntaxTree, name: &str) -> Option<NodeId> {
@@ -267,101 +274,50 @@ fn member_value(tree: &SyntaxTree, member: NodeId) -> Option<NodeId> {
         .or_else(|| nodes::ObjectMethod::cast(tree, member).and_then(|n| n.body(tree)))
 }
 
-/// Look up a member by name on a type. Returns the member's resolved type if
-/// found, or `None` otherwise.
+/// Look up a declaration through the shared position-independent member tables.
 pub(crate) fn find_member_on_type(
     ty: &Type,
     name: &str,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
-    find_member_inner(
-        ty,
-        name,
-        bindings,
-        ctx,
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-fn find_member_inner(
-    ty: &Type,
-    name: &str,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-    seen: &mut std::collections::HashSet<NodeRef>,
-) -> Option<ResolvedType> {
     match ty.unconstrained() {
         Type::Class {
             class_node,
             type_args,
-            ..
         } => {
-            if !seen.insert(*class_node) {
-                return None;
-            }
-            let tree = ctx.tree(class_node.file)?;
-            let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-            let mut members = nodes::Class::cast(tree, class_node.value)
-                .and_then(|n| n.body(tree))
-                .and_then(|n| nodes::ClassBody::cast(tree, n))
-                .into_iter()
-                .flat_map(|n| n.members(tree));
-            if let Some(class_member) = members.find(|&n| tree.name(n) == Some(name)) {
-                let ty = definition_type_with_bindings(
-                    NodeRef::new(class_node.file, class_member),
-                    &member_bindings,
-                    ctx,
-                );
-                let member_ref = NodeRef::new(class_node.file, class_member);
-
-                Some(ResolvedType::new(member_ref, ty))
+            let class = crate::class_id(ctx.db, *class_node, ctx.root)?;
+            let entry = crate::class_members(ctx.db, class)
+                .entries
+                .iter()
+                .find(|entry| entry.name.text(ctx.db) == name)?;
+            let node = crate::item_node(ctx.db, entry.declaration)?;
+            let ty = if type_args.is_empty() {
+                definition_type_with_bindings(node, bindings, ctx)
             } else {
-                let extends_target =
-                    nodes::Class::cast(tree, class_node.value)?.extends_target(tree)?;
-                let super_type_name = tree.qualified_identifier_segments(extends_target);
-                let super_type_node = resolve_type_name(
-                    ctx,
-                    &super_type_name,
-                    NodeRef::new(class_node.file, extends_target),
-                )?;
-
-                find_member_inner(
-                    &Type::class(super_type_node),
-                    name,
-                    &member_bindings,
-                    ctx,
-                    seen,
-                )
-            }
+                let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
+                definition_type_with_bindings(node, &member_bindings, ctx)
+            };
+            Some(ResolvedType::new(node, ty))
         }
-        Type::Module { module_node, .. } => {
-            if !seen.insert(*module_node) {
-                return None;
-            }
-            let tree = ctx.tree(module_node.file)?;
-            if let Some(module_member) = nodes::Module::cast(tree, module_node.value)?
-                .members(tree)
-                .find(|&n| tree.name(n) == Some(name))
-            {
-                let member_ref = NodeRef::new(module_node.file, module_member);
-                let ty = definition_type_with_bindings(member_ref, bindings, ctx);
-                Some(ResolvedType::new(member_ref, ty))
-            } else {
-                if let Some(parent) = module_super(*module_node, ctx) {
-                    find_member_inner(&module_type(parent, ctx), name, bindings, ctx, seen)
-                } else {
-                    find_member_inner(ctx.base.module_type(), name, bindings, ctx, seen)
-                }
-            }
+        Type::Module { module_node } => {
+            let module = crate::ModuleId::new(ctx.db, module_node.file, ctx.root);
+            let entry = crate::module_members(ctx.db, module)
+                .entries
+                .iter()
+                .find(|entry| entry.name.text(ctx.db) == name)?;
+            let node = crate::item_node(ctx.db, entry.declaration)?;
+            Some(ResolvedType::new(
+                node,
+                definition_type_with_bindings(node, bindings, ctx),
+            ))
         }
-        Type::Alias { .. } => find_member_inner(&ty.unaliased(ctx), name, bindings, ctx, seen),
+        Type::Alias { .. } => find_member_on_type(&ty.unaliased(ctx), name, bindings, ctx),
         Type::Union { members } => {
             let mut node = None;
             let mut types = Vec::new();
-            for member in members.iter() {
-                seen.clear();
-                if let Some(resolved) = find_member_inner(member, name, bindings, ctx, seen) {
+            for alternative in members.iter() {
+                if let Some(resolved) = find_member_on_type(alternative, name, bindings, ctx) {
                     node.get_or_insert(resolved.node);
                     types.push(resolved.ty);
                 }
@@ -419,82 +375,6 @@ pub fn super_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
     }
 }
 
-/// Whether `node` is inside the body of this let expression, not its initializer.
-pub fn let_binding_is_visible(let_node: NodeRef, node: NodeRef, ctx: &AnalysisContext) -> bool {
-    if let_node.file != node.file {
-        return false;
-    }
-    let Some(tree) = ctx.tree(node.file) else {
-        return false;
-    };
-    let let_node = let_node.value;
-    let node = node.value;
-    let Some(body) = nodes::LetExpr::cast(tree, let_node).and_then(|n| n.body(tree)) else {
-        return false;
-    };
-    let mut current = Some(node);
-    while let Some(id) = current {
-        if id == body {
-            return true;
-        }
-        if id == let_node {
-            return false;
-        }
-        current = tree.parent(id);
-    }
-    false
-}
-
-/// Walk the AST ancestors of `node` looking for a binding named `name`.
-pub(crate) fn resolve_local_binding(
-    node: NodeRef,
-    name: &str,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-) -> Option<ResolvedType> {
-    let file = node.file;
-    let tree = ctx.tree(file)?;
-    let node = node.value;
-    let mut current = tree.parent(node);
-    while let Some(id) = current {
-        let hit = match tree.kind(id) {
-            NodeKind::LetExpr
-                if let_binding_is_visible(
-                    NodeRef::new(file, id),
-                    NodeRef::new(file, node),
-                    ctx,
-                ) =>
-            {
-                match_let_binding(NodeRef::new(file, id), name, bindings, ctx)
-            }
-            NodeKind::FunctionLiteralExpr => {
-                let param_list =
-                    nodes::FunctionLiteralExpr::cast(tree, id).and_then(|n| n.parameters(tree));
-                param_list.and_then(|pl| match_param(NodeRef::new(file, pl), name, bindings, ctx))
-            }
-            NodeKind::ClassMethod | NodeKind::ObjectMethod => {
-                let param_list = method_header(tree, id)
-                    .and_then(|n| nodes::MethodHeader::cast(tree, n)?.parameters(tree));
-                param_list.and_then(|pl| match_param(NodeRef::new(file, pl), name, bindings, ctx))
-            }
-            NodeKind::ObjectBody => nodes::ObjectBody::cast(tree, id)
-                .into_iter()
-                .flat_map(|n| n.members(tree))
-                .find(|&m| tree.name(m) == Some(name))
-                .map(|m| {
-                    let r = NodeRef::new(file, m);
-                    ResolvedType::new(r, definition_type_with_bindings(r, bindings, ctx))
-                }),
-            _ => None,
-        };
-        if hit.is_some() {
-            return hit;
-        }
-        current = tree.parent(id);
-    }
-    None
-}
-
 fn resolve_local_type_parameter(
     node: NodeRef,
     name: &str,
@@ -531,145 +411,18 @@ fn resolve_local_type_parameter(
     None
 }
 
-/// If `let_node`'s TypedIdentifier matches `name`, return its
-/// `ResolvedType`; otherwise `None`.
-fn match_let_binding(
-    let_node: NodeRef,
-    name: &str,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-) -> Option<ResolvedType> {
-    let file = let_node.file;
-    let tree = ctx.tree(file)?;
-    let let_node = let_node.value;
-    let expr = nodes::LetExpr::cast(tree, let_node)?;
-    let typed_identifier = expr.binding(tree)?;
-    if tree.name(typed_identifier) != Some(name) {
-        return None;
-    }
-
-    // Prefer the explicit annotation, otherwise infer from the initializer.
-    let ty_from_annotation = nodes::TypedIdentifier::cast(tree, typed_identifier)?
-        .type_annotation(tree)
-        .and_then(|ann| nodes::TypeAnnotation::cast(tree, ann)?.ty(tree))
-        .map(|tn| to_type_with_bindings(NodeRef::new(file, tn), bindings, ctx));
-
-    let ty = ty_from_annotation.unwrap_or_else(|| {
-        expr.value(tree)
-            .map(|expr| compute_expr_type(NodeRef::new(file, expr), bindings, ctx))
-            .unwrap_or(Type::Unknown)
-    });
-
-    Some(ResolvedType::new(NodeRef::new(file, typed_identifier), ty))
-}
-
-/// If any `TypedIdentifier` child of `param_list` matches `name`, return its
-/// `ResolvedType`.
-fn match_param(
-    param_list: NodeRef,
-    name: &str,
-    bindings: &TypeBindings,
-    ctx: &AnalysisContext,
-) -> Option<ResolvedType> {
-    let file = param_list.file;
-    let tree = ctx.tree(file)?;
-    let param_list = param_list.value;
-    let typed_identifier = nodes::ParameterList::cast(tree, param_list)?
-        .parameters(tree)
-        .find(|&n| tree.name(n) == Some(name))?;
-
-    let ty = nodes::TypedIdentifier::cast(tree, typed_identifier)?
-        .type_annotation(tree)
-        .and_then(|ann| nodes::TypeAnnotation::cast(tree, ann)?.ty(tree))
-        .map(|tn| to_type_with_bindings(NodeRef::new(file, tn), bindings, ctx))
-        .unwrap_or(Type::Unknown);
-    Some(ResolvedType::new(NodeRef::new(file, typed_identifier), ty))
-}
-
 pub(crate) fn resolve_unqualified_access_with_bindings(
     node: NodeRef,
     name: &str,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
-    let file = node.file;
-    let tree = ctx.tree(file)?;
-    let node = node.value;
-    if let Some(local) = resolve_local_binding(NodeRef::new(file, node), name, bindings, ctx) {
-        return Some(local);
-    };
-    let receiver = compute_this_type(NodeRef::new(file, node), bindings, ctx);
-    for ty in [
-        &receiver,
-        &module_type(NodeRef::new(file, tree.root()), ctx),
-    ] {
-        let (root, body) = match ty.unconstrained() {
-            Type::Module { module_node, .. } => (*module_node, module_node.value),
-            Type::Class { class_node, .. } => {
-                let tree = ctx.tree(class_node.file)?;
-                (
-                    *class_node,
-                    match nodes::Class::cast(tree, class_node.value).and_then(|n| n.body(tree)) {
-                        Some(body) => body,
-                        None => continue,
-                    },
-                )
-            }
-            _ => continue,
-        };
-        let tree = ctx.tree(root.file)?;
-        let member = nodes::Module::cast(tree, body)
-            .into_iter()
-            .flat_map(|n| n.members(tree))
-            .chain(
-                nodes::ClassBody::cast(tree, body)
-                    .into_iter()
-                    .flat_map(|n| n.members(tree)),
-            )
-            .find(|&id| tree.name(id) == Some(name));
-        if let Some(member) = member {
-            let r = root.with_value(member);
-            return Some(ResolvedType::new(
-                r,
-                definition_type_with_bindings(r, bindings, ctx),
-            ));
-        }
-    }
-    if let Some(import) = find_import(tree, name) {
-        let declaration = NodeRef::new(file, import);
-        let target = ctx
-            .import(declaration)
-            .and_then(|resolution| resolution.single())
-            .unwrap_or(declaration);
-        return Some(ResolvedType::new(target, import_type(declaration, ctx)));
-    }
-    if let Some(this) = find_member_on_type(
-        &compute_this_type(NodeRef::new(file, node), bindings, ctx),
-        name,
-        bindings,
-        ctx,
-    ) {
-        return Some(this);
-    };
-    if let Some(module_type) = find_member_on_type(
-        &Type::Module {
-            module_node: NodeRef::new(file, tree.root()),
-        },
-        name,
-        bindings,
-        ctx,
-    ) {
-        return Some(module_type);
-    };
-
-    if let Some(base_type) = resolve_type_name_in_module(ctx.tree(ctx.base.file_id())?, name) {
-        return Some(ResolvedType::new(
-            NodeRef::new(ctx.base.file_id(), base_type),
-            to_type_with_bindings(NodeRef::new(ctx.base.file_id(), base_type), bindings, ctx),
-        ));
-    };
-
-    None
+    let scope = crate::scope_at(node, ctx);
+    let entry = scope.lookup(name)?;
+    Some(ResolvedType::new(
+        entry.node(ctx)?,
+        entry.ty_with_bindings(bindings, ctx),
+    ))
 }
 
 pub(crate) fn class_member_bindings(

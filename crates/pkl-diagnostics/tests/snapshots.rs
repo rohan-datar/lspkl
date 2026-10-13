@@ -230,3 +230,26 @@ fn constrained_casts_and_type_tests_are_not_reported_as_redundant() {
         ]
     );
 }
+
+#[test]
+fn let_binding_is_unresolved_in_its_initializer_but_visible_in_its_body() {
+    let base = harness::load_test_base();
+    let source = "result = let (value = value) value\n";
+    let file = base.add(1, source);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, file);
+    let diagnostics = DiagnosticsEngine::with_default_analyzers().analyze(&ctx, file);
+    let unresolved: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("unresolved reference"))
+        .collect();
+    assert_eq!(unresolved.len(), 1, "{diagnostics:?}");
+    let initializer = source.find("= value").unwrap() + 2;
+    assert_eq!(
+        unresolved[0].span,
+        pkl_syntax::TextRange::new(
+            pkl_syntax::TextSize::from(initializer as u32),
+            pkl_syntax::TextSize::from((initializer + "value".len()) as u32),
+        ),
+    );
+}

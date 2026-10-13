@@ -7,8 +7,19 @@ pub mod context;
 pub mod file_id;
 mod infer_expr_type;
 pub mod resolver;
+pub mod scope;
+pub use scope::{Scope, ScopeEntry, ScopeKind, scope_at};
+pub mod items;
+pub mod member_queries;
 mod to_type;
 pub mod ty;
+pub use items::{
+    DeclId, ItemId, ItemSourceMap, Modifiers, ModuleItems, Name, TypeRef, decl_for_node,
+    declaration_kind, import_declarations, item_node, item_source_map, module_items,
+};
+pub use member_queries::{
+    ClassId, MemberDecl, MemberTable, ModuleId, class_id, class_members, module_members,
+};
 
 pub use base_module::{BaseModule, BaseModuleError};
 pub use constraint::{CompareOp, ConstraintExpr, ConstraintValue};

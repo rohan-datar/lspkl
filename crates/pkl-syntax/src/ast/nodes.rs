@@ -117,4 +117,5 @@ mod expressions;
 mod object_members;
 mod types;
 pub use common::*;
+pub use declarations::Variance;
 pub use expressions::*;

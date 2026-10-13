@@ -10,8 +10,8 @@ use crate::holder::DiagnosticsHolder;
 use pkl_syntax::ast::{NodeId, NodeKind, TokenType, nodes};
 
 use pkl_types::find_member;
-use pkl_types::resolver::{ResolvedType, resolve_type_name, resolve_unqualified_access};
-use pkl_types::{AnalysisContext, Type};
+use pkl_types::resolver::ResolvedType;
+use pkl_types::{AnalysisContext, Type, scope_at};
 use semver::Version;
 
 pub struct AccessExprAnalyzer;
@@ -83,8 +83,7 @@ impl Analyzer for AccessExprAnalyzer {
                 }
 
                 let name = source_tree.name(node).unwrap_or("");
-                let Some(r) = resolve_unqualified_access(NodeRef::new(file, node), name, ctx)
-                else {
+                let Some(entry) = scope_at(NodeRef::new(file, node), ctx).lookup(name) else {
                     // Suppression on this-type:
                     let this_ty = pkl_types::this_type(NodeRef::new(file, node), ctx);
                     if matches!(this_ty, Type::Unknown) {
@@ -103,13 +102,16 @@ impl Analyzer for AccessExprAnalyzer {
                     holder.add_error(ident, format!("unresolved reference: {name}"));
                     return true;
                 };
-                check_recursive(node, r.node, holder, file, ctx);
+                let Some(target) = entry.node(ctx) else {
+                    return true;
+                };
+                check_recursive(node, target, holder, file, ctx);
 
                 if !source_tree.is_property_access(node) {
-                    check_argument_count(node, r.node, holder, file, ctx);
+                    check_argument_count(node, target, holder, file, ctx);
                 }
-                check_const_access(node, r.node, holder, file, ctx);
-                check_static_body_access(node, r.node, holder, file, ctx);
+                check_const_access(node, target, holder, file, ctx);
+                check_static_body_access(node, target, holder, file, ctx);
             }
             NodeKind::ModuleExpr | NodeKind::ThisExpr => {
                 if let Some(parent) = source_tree.parent(node)
@@ -321,28 +323,29 @@ fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
     let Some(tree) = ctx.tree(method_decl.file) else {
         return false;
     };
-    let annotation_children = nodes::ClassMethod::cast(tree, method_decl.value)
-        .into_iter()
-        .flat_map(|method| method.annotations(tree));
-    for annotation in annotation_children {
-        let Some(name_node) =
-            nodes::Annotation::cast(tree, annotation).and_then(|annotation| annotation.name(tree))
-        else {
-            continue;
-        };
-
-        let name_parts = tree.qualified_identifier_segments(name_node);
-        let Some(class_node_ref) =
-            resolve_type_name(ctx, &name_parts, NodeRef::new(method_decl.file, name_node))
-        else {
-            continue;
-        };
-        let class_type = Type::class(class_node_ref);
-        if class_type.class_equals(ctx.base.varargs_type()) {
-            return true;
-        }
-    }
-    false
+    let Some(method) = nodes::ClassMethod::cast(tree, method_decl.value) else {
+        return false;
+    };
+    // The SDK marks variadic parameters with VarArgs<T>, not @VarArgs.
+    let Some(parameter) = method
+        .header(tree)
+        .and_then(|header| nodes::MethodHeader::cast(tree, header))
+        .and_then(|header| header.parameters(tree))
+        .and_then(|list| nodes::ParameterList::cast(tree, list))
+        .and_then(|list| list.parameters(tree).last())
+    else {
+        return false;
+    };
+    let Some(ty) = nodes::TypedIdentifier::cast(tree, parameter)
+        .and_then(|parameter| parameter.type_annotation(tree))
+        .and_then(|annotation| nodes::TypeAnnotation::cast(tree, annotation))
+        .and_then(|annotation| annotation.ty(tree))
+        .and_then(|ty| nodes::DeclaredType::cast(tree, ty))
+    else {
+        return false;
+    };
+    pkl_types::resolver::resolve_declared_type(ctx, method_decl.with_value(ty.id()))
+        .is_some_and(|class| Type::class(class).class_equals(ctx.base.varargs_type()))
 }
 
 fn target_is_const(target: NodeRef, ctx: &AnalysisContext) -> bool {

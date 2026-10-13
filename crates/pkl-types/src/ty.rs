@@ -17,6 +17,12 @@ use crate::{BaseModule, resolver};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnionMembers(Vec<Type>);
 
+impl UnionMembers {
+    pub(crate) fn into_iter(self) -> std::vec::IntoIter<Type> {
+        self.0.into_iter()
+    }
+}
+
 impl Deref for UnionMembers {
     type Target = [Type];
 

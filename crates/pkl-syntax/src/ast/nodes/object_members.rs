@@ -37,6 +37,17 @@ impl WhenGenerator {
 }
 
 impl ForGenerator {
+    pub fn bindings(self, tree: &SyntaxTree) -> impl Iterator<Item = NodeId> + '_ {
+        tree.children(self.0).iter().copied().filter(|id| {
+            matches!(
+                tree.kind(*id),
+                NodeKind::TypedIdentifier | NodeKind::BlankIdentifier
+            )
+        })
+    }
+}
+
+impl ForGenerator {
     pub fn iterable(self, tree: &SyntaxTree) -> Option<NodeId> {
         expression(tree, self.0, 0)
     }
@@ -44,6 +55,15 @@ impl ForGenerator {
 impl ForGenerator {
     pub fn body(self, tree: &SyntaxTree) -> Option<NodeId> {
         of_kind(tree, self.0, NodeKind::ObjectBody)
+    }
+}
+
+impl ObjectBody {
+    pub fn parameters(self, tree: &SyntaxTree) -> impl Iterator<Item = NodeId> + '_ {
+        of_kind(tree, self.0, NodeKind::ParameterList)
+            .and_then(|list| ParameterList::cast(tree, list))
+            .into_iter()
+            .flat_map(|list| list.parameters(tree))
     }
 }
 

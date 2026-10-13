@@ -4,9 +4,9 @@ use pkl_types::NodeRef;
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use pkl_syntax::ast::nodes::{Import, Module, QualifiedAccessExpr};
+use pkl_syntax::ast::nodes::QualifiedAccessExpr;
 use pkl_syntax::ast::{NodeId, NodeKind};
-use pkl_types::{AnalysisContext, Type};
+use pkl_types::{AnalysisContext, Type, scope_at};
 
 use pkl_types::{MemberKind, members_of_type};
 
@@ -48,17 +48,11 @@ pub(crate) fn completions(
             return Vec::new();
         }
         type_position = true;
-        let Some(import) = Module::cast(tree, tree.root())
-            .into_iter()
-            .flat_map(|module| module.imports(tree))
-            .find(|&id| {
-                Import::cast(tree, id).is_some()
-                    && pkl_types::resolver::import_name(tree, id).as_deref() == Some(parts[0])
-            })
+        let Some(import) = scope_at(NodeRef::new(file, identifier), ctx).lookup_import(parts[0])
         else {
             return Vec::new();
         };
-        pkl_types::resolver::import_type(pkl_types::NodeRef::new(file, import), ctx)
+        import.ty(ctx)
     } else {
         return Vec::new();
     };
