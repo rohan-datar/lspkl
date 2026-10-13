@@ -17,7 +17,7 @@ use pkl_types::{AnalysisContext, NodeRef, Type};
 pub(crate) fn completions(
     node: NodeId,
     tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
     range_for: &impl Fn(TextRange) -> Range,
 ) -> Vec<CompletionItem> {

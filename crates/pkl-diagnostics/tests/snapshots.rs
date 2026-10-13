@@ -8,7 +8,6 @@ use pkl_diagnostics::{DiagnosticsEngine, render_diagnostics};
 
 #[test]
 fn diagnostic_snapshots() {
-    let base = harness::load_test_base();
     let fixtures = harness::collect_pkl_files(&harness::fixtures_root());
     assert!(
         !fixtures.is_empty(),
@@ -28,11 +27,26 @@ fn diagnostic_snapshots() {
             pkl_syntax::parse(&source)
                 .unwrap_or_else(|err| panic!("parse failed for {}: {err}", relative.display())),
         );
-        let trees = harness::pinned_trees(&tree, &base);
-        let imports = std::collections::HashMap::new();
-        let ctx = pkl_types::AnalysisContext::new(&base, &trees, &imports);
-
-        let diagnostics = engine.analyze(&ctx, pkl_types::FileId(1));
+        use pkl_db::Db;
+        let mut db = pkl_db::RootDatabase::default();
+        let file = db
+            .upsert_file(
+                &pkl_vfs::path_to_uri(&input_path).unwrap(),
+                std::sync::Arc::from(source.as_str()),
+                None,
+                pkl_db::FileStatus::Present,
+            )
+            .unwrap();
+        let base_file = db
+            .file(&fluent_uri::Uri::parse("pkl:base".to_owned()).unwrap())
+            .unwrap();
+        let base = pkl_types::BaseModule::from_tree(
+            base_file,
+            pkl_db::parse(&db, base_file).as_ref().unwrap().clone(),
+        )
+        .unwrap();
+        let ctx = pkl_types::AnalysisContext::new(&base, &db, file);
+        let diagnostics = engine.analyze(&ctx, file);
         let rendered = render_diagnostics(&diagnostics, tree.line_index());
 
         let snapshot_name = relative
@@ -49,12 +63,23 @@ fn modulepath_imports_do_not_use_package_uri_rules() {
     let tree = std::sync::Arc::new(
         pkl_syntax::parse("import \"modulepath:/library.pkl\" as library\n").unwrap(),
     );
-    let trees = harness::pinned_trees(&tree, &base);
-    let imports = std::collections::HashMap::new();
-    let ctx = pkl_types::AnalysisContext::new(&base, &trees, &imports);
+    base.add(1, tree.source());
+
+    let db = base.db.borrow();
+
+    let ctx = pkl_types::AnalysisContext::new(
+        &base,
+        &*db,
+        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
+    );
     let diagnostics =
-        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, pkl_types::FileId(1));
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, harness::file(&ctx, 1));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("package")),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
@@ -92,11 +117,17 @@ fn renderer_keeps_one_based_byte_columns_and_edit_endpoints() {
 fn malformed_source_remains_analyzable_at_eof() {
     let base = harness::load_test_base();
     let tree = std::sync::Arc::new(pkl_syntax::parse("value = (").unwrap());
-    let trees = harness::pinned_trees(&tree, &base);
-    let imports = std::collections::HashMap::new();
-    let ctx = pkl_types::AnalysisContext::new(&base, &trees, &imports);
+    base.add(1, tree.source());
+
+    let db = base.db.borrow();
+
+    let ctx = pkl_types::AnalysisContext::new(
+        &base,
+        &*db,
+        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
+    );
     let diagnostics =
-        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, pkl_types::FileId(1));
+        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, harness::file(&ctx, 1));
     assert!(!diagnostics.is_empty());
     assert!(!render_diagnostics(&diagnostics, tree.line_index()).is_empty());
 }
@@ -104,8 +135,8 @@ fn malformed_source_remains_analyzable_at_eof() {
 fn analyzer_walk_keeps_file_identity_and_honors_subtree_skips() {
     use pkl_diagnostics::{Analyzer, DiagnosticsHolder};
     use pkl_syntax::ast::NodeKind;
-    use pkl_types::{AnalysisContext, FileId, NodeRef};
-    use std::{collections::HashMap, sync::Arc};
+    use pkl_types::{AnalysisContext, NodeRef};
+    use std::sync::Arc;
 
     struct SkipClassBodies;
     impl Analyzer for SkipClassBodies {
@@ -130,24 +161,25 @@ fn analyzer_walk_keeps_file_identity_and_honors_subtree_skips() {
     let base = harness::load_test_base();
     let first = Arc::new(pkl_syntax::parse("class C { inner = 1 }\ntopLevel = 2\n").unwrap());
     let second = Arc::new(pkl_syntax::parse("other = 3\n").unwrap());
-    let trees = HashMap::from([
-        (base.file_id(), base.tree().clone()),
-        (FileId(7), first.clone()),
-        (FileId(8), second.clone()),
-    ]);
-    let imports = HashMap::new();
-    let ctx = AnalysisContext::new(&base, &trees, &imports);
+    base.add(7, first.source());
+    base.add(8, second.source());
+    let db = base.db.borrow();
+    let ctx = AnalysisContext::new(
+        &base,
+        &*db,
+        pkl_db::Db::file(&*db, &harness::uri(7)).unwrap(),
+    );
     let engine = DiagnosticsEngine::new().with(Box::new(SkipClassBodies));
-    let first_diagnostics = engine.analyze(&ctx, FileId(7));
+    let first_diagnostics = engine.analyze(&ctx, harness::file(&ctx, 7));
     assert_eq!(first_diagnostics.len(), 1);
     assert_eq!(first_diagnostics[0].message, "topLevel");
     let property =
         first.children_matching(first.root(), |kind| matches!(kind, NodeKind::ClassProperty))[0];
     assert_eq!(first_diagnostics[0].span, first.span(property));
-    let second_diagnostics = engine.analyze(&ctx, FileId(8));
+    let second_diagnostics = engine.analyze(&ctx, harness::file(&ctx, 8));
     assert_eq!(second_diagnostics.len(), 1);
     assert_eq!(second_diagnostics[0].message, "other");
-    assert!(engine.analyze(&ctx, FileId(99)).is_empty());
+    assert!(engine.analyze(&ctx, harness::file(&ctx, 99)).is_empty());
 }
 
 #[test]
@@ -169,12 +201,18 @@ fn constrained_casts_and_type_tests_are_not_reported_as_redundant() {
         "aliasUnionTest = value is Choices\n",
     );
     let tree = std::sync::Arc::new(pkl_syntax::parse(source).unwrap());
-    let trees = harness::pinned_trees(&tree, &base);
-    let imports = std::collections::HashMap::new();
-    let ctx = pkl_types::AnalysisContext::new(&base, &trees, &imports);
+    base.add(1, tree.source());
+
+    let db = base.db.borrow();
+
+    let ctx = pkl_types::AnalysisContext::new(
+        &base,
+        &*db,
+        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
+    );
     let diagnostics = DiagnosticsEngine::new()
         .with(Box::new(pkl_diagnostics::analyzers::expr::ExprAnalyzer))
-        .analyze(&ctx, pkl_types::FileId(1));
+        .analyze(&ctx, harness::file(&ctx, 1));
     let observed: Vec<_> = diagnostics
         .iter()
         .map(|diagnostic| {

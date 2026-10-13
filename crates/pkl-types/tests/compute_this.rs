@@ -10,10 +10,10 @@ fn this_type_at_module_top_is_module() {
     let base = harness::load_test_base();
     // Module-level property; the `1` literal lives directly under Module.
     harness::with_snippet(&base, "x = 1", |ctx| {
-        let lit = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+        let lit = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::IntLiteralExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(pkl_types::FileId(1), lit), ctx);
+        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx);
 
         match ty {
             Type::Module { .. } => {} // good — `this` is the module
@@ -26,10 +26,10 @@ fn this_type_at_module_top_is_module() {
 fn this_type_inside_class_is_that_class() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "class Foo { x = 1 }", |ctx| {
-        let lit = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+        let lit = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::IntLiteralExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(pkl_types::FileId(1), lit), ctx);
+        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx);
 
         // Should be Type::Class pointing at Foo.
         let Type::Class { class_node, .. } = &ty else {
@@ -49,10 +49,10 @@ fn this_type_inside_constrained_type_is_inner_type() {
     // constrained — `Int` — not to the enclosing module/typealias.
     // (This was previously asserting `Unknown` in the A-level subset.)
     harness::with_snippet(&base, "typealias Bar = Int(this > 0)", |ctx| {
-        let inner = harness::find_first(ctx.tree(pkl_types::FileId(1)).unwrap(), |k| {
+        let inner = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::ThisExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(pkl_types::FileId(1), inner), ctx);
+        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), inner), ctx);
 
         // Should be Type::Class pointing at Int (which lives in pkl:base).
         assert!(

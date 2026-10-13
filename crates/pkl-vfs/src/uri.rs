@@ -58,8 +58,9 @@ pub(crate) fn canonical(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
     }
 }
 
-pub(crate) fn archive_parts(uri: &Uri<String>) -> Result<(Uri<String>, String), FileError> {
-    let (archive, member) = uri
+/// The physical archive containing a `jar:` source, without decoding or copying its member.
+pub fn archive_file_uri(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
+    let (archive, _) = uri
         .as_str()
         .strip_prefix("jar:")
         .and_then(|s| s.split_once("!/"))
@@ -70,6 +71,15 @@ pub(crate) fn archive_parts(uri: &Uri<String>) -> Result<(Uri<String>, String), 
             archive.scheme().as_str().to_owned(),
         ));
     }
+    Ok(archive)
+}
+
+pub(crate) fn archive_parts(uri: &Uri<String>) -> Result<(Uri<String>, String), FileError> {
+    let archive = archive_file_uri(uri)?;
+    let (_, member) = uri
+        .as_str()
+        .split_once("!/")
+        .ok_or_else(|| FileError::InvalidSource(uri.to_string()))?;
     let member = percent_decode_str(member)
         .decode_utf8()
         .map_err(|_| FileError::InvalidSource(uri.to_string()))?

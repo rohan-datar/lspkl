@@ -4,24 +4,17 @@ use pkl_syntax::ast::{NodeId, SyntaxTree};
 
 use crate::AnalysisContext;
 
-/// Stable parsed-file identity, allocated by the server registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FileId(pub u32);
-
-impl FileId {
-    /// Identity assigned when the embedded base module is registered.
-    pub const BASE: FileId = FileId(0);
-}
+use pkl_db::File;
 
 /// A syntax value paired with the file whose tree gives it meaning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InFile<T> {
-    pub file: FileId,
+    pub file: File,
     pub value: T,
 }
 
 impl<T> InFile<T> {
-    pub fn new(file: FileId, value: T) -> Self {
+    pub fn new(file: File, value: T) -> Self {
         Self { file, value }
     }
 

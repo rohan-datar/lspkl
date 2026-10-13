@@ -1,39 +1,40 @@
-//! Explicit project synchronization and package download commands.
+//! Owned project/package jobs; subprocesses never retain a Salsa handle.
 
 use super::{HandlerError, Result};
 use crate::state::Snapshot;
 use lsp_types::ExecuteCommandParams;
-use pkl_project::dto::PackageUri;
-use tracing::error;
+use pkl_project::{
+    cli::PklCli, dto::PackageUri, package_manager::PackageManager, project_manager::ProjectManager,
+};
+use std::path::PathBuf;
 
-pub fn sync_projects(snapshot: &Snapshot) -> Result<()> {
-    snapshot
-        .project_manager
-        .lock()
-        .sync_projects()
-        .map_err(|err| {
-            error!(?err, "syncProjects failed");
-            HandlerError::Domain(err.to_string())
-        })?;
-    Ok(())
+pub enum Command {
+    Sync(ProjectManager),
+    Download {
+        cli: PklCli,
+        uri: PackageUri,
+        cache_dir: PathBuf,
+    },
 }
-pub fn download_package(snapshot: &Snapshot, uri: String) -> Result<()> {
+
+pub fn prepare_sync_projects(snapshot: &Snapshot) -> Command {
+    Command::Sync(snapshot.project_manager.lock().clone())
+}
+pub fn prepare_download_package(snapshot: &Snapshot, uri: String) -> Result<Command> {
     let uri =
-        PackageUri::create(&uri).map_err(|err| HandlerError::InvalidParams(err.to_string()))?;
-    snapshot
-        .package_manager
-        .lock()
-        .download_package(&uri, snapshot.settings.effective_cache_dir())
-        .map_err(|err| {
-            error!(?err, "downloadPackage failed");
-            HandlerError::Domain(err.to_string())
-        })?;
-    Ok(())
+        PackageUri::create(&uri).map_err(|error| HandlerError::InvalidParams(error.to_string()))?;
+    Ok(Command::Download {
+        cli: PklCli {
+            binary_path: snapshot.settings.cli.path.clone(),
+        },
+        uri,
+        cache_dir: snapshot.settings.effective_cache_dir().to_owned(),
+    })
 }
-pub fn execute_command(
+pub fn prepare_execute_command(
     snapshot: &Snapshot,
     mut params: ExecuteCommandParams,
-) -> Result<Option<serde_json::Value>> {
+) -> Result<Command> {
     match params.command.as_str() {
         "pkl.downloadPackage" => {
             if params.arguments.len() != 1 {
@@ -46,7 +47,7 @@ pub fn execute_command(
                     "pkl.downloadPackage expects one package URI string".into(),
                 ));
             };
-            download_package(snapshot, uri)?;
+            prepare_download_package(snapshot, uri)
         }
         "pkl.syncProjects" => {
             if !params.arguments.is_empty() {
@@ -54,9 +55,28 @@ pub fn execute_command(
                     "pkl.syncProjects expects no arguments".into(),
                 ));
             }
-            sync_projects(snapshot)?;
+            Ok(prepare_sync_projects(snapshot))
         }
-        _ => return Err(HandlerError::InvalidParams("unknown Pkl command".into())),
+        _ => Err(HandlerError::InvalidParams("unknown Pkl command".into())),
     }
-    Ok(None)
+}
+pub fn execute_command(command: Command) -> Result<Option<ProjectManager>> {
+    match command {
+        Command::Sync(mut manager) => {
+            manager
+                .sync_projects()
+                .map_err(|error| HandlerError::Domain(error.to_string()))?;
+            Ok(Some(manager))
+        }
+        Command::Download {
+            cli,
+            uri,
+            cache_dir,
+        } => {
+            PackageManager::new(cli)
+                .download_package(&uri, &cache_dir)
+                .map_err(|error| HandlerError::Domain(error.to_string()))?;
+            Ok(None)
+        }
+    }
 }

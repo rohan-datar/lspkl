@@ -11,6 +11,8 @@ name = "lspkl"
 path = "src/main.rs"
 
 [dependencies]
+pkl-db.workspace = true
+salsa.workspace = true
 pkl-diagnostics.workspace = true
 pkl-syntax.workspace = true
 pkl-types.workspace = true

@@ -55,7 +55,7 @@ impl DiagnosticsEngine {
     /// Run every registered analyzer against `file` and concatenate their
     /// diagnostics. Order: analyzers run in registration order; within an
     /// analyzer, diagnostics appear in tree-walk order.
-    pub fn analyze(&self, ctx: &AnalysisContext, file: pkl_types::FileId) -> Vec<Diagnostic> {
+    pub fn analyze(&self, ctx: &AnalysisContext, file: pkl_db::File) -> Vec<Diagnostic> {
         let Some(tree) = ctx.tree(file) else {
             return Vec::new();
         };

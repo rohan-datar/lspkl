@@ -3,11 +3,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 use pkl_project::dto::{DerivedProjectMetadata, EvaluatorSettings, PklProject};
 use pkl_project::modulepath::ModulepathResolver;
-use pkl_vfs::FileManager;
+use pkl_vfs::{SourceLoader, StandardSourceLoader};
 
 fn project(dir: &Path, roots: &[&str]) -> PklProject {
     PklProject {
@@ -30,8 +29,8 @@ fn project(dir: &Path, roots: &[&str]) -> PklProject {
 fn modulepaths_resolve_project_relative_entries_in_declared_order() {
     let temp = tempfile::tempdir().unwrap();
     let context = project(temp.path(), &["first", "second"]);
-    let manager = FileManager::new();
-    let resolver = ModulepathResolver::new(&manager);
+    let manager = StandardSourceLoader::new();
+    let resolver = ModulepathResolver::new(&manager, temp.path());
     assert_eq!(
         resolver.module_paths(Some(&context)),
         [temp.path().join("first"), temp.path().join("second")]
@@ -45,7 +44,7 @@ fn modulepaths_resolve_project_relative_entries_in_declared_order() {
 }
 
 #[test]
-fn absolute_lookup_uses_first_existing_regular_file_and_open_buffer() {
+fn absolute_lookup_uses_first_existing_regular_file() {
     let temp = tempfile::tempdir().unwrap();
     let first = temp.path().join("first");
     let second = temp.path().join("second");
@@ -56,20 +55,12 @@ fn absolute_lookup_uses_first_existing_regular_file_and_open_buffer() {
     fs::write(second.join("only.pkl"), "second only").unwrap();
     fs::create_dir(first.join("folder.pkl")).unwrap();
     let context = project(temp.path(), &["first", "second"]);
-    let manager = FileManager::new();
-    let first_url = fluent_uri::Uri::parse(
-        url::Url::from_file_path(first.join("same.pkl"))
-            .unwrap()
-            .to_string(),
-    )
-    .unwrap();
-    let opened = manager.open(first_url, "editor buffer".into(), Some(1));
-    let resolver = ModulepathResolver::new(&manager);
+    let manager = StandardSourceLoader::new();
+    let resolver = ModulepathResolver::new(&manager, temp.path());
     let chosen = resolver
         .resolve_absolute("/same.pkl", Some(&context))
         .unwrap();
-    assert!(Arc::ptr_eq(&chosen, &opened));
-    assert_eq!(chosen.contents(), "editor buffer");
+    assert_eq!(chosen.contents(), "first disk");
     assert_eq!(
         resolver
             .resolve_absolute("/only.pkl", Some(&context))
@@ -105,15 +96,15 @@ fn relative_lookup_merges_roots_and_path_membership_is_component_safe() {
     fs::write(first.join("shared.pkl"), "first shared").unwrap();
     fs::write(second.join("shared.pkl"), "second shared").unwrap();
     let context = project(temp.path(), &["root", "second"]);
-    let manager = FileManager::new();
+    let manager = StandardSourceLoader::new();
     let source_url = fluent_uri::Uri::parse(
         url::Url::from_file_path(second.join("nested/source.pkl"))
             .unwrap()
             .to_string(),
     )
     .unwrap();
-    let source = manager.get_or_load(&source_url).unwrap();
-    let resolver = ModulepathResolver::new(&manager);
+    let source = manager.load(&source_url, temp.path()).unwrap();
+    let resolver = ModulepathResolver::new(&manager, temp.path());
     assert!(resolver.is_on_module_path(&second.join("nested/source.pkl"), Some(&context)));
     assert!(!resolver.is_on_module_path(&prefix_trap.join("outside.pkl"), Some(&context)));
     assert!(!resolver.is_on_module_path(&first.join("shared.pkl"), None));

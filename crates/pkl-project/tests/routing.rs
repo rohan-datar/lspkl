@@ -1,7 +1,7 @@
 use fluent_uri::Uri;
 use pkl_project::dto::*;
 use pkl_project::import_resolver::ImportResolver;
-use pkl_vfs::FileManager;
+use pkl_vfs::{Source, SourceLoader, StandardSourceLoader};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -58,16 +58,19 @@ fn project(dir: &Path, roots: &[&str]) -> PklProject {
         }),
     }
 }
-fn contents(files: Vec<std::sync::Arc<pkl_vfs::VirtualFile>>) -> Vec<String> {
-    files.iter().map(|f| f.contents()).collect()
+fn contents(files: Vec<std::sync::Arc<pkl_vfs::Source>>) -> Vec<String> {
+    files.iter().map(|f| f.contents().to_owned()).collect()
 }
 
 #[test]
 fn missing_package_download_targets_distinguish_uncached_packages_from_bad_members() {
     let temp = tempfile::tempdir().unwrap();
     let cache = temp.path().join("cache");
-    let files = FileManager::new();
-    let source = files.open(uri(&temp.path().join("main.pkl")), String::new(), None);
+    let files = StandardSourceLoader::new();
+    let source = Source {
+        url: uri(&temp.path().join("main.pkl")),
+        text: String::new().into(),
+    };
     let resolver = ImportResolver::with_settings(&files, &[], &cache);
     let missing = PackageUri::create("package://example.test/missing@1.0.0").unwrap();
     let reference = format!("{missing}#/main.pkl");
@@ -170,9 +173,9 @@ fn cached_packages_route_transitive_names_and_context_local_overrides() {
         &[("nested/source.pkl", "source"), ("sibling.pkl", "sibling")],
     );
     fs::write(temp.path().join("source.pkl"), "source").unwrap();
-    let files = FileManager::new();
+    let files = StandardSourceLoader::new();
     let source = files
-        .get_or_load(&uri(&temp.path().join("source.pkl")))
+        .load(&uri(&temp.path().join("source.pkl")), temp.path())
         .unwrap();
     let resolver = ImportResolver::with_settings(&files, &[], &cache);
     let from_a = resolver
@@ -285,9 +288,9 @@ fn project_named_remote_and_local_dependencies() {
         ),
     ]);
     fs::write(temp.path().join("source.pkl"), "source").unwrap();
-    let files = FileManager::new();
+    let files = StandardSourceLoader::new();
     let source = files
-        .get_or_load(&uri(&temp.path().join("source.pkl")))
+        .load(&uri(&temp.path().join("source.pkl")), temp.path())
         .unwrap();
     let resolver = ImportResolver::with_settings(&files, &[], &cache);
     assert_eq!(
@@ -336,12 +339,11 @@ fn archive_and_global_modulepaths_shadow_and_glob_in_logical_order() {
     );
     let context = project(temp.path(), &["project.zip"]);
     let globals: Vec<PathBuf> = vec![temp.path().join("global.jar")];
-    let files = FileManager::new();
-    let source = files.open(
-        uri(&temp.path().join("source.pkl")),
-        "source".into(),
-        Some(1),
-    );
+    let files = StandardSourceLoader::new();
+    let source = Source {
+        url: uri(&temp.path().join("source.pkl")),
+        text: "source".into(),
+    };
     let resolver = ImportResolver::with_settings(&files, &globals, temp.path());
     let archived = resolver
         .resolve_file("modulepath:/nested/source.pkl", &source, Some(&context))
@@ -388,21 +390,23 @@ fn filesystem_globs_upward_search_and_delegated_schemes() {
     fs::write(temp.path().join("a/b/source.pkl"), "source").unwrap();
     fs::write(temp.path().join("a/b/a.pkl"), "a").unwrap();
     fs::write(temp.path().join("a/b/z.pkl"), "z").unwrap();
-    let files = FileManager::new();
+    let files = StandardSourceLoader::new();
     let source = files
-        .get_or_load(&uri(&temp.path().join("a/b/source.pkl")))
+        .load(&uri(&temp.path().join("a/b/source.pkl")), temp.path())
         .unwrap();
-    let https = files.open(
-        Uri::parse("https://example.test/dir/source.pkl".to_owned()).unwrap(),
-        "https".into(),
-        None,
-    );
-    files.open(
-        Uri::parse("https://example.test/lib.pkl".to_owned()).unwrap(),
-        "https-lib".into(),
-        None,
-    );
-    let resolver = ImportResolver::new(&files);
+    let https = Source {
+        url: Uri::parse("https://example.test/dir/source.pkl".to_owned()).unwrap(),
+        text: "https".into(),
+    };
+    use sha2::{Digest, Sha256};
+    let key = format!("{:x}", Sha256::digest(b"https://example.test/lib.pkl"));
+    fs::create_dir_all(temp.path().join("https")).unwrap();
+    fs::write(
+        temp.path().join("https").join(format!("{key}.pkl")),
+        "https-lib",
+    )
+    .unwrap();
+    let resolver = ImportResolver::new(&files, temp.path());
     assert_eq!(
         resolver
             .resolve_file(".../parent.pkl", &source, None)
@@ -475,8 +479,11 @@ fn member_routes_reject_absolute_uri_injection() {
                 checksums: None,
             }),
         );
-    let files = FileManager::new();
-    let source = files.open(uri(&temp.path().join("source.pkl")), "source".into(), None);
+    let files = StandardSourceLoader::new();
+    let source = Source {
+        url: uri(&temp.path().join("source.pkl")),
+        text: "source".into(),
+    };
     let private = temp.path().join("private.pkl");
     fs::write(&private, "private").unwrap();
     let resolver = ImportResolver::with_settings(&files, &[], &cache);
@@ -553,8 +560,11 @@ fn encoded_package_named_and_modulepath_globs_match_decoded_members() {
                 checksums: None,
             }),
         );
-    let files = FileManager::new();
-    let source = files.open(uri(&temp.path().join("source.pkl")), "source".into(), None);
+    let files = StandardSourceLoader::new();
+    let source = Source {
+        url: uri(&temp.path().join("source.pkl")),
+        text: "source".into(),
+    };
     let resolver = ImportResolver::with_settings(&files, &[], &cache);
     for reference in [
         format!("{dep}#/space%20dir"),

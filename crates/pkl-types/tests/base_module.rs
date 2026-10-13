@@ -1,6 +1,6 @@
-//! Tests for `BaseModule::load` and well-known type lookup.
+//! Tests for `BaseModule::from_tree` and well-known type lookup.
 //!
-//! These pin the contract: after `load`, every cached type accessor returns a
+//! These pin the contract: after `from_tree`, every cached type accessor returns a
 //! `Type::Class` whose `class_node` lives in `base.file_id()`.
 
 mod harness;
@@ -47,12 +47,8 @@ fn int_extends_number() {
     // Sanity-check that subtyping over the base hierarchy works at all.
     // Requires Type::is_subtype_of to be implemented.
     let base = harness::load_test_base();
-    let dummy_tree = std::sync::Arc::new(pkl_syntax::parse("").expect("empty parse"));
-    let trees = std::collections::HashMap::new();
-    let mut trees = trees;
-    trees.insert(pkl_types::FileId(1), dummy_tree.clone());
-    trees.insert(base.file_id(), base.tree().clone());
-    let ctx = pkl_types::AnalysisContext::new(&base, &trees, harness::empty_imports());
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(
         base.int_type().is_subtype_of(base.number_type(), &ctx),

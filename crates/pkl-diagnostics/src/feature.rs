@@ -2,8 +2,9 @@
 
 use std::sync::LazyLock;
 
+use pkl_db::File;
 use pkl_syntax::ast::{NodeKind, TokenType, nodes};
-use pkl_types::{AnalysisContext, FileId, NodeRef};
+use pkl_types::{AnalysisContext, NodeRef};
 use semver::Version;
 
 const DEFAULT_PKL_VERSION: Version = Version::new(0, 31, 0);
@@ -55,11 +56,11 @@ fn is_const_on_object_property(node: NodeRef, ctx: &AnalysisContext) -> bool {
 
 /// The Pkl version a module declares it targets. Used to decide whether
 /// version-gated features are supported.
-pub fn effective_pkl_version(ctx: &AnalysisContext, file: FileId) -> Version {
+pub fn effective_pkl_version(ctx: &AnalysisContext, file: File) -> Version {
     declared_pkl_version(ctx, file).unwrap_or(DEFAULT_PKL_VERSION)
 }
 
-fn declared_pkl_version(ctx: &AnalysisContext, file: FileId) -> Option<Version> {
+fn declared_pkl_version(ctx: &AnalysisContext, file: File) -> Option<Version> {
     let tree = ctx.tree(file)?;
     let header = nodes::Module::cast(tree, tree.root())?.header(tree)?;
     let annotation = nodes::ModuleHeader::cast(tree, header)?

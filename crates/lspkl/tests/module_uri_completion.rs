@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -9,8 +8,8 @@ use lsp_types::{
     Documentation, Position, TextDocumentItem,
 };
 use lspkl::module_uri_completion::{completion, resolve};
-use lspkl::state::AnalysisSnapshot;
 use lspkl::{Snapshot, Workspace};
+use pkl_db::Db;
 use pkl_syntax::TextSize;
 
 fn uri(path: &Path) -> Uri<String> {
@@ -43,15 +42,9 @@ fn candidates(
     let source = marked.replacen('|', "", 1);
     let workspace_snapshot = open_source(state, source_uri.clone(), source, 1);
     let file = workspace_snapshot.document(source_uri.as_str()).unwrap();
-    let module = workspace_snapshot.parse_module(file).unwrap();
-    let snapshot = AnalysisSnapshot {
-        trees: HashMap::from([(module.file_id, module.tree.clone())]),
-        imports: HashMap::new(),
-        module,
-    };
     match completion(
         &workspace_snapshot,
-        &snapshot,
+        file,
         TextSize::try_from(cursor).unwrap(),
     )? {
         CompletionResponse::Array(items) => Some(items),
@@ -222,36 +215,30 @@ fn glob_completions_resolve_literal_metacharacters() {
     );
     let mut state = Workspace::new();
     let root = Uri::parse(format!("jar:{}!/", uri(&archive_path))).unwrap();
-    let source_uri = state
-        .snapshot()
-        .file_manager
-        .resolve_uri(&root, "main.pkl")
-        .unwrap();
-    let target_uri = state
-        .snapshot()
-        .file_manager
-        .resolve_uri(&root, name)
-        .unwrap();
+    let loader = pkl_vfs::StandardSourceLoader::default();
+    let source_uri = pkl_vfs::SourceLoader::resolve_uri(&loader, &root, "main.pkl").unwrap();
+    let target_uri = pkl_vfs::SourceLoader::resolve_uri(&loader, &root, name).unwrap();
     for marked in ["import* \"lit|\"", "x = import*(#\"lit|\"#)"] {
         let items = candidates(&mut state, source_uri.clone(), marked).unwrap();
         let item = items.iter().find(|item| item.label == name).unwrap();
         let replaced = marked.replacen("lit|", &edit(item).new_text, 1);
         let snapshot = open_source(&mut state, source_uri.clone(), replaced, 2);
         let file = snapshot.document(source_uri.as_str()).unwrap();
-        let module = snapshot.parse_module(file).unwrap();
-        let analysis = snapshot.prepare_analysis(module).unwrap();
-        assert_eq!(analysis.imports.len(), 1);
-        let resolution = analysis.imports.values().next().unwrap();
+        let tree = pkl_db::parse(&snapshot.db, file).as_ref().unwrap();
+        let mut pending = vec![tree.root()];
+        let mut owners = Vec::new();
+        while let Some(node) = pending.pop() {
+            if tree.kind(node).is_module_uri_owner() {
+                owners.push(node);
+            }
+            pending.extend_from_slice(tree.children(node));
+        }
+        assert_eq!(owners.len(), 1);
+        let resolution = pkl_db::resolve_import(&snapshot.db, file, owners[0], None);
         match resolution {
-            pkl_types::ImportResolution::Glob(targets) => {
-                let expected = snapshot.file_registry.lock().register(&target_uri);
-                assert_eq!(
-                    targets,
-                    &vec![pkl_types::NodeRef::new(
-                        expected,
-                        pkl_syntax::ast::NodeId::ROOT
-                    )]
-                );
+            pkl_db::ImportResolution::Glob(targets) => {
+                let expected = snapshot.db.file(&target_uri).unwrap();
+                assert_eq!(targets, vec![expected]);
             }
             _ => panic!("glob expected"),
         }
@@ -308,7 +295,7 @@ fn modulepath_directories_zip_jar_precedence_and_docs_use_physical_target() {
     let jar = temp.path().join("modules.jar");
     archive(&jar, &[("jar.pkl", "module jarred\nx=4")]);
     let mut state = Workspace::new();
-    state.apply_settings(lspkl::settings::WorkspaceSettings {
+    state.apply_settings(pkl_db::settings::WorkspaceSettings {
         modulepath: vec![root.clone(), zip, jar],
         ..Default::default()
     });
@@ -368,7 +355,7 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
         &[("source.pkl", "x=2")],
     );
     let mut state = Workspace::new();
-    state.apply_settings(lspkl::settings::WorkspaceSettings {
+    state.apply_settings(pkl_db::settings::WorkspaceSettings {
         cache_dir: Some(cache.clone()),
         ..Default::default()
     });
@@ -455,7 +442,9 @@ fn named_local_and_remote_project_dependencies_complete_members() {
         projects.initialize(vec![temp.path().to_owned()]);
         projects.load_state(&state_file).unwrap();
     }
-    state.apply_settings(lspkl::settings::WorkspaceSettings {
+    drop(snapshot);
+    state.refresh_projects();
+    state.apply_settings(pkl_db::settings::WorkspaceSettings {
         cache_dir: Some(cache),
         ..Default::default()
     });

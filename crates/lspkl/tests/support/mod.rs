@@ -89,6 +89,14 @@ async fn send(stdin: &AsyncMutex<ChildStdin>, message: &Value) -> std::io::Resul
 
 impl LspClient {
     pub async fn spawn(binary: &Path, workspace: &Path) -> Self {
+        Self::spawn_with_stderr_limit(binary, workspace, STDERR_LIMIT).await
+    }
+
+    pub async fn spawn_with_stderr_limit(
+        binary: &Path,
+        workspace: &Path,
+        stderr_limit: usize,
+    ) -> Self {
         let mut child = Command::new(binary)
             .current_dir(workspace)
             // Never discover a locally installed Pkl or the user's package cache.
@@ -114,7 +122,7 @@ impl LspClient {
                 }
                 let mut bytes = captured.lock();
                 bytes.extend_from_slice(&chunk[..count]);
-                let excess = bytes.len().saturating_sub(STDERR_LIMIT);
+                let excess = bytes.len().saturating_sub(stderr_limit);
                 bytes.drain(..excess);
             }
         });
@@ -167,12 +175,20 @@ impl LspClient {
                                 .map(|_| Value::Null)
                                 .collect();
                             json!({"jsonrpc":"2.0", "id":message["id"], "result":values})
+                        } else if message["method"] == "client/registerCapability" {
+                            json!({"jsonrpc":"2.0", "id":message["id"], "result":null})
                         } else {
                             json!({"jsonrpc":"2.0", "id":message["id"], "error":{"code":-32601,"message":"unsupported client request"}})
                         };
                         if let Err(err) = send(&output, &response).await {
                             let _ = tx.send(Err(err.to_string()));
                             break;
+                        }
+                        if message["method"] == "client/registerCapability" {
+                            let _ = tx.send(Ok(ObservedMessage {
+                                message,
+                                received_at: Instant::now(),
+                            }));
                         }
                     }
                     Ok(message) => {
@@ -201,6 +217,9 @@ impl LspClient {
             stderr_reader,
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
+    }
+    pub fn stderr(&self) -> String {
+        String::from_utf8_lossy(&self.stderr.lock()).into_owned()
     }
 
     fn failure(&self, context: &str) -> String {

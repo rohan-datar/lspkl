@@ -14,7 +14,7 @@ use pkl_types::{MemberKind, members_of_type};
 pub(crate) fn completions(
     node: NodeId,
     tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) -> Vec<CompletionItem> {
     let mut type_position = false;

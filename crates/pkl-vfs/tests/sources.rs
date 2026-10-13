@@ -1,5 +1,5 @@
 use fluent_uri::Uri;
-use pkl_vfs::{FileManager, Origin, effective_uri, to_editor_uri};
+use pkl_vfs::{SourceLoader, StandardSourceLoader, effective_uri, to_editor_uri};
 use std::{
     fs,
     io::{Read, Write},
@@ -43,15 +43,28 @@ fn archives_load_resolve_list_and_keep_distinct_identities() {
     let dir = tempfile::tempdir().unwrap();
     let a = archive(&dir.path().join("first archive.zip"), "value = 1");
     let b = archive(&dir.path().join("second.jar"), "value = 2");
-    let fm = FileManager::new();
+    let fm = StandardSourceLoader::new();
     let first = fm.resolve_uri(&a, "dir/main.pkl").unwrap();
     let second = fm.resolve_uri(&b, "dir/main.pkl").unwrap();
-    assert_eq!(fm.get_or_load(&first).unwrap().contents(), "value = 1");
-    assert_eq!(fm.get_or_load(&second).unwrap().contents(), "value = 2");
-    assert_eq!(fm.get_or_load(&first).unwrap().origin, Origin::Jar);
-    assert!(fm.parse(&first).unwrap().node_count() > 0);
+    assert_eq!(
+        fm.load(&first, &pkl_vfs::default_cache())
+            .unwrap()
+            .contents(),
+        "value = 1"
+    );
+    assert_eq!(
+        fm.load(&second, &pkl_vfs::default_cache())
+            .unwrap()
+            .contents(),
+        "value = 2"
+    );
     let other = fm.resolve_uri(&first, "../other.pkl").unwrap();
-    assert_eq!(fm.get_or_load(&other).unwrap().contents(), "other = 2");
+    assert_eq!(
+        fm.load(&other, &pkl_vfs::default_cache())
+            .unwrap()
+            .contents(),
+        "other = 2"
+    );
     assert!(fm.resolve_uri(&first, "../../escape.pkl").is_err());
     assert!(fm.resolve_uri(&first, "%2e%2e/%2e%2e/escape.pkl").is_err());
     let folder = fm.resolve_uri(&a, "dir/").unwrap();
@@ -59,7 +72,9 @@ fn archives_load_resolve_list_and_keep_distinct_identities() {
     assert_eq!(fm.list_files(&a).unwrap().len(), 5);
     let unicode = fm.resolve_uri(&a, "space%20%2B%20%C3%BC.pkl").unwrap();
     assert_eq!(
-        fm.get_or_load(&unicode).unwrap().contents(),
+        fm.load(&unicode, &pkl_vfs::default_cache())
+            .unwrap()
+            .contents(),
         "unicode = true"
     );
     assert!(!dir.path().join("escape.pkl").exists());
@@ -68,15 +83,18 @@ fn archives_load_resolve_list_and_keep_distinct_identities() {
         "jar:{}!/a.pkl",
         url::Url::from_file_path(dir.path().join("broken.zip")).unwrap()
     ));
-    assert!(fm.get_or_load(&broken).is_err());
+    assert!(fm.load(&broken, &pkl_vfs::default_cache()).is_err());
 }
 #[test]
 fn stdlib_missing_module_is_an_error() {
-    let fm = FileManager::new();
-    assert!(fm.get_or_load(&uri("pkl:missing")).is_err());
+    let fm = StandardSourceLoader::new();
+    assert!(
+        fm.load(&uri("pkl:missing"), &pkl_vfs::default_cache())
+            .is_err()
+    );
 }
 #[test]
-fn editor_uri_roundtrips_and_registry_uses_one_identity() {
+fn editor_uri_roundtrips() {
     for physical in [
         "file:///tmp/a%20b.pkl",
         "pkl:json",
@@ -86,19 +104,6 @@ fn editor_uri_roundtrips_and_registry_uses_one_identity() {
         let physical = effective_uri(&uri(physical)).unwrap();
         let editor = to_editor_uri(&physical).unwrap();
         assert_eq!(effective_uri(&editor).unwrap(), physical);
-        let fm = FileManager::new();
-        let file = fm.open(editor.clone(), "x = 1".into(), Some(1));
-        assert_eq!(file.url, physical);
-        assert!(Arc::ptr_eq(&file, &fm.get(&physical).unwrap()));
-        fm.update(&editor, "x = 2".into(), Some(2)).unwrap();
-        assert_eq!(fm.get(&physical).unwrap().contents(), "x = 2");
-        assert!(Arc::ptr_eq(
-            &fm.parse(&editor).unwrap(),
-            &fm.parse(&physical).unwrap()
-        ));
-        assert_eq!(fm.len(), 1);
-        fm.close(&editor);
-        assert!(fm.is_empty());
     }
     assert_eq!(
         to_editor_uri(&uri("https://example.com/a.pkl"))
@@ -118,7 +123,10 @@ fn filesystem_listing_is_recursive_and_component_safe() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path(), dir.path().join("nested/cycle")).unwrap();
     let root = uri(url::Url::from_directory_path(dir.path()).unwrap().as_str());
-    assert_eq!(FileManager::new().list_files(&root).unwrap().len(), 2);
+    assert_eq!(
+        StandardSourceLoader::new().list_files(&root).unwrap().len(),
+        2
+    );
 }
 
 struct TlsService {
@@ -216,10 +224,8 @@ impl TlsService {
             thread: Some(handle),
         }
     }
-    fn manager(&self, cache: &std::path::Path, timeout: Duration) -> FileManager {
-        let fm = FileManager::with_trusted_certificates(vec![self.ca.clone()], timeout).unwrap();
-        fm.set_cache_dir(cache.to_owned());
-        fm
+    fn loader(&self, timeout: Duration) -> StandardSourceLoader {
+        StandardSourceLoader::with_trusted_certificates(vec![self.ca.clone()], timeout).unwrap()
     }
 }
 impl Drop for TlsService {
@@ -232,44 +238,54 @@ impl Drop for TlsService {
 fn https_verifies_tls_resolves_relative_and_persists_correct_cache_keys() {
     let cache = tempfile::tempdir().unwrap();
     let service = TlsService::start();
-    let fm = service.manager(cache.path(), Duration::from_secs(2));
+    let fm = service.loader(Duration::from_secs(2));
     let first = uri(&format!("{}/dir/main.pkl?q=1", service.base));
     let second = uri(&format!("{}/dir/main.pkl?q=2", service.base));
-    assert!(fm.get_or_load(&first).unwrap().contents().contains("q=1"));
-    assert!(fm.get_or_load(&second).unwrap().contents().contains("q=2"));
+    // A query load must not contact even a reachable, trusted server.
+    assert!(fm.load(&first, cache.path()).is_err());
+    let first_source = fm.fetch(&first, cache.path()).unwrap();
+    let second_source = fm.fetch(&second, cache.path()).unwrap();
+    assert!(first_source.contents().contains("q=1"));
+    assert!(second_source.contents().contains("q=2"));
     let relative = fm.resolve_uri(&first, "../other.pkl").unwrap();
     assert_eq!(relative.as_str(), format!("{}/other.pkl", service.base));
     assert!(
-        fm.get_or_load(&relative)
+        fm.fetch(&relative, cache.path())
             .unwrap()
             .contents()
             .contains("other.pkl")
     );
-    let untrusted = FileManager::new();
-    untrusted.set_cache_dir(cache.path().join("untrusted"));
-    assert!(untrusted.get_or_load(&first).is_err());
+    let untrusted = StandardSourceLoader::new();
+    assert!(
+        untrusted
+            .fetch(&first, &cache.path().join("untrusted"))
+            .is_err()
+    );
     for path in ["/error", "/redirect"] {
         assert!(
-            fm.get_or_load(&uri(&format!("{}{path}", service.base)))
+            fm.fetch(&uri(&format!("{}{path}", service.base)), cache.path())
                 .is_err()
         );
     }
-    let slow = service.manager(&cache.path().join("slow"), Duration::from_millis(40));
+    let slow = service.loader(Duration::from_millis(40));
     assert!(
-        slow.get_or_load(&uri(&format!("{}/slow", service.base)))
+        slow.fetch(&uri(&format!("{}/slow", service.base)), cache.path())
             .is_err()
     );
     drop(service);
-    let offline = FileManager::new();
-    offline.set_cache_dir(cache.path().to_owned());
+    let offline = StandardSourceLoader::new();
     assert_eq!(
-        offline.get_or_load(&first).unwrap().contents(),
-        fm.get(&first).unwrap().contents()
+        offline.load(&first, cache.path()).unwrap().contents(),
+        first_source.contents()
     );
     assert_eq!(
-        offline.get_or_load(&second).unwrap().contents(),
-        fm.get(&second).unwrap().contents()
+        offline.load(&second, cache.path()).unwrap().contents(),
+        second_source.contents()
     );
-    assert!(offline.get_or_load(&uri("http://localhost/a.pkl")).is_err());
+    assert!(
+        offline
+            .load(&uri("http://localhost/a.pkl"), cache.path())
+            .is_err()
+    );
     assert_eq!(fs::read_dir(cache.path().join("https")).unwrap().count(), 3);
 }

@@ -1,11 +1,11 @@
 mod harness;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use pkl_syntax::ast::{NodeKind, nodes};
-use pkl_types::{AnalysisContext, ConstraintExpr, FileId, ImportResolution, NodeRef, Type};
+use pkl_types::{AnalysisContext, ConstraintExpr, NodeRef, Type};
 
 fn hash(ty: &Type) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -14,13 +14,13 @@ fn hash(ty: &Type) -> u64 {
 }
 
 fn property_type(ctx: &AnalysisContext, name: &str) -> Type {
-    let tree = ctx.tree(FileId(1)).unwrap();
+    let tree = ctx.tree(harness::file(ctx, 1)).unwrap();
     let property = nodes::Module::cast(tree, tree.root())
         .unwrap()
         .members(tree)
         .find(|&node| tree.name(node) == Some(name))
         .unwrap();
-    pkl_types::resolver::definition_type(NodeRef::new(FileId(1), property), ctx)
+    pkl_types::resolver::definition_type(NodeRef::new(harness::file(ctx, 1), property), ctx)
 }
 
 #[test]
@@ -216,12 +216,12 @@ fn member_sets_intersect_all_branches_but_lookup_keeps_available_members() {
         &base,
         "class A { shared: Int\npartial: Int }\nclass B { shared: String\npartial: String }\nclass C { shared: Boolean }",
         |ctx| {
-            let tree = ctx.tree(FileId(1)).unwrap();
+            let tree = ctx.tree(harness::file(ctx, 1)).unwrap();
             let types = nodes::Module::cast(tree, tree.root())
                 .unwrap()
                 .members(tree)
                 .filter(|&node| matches!(tree.kind(node), NodeKind::Class))
-                .map(|node| Type::class(NodeRef::new(FileId(1), node)));
+                .map(|node| Type::class(NodeRef::new(harness::file(ctx, 1), node)));
             let union = Type::union(types, ctx);
             let members = pkl_types::members_of_type(&union, ctx);
             assert_eq!(
@@ -263,30 +263,19 @@ fn member_sets_intersect_all_branches_but_lookup_keeps_available_members() {
 fn module_identity_and_rendering_ignore_import_paths_and_aliases() {
     let base = harness::load_test_base();
     let source = Arc::new(
-        pkl_syntax::parse(
-            "import \"direct.pkl\" as direct\nimport \"nested/../direct.pkl\" as alternate",
-        )
-        .unwrap(),
+        pkl_syntax::parse("import \"2.pkl\" as direct\nimport \"nested/../2.pkl\" as alternate")
+            .unwrap(),
     );
     let target = Arc::new(pkl_syntax::parse("module example.Target\nvalue = 1").unwrap());
-    let module = NodeRef::new(FileId(2), target.root());
-    let imports: HashMap<_, _> = nodes::Module::cast(&source, source.root())
-        .unwrap()
-        .imports(&source)
-        .map(|node| {
-            (
-                NodeRef::new(FileId(1), node),
-                ImportResolution::Single(module),
-            )
-        })
-        .collect();
-    let trees = HashMap::from([
-        (FileId(1), source.clone()),
-        (FileId(2), target.clone()),
-        (base.file_id(), base.tree().clone()),
-    ]);
-    let ctx = AnalysisContext::new(&base, &trees, &imports);
-    let position = NodeRef::new(FileId(1), source.root());
+    base.add(1, source.source());
+    base.add(2, target.source());
+    let db = base.db.borrow();
+    let ctx = AnalysisContext::new(
+        &base,
+        &*db,
+        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
+    );
+    let position = NodeRef::new(harness::file(&ctx, 1), source.root());
     let direct = pkl_types::resolver::resolve_unqualified_access(position, "direct", &ctx)
         .unwrap()
         .ty;

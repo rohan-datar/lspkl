@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspaceSettings {
     pub modulepath: Vec<PathBuf>,
@@ -40,25 +40,25 @@ impl Default for WorkspaceSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct CliSettings {
     pub path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProjectSettings {
     pub excluded_directories: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FormatterSettings {
     pub grammar_version: Option<GrammarVersion>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum GrammarVersion {
     #[serde(rename = "1")]
     V1,
@@ -89,14 +89,19 @@ impl WorkspaceSettings {
         self.module_paths = self
             .modulepath
             .iter()
-            .filter_map(|path| {
+            .map(|path| {
                 if path.is_absolute() {
-                    Some(path.clone())
+                    path.clone()
                 } else {
                     workspaces
                         .iter()
                         .map(|root| root.join(path))
                         .find(|path| path.exists())
+                        .unwrap_or_else(|| {
+                            workspaces
+                                .first()
+                                .map_or_else(|| path.clone(), |root| root.join(path))
+                        })
                 }
             })
             .collect();
@@ -204,6 +209,27 @@ mod tests {
                 .rebind(&[root.path().join("other")])
                 .effective_cache_dir(),
             cache,
+        );
+    }
+
+    #[test]
+    fn modulepath_binding_retains_missing_paths_and_prefers_first_existing_workspace() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::create_dir(second.path().join("present")).unwrap();
+        let mut settings = WorkspaceSettings {
+            modulepath: vec!["missing".into(), "present".into()],
+            ..Default::default()
+        };
+        settings.resolve_paths(&[first.path().to_owned(), second.path().to_owned()]);
+        assert_eq!(
+            settings.module_paths,
+            [first.path().join("missing"), second.path().join("present")]
+        );
+        settings.resolve_paths(&[]);
+        assert_eq!(
+            settings.module_paths,
+            [PathBuf::from("missing"), PathBuf::from("present")]
         );
     }
 }

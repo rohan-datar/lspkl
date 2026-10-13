@@ -37,7 +37,7 @@ pub enum ProjectError {
 }
 
 /// Tracks every `.pkl-project` in the workspace and its resolution state.
-#[allow(dead_code)]
+#[derive(Clone)]
 pub struct ProjectManager {
     cli: PklCli,
     /// Workspace roots as sent by the client (`initialize` / workspace
@@ -211,6 +211,31 @@ impl ProjectManager {
             };
         }
         None
+    }
+
+    /// Owned metadata for publishing database project inputs.
+    pub fn owned_projects(&self) -> Vec<Arc<PklProject>> {
+        self.projects.values().cloned().collect()
+    }
+
+    /// Install a watched project input already read and decoded by a blocking worker.
+    /// Missing or invalid dependency contents are represented by None, clearing stale data.
+    /// Project changes invalidate metadata until the next explicit CLI sync.
+    pub fn apply_watched_file(&mut self, path: &Path, deps: Option<ProjectDeps>) -> bool {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("PklProject") => self.projects.remove(path).is_some(),
+            Some("PklProject.deps.json") => {
+                let Some(parent) = path.parent() else {
+                    return false;
+                };
+                let Some(project) = self.projects.get_mut(&parent.join("PklProject")) else {
+                    return false;
+                };
+                Arc::make_mut(project).project_deps = deps;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// All discovered projects.

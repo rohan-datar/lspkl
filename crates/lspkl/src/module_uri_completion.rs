@@ -13,14 +13,12 @@ use pkl_project::modulepath::ModulepathResolver;
 use pkl_syntax::ast::NodeKind;
 use pkl_syntax::{TextRange, TextSize};
 
-use crate::state::{AnalysisSnapshot, Snapshot};
+use crate::state::Snapshot;
+use pkl_db::{Db, File, FileStatus};
+use pkl_vfs::SourceLoader;
 
-pub fn completion(
-    state: &Snapshot,
-    analysis: &AnalysisSnapshot,
-    offset: TextSize,
-) -> Option<CompletionResponse> {
-    let tree = &analysis.module.tree;
+pub fn completion(state: &Snapshot, file: File, offset: TextSize) -> Option<CompletionResponse> {
+    let tree = pkl_db::parse(&state.db, file).as_ref().ok()?;
     let positions = PositionConverter::new(tree, state.position_encoding);
     let mut node = tree.find_at(offset)?;
     let offset = usize::from(offset);
@@ -57,16 +55,17 @@ pub fn completion(
         TextSize::try_from(end).ok()?,
     ));
     let glob = tree.is_glob_import(owner);
-    let source = &analysis.module.file;
-    let project = pkl_vfs::url_to_path(&source.url)
-        .ok()
-        .and_then(|path| state.project_manager.lock().get_pkl_project_shared(&path));
+    let source = &pkl_vfs::Source {
+        url: file.uri(&state.db).clone(),
+        text: file.text(&state.db).clone(),
+    };
+    let project = pkl_db::project_for_file(&state.db, file)
+        .and_then(|project| project.metadata(&state.db).as_deref());
     let settings = &state.settings;
     let cache = settings.effective_cache_dir();
-    let resolver =
-        ImportResolver::with_settings(&state.file_manager, &settings.module_paths, cache);
-    let modulepath =
-        ModulepathResolver::with_modulepaths(&state.file_manager, &settings.module_paths);
+    let loader = pkl_db::DatabaseSourceLoader::new(&state.db);
+    let resolver = ImportResolver::with_settings(&loader, &settings.module_paths, cache);
+    let modulepath = ModulepathResolver::with_modulepaths(&loader, &settings.module_paths, cache);
     let mut items = BTreeMap::new();
     let origin = source.url.as_str();
     let mut add = |label: String, value: String, folder: bool, target: Option<Uri<String>>| {
@@ -89,7 +88,7 @@ pub fn completion(
             }
         }
     } else if prefix.starts_with('@') && !prefix.contains('/') {
-        for name in resolver.dependency_names(source, project.as_deref()) {
+        for name in resolver.dependency_names(source, project) {
             let value = format!("@{name}");
             if matches_prefix(&value, &prefix) {
                 add(value.clone(), value, false, None);
@@ -120,9 +119,7 @@ pub fn completion(
     } else if prefix.starts_with("modulepath:/") {
         let logical = decode_uri_path(prefix.strip_prefix("modulepath:/")?)?;
         let (parent, child) = split_path(&logical);
-        for (name, folder, target) in
-            modulepath_children(state, &modulepath, parent, project.as_deref())
-        {
+        for (name, folder, target) in modulepath_children(state, &modulepath, parent, project) {
             if visible(&name, folder) && matches_prefix(&name, child) {
                 let value = format!(
                     "modulepath:/{}{}",
@@ -143,11 +140,10 @@ pub fn completion(
                 prefix[fragment + 1..].trim_start_matches('/'),
             )
         };
-        if let Some(root) = resolver.completion_root(&prefix, source, project.as_deref()) {
+        if let Some(root) = resolver.completion_root(&prefix, source, project) {
             let path = decode_uri_path(path)?;
             let (parent, child) = split_path(&path);
-            let directory = state
-                .file_manager
+            let directory = pkl_db::DatabaseSourceLoader::new(&state.db)
                 .resolve_uri(&root, &format!("./{}", encode_path(parent)))
                 .ok()?;
             for (name, folder, target) in children(state, &directory) {
@@ -196,9 +192,7 @@ pub fn completion(
                     }
                 }
             }
-        } else if !absolute_uri
-            && let Some(relative) = modulepath.relative_path(source, project.as_deref())
-        {
+        } else if !absolute_uri && let Some(relative) = modulepath.relative_path(source, project) {
             let source_parent = relative.rsplit_once('/').map_or("", |(p, _)| p);
             let logical_parent = if parent.starts_with('/') {
                 parent.trim_start_matches('/').to_owned()
@@ -208,7 +202,7 @@ pub fn completion(
                 format!("{source_parent}/{parent}")
             };
             for (name, folder, target) in
-                modulepath_children(state, &modulepath, &logical_parent, project.as_deref())
+                modulepath_children(state, &modulepath, &logical_parent, project)
             {
                 if visible(&name, folder) && matches_prefix(&name, child) {
                     add(
@@ -229,7 +223,9 @@ pub fn completion(
             } else {
                 encode_reference(parent)
             };
-            if let Ok(directory) = state.file_manager.resolve_uri(&source.url, &reference) {
+            if let Ok(directory) =
+                pkl_db::DatabaseSourceLoader::new(&state.db).resolve_uri(&source.url, &reference)
+            {
                 directories.push(directory);
             }
         }
@@ -258,7 +254,7 @@ pub fn completion(
     Some(CompletionResponse::Array(items.into_values().collect()))
 }
 
-/// Fetch and parse the candidate only when the client requests its documentation.
+/// Parse cached/local candidate input only when its documentation is requested.
 pub fn resolve(state: &Snapshot, mut item: CompletionItem) -> CompletionItem {
     let Some(data) = item
         .data
@@ -274,13 +270,15 @@ pub fn resolve(state: &Snapshot, mut item: CompletionItem) -> CompletionItem {
     else {
         return item;
     };
-    let Ok(file) = state.file_manager.get_or_load(&target) else {
+    let Ok(file) = state.db.file(&target) else {
         return item;
     };
-    let Ok(module) = state.parse_module(file) else {
+    if file.status(&state.db) == FileStatus::Missing {
+        return item;
+    }
+    let Ok(tree) = pkl_db::parse(&state.db, file) else {
         return item;
     };
-    let tree = &module.tree;
     let header = tree.child(tree.root(), |kind| matches!(kind, NodeKind::ModuleHeader));
     let clause =
         header.and_then(|header| tree.child(header, |kind| matches!(kind, NodeKind::ModuleClause)));
@@ -379,7 +377,7 @@ fn children(state: &Snapshot, directory: &Uri<String>) -> Vec<(String, bool, Uri
             .collect();
     }
     let mut files = BTreeMap::new();
-    if let Ok(uris) = state.file_manager.list_files(directory) {
+    if let Ok(uris) = pkl_db::DatabaseSourceLoader::new(&state.db).list_files(directory) {
         for uri in uris {
             if let Some(relative) = uri
                 .as_str()
@@ -540,8 +538,7 @@ fn modulepath_children(
 ) -> Vec<(String, bool, Uri<String>)> {
     let mut entries = BTreeMap::new();
     for root in modulepath.roots(project) {
-        let Ok(directory) = state
-            .file_manager
+        let Ok(directory) = pkl_db::DatabaseSourceLoader::new(&state.db)
             .resolve_uri(&root, &format!("./{}", encode_path(parent)))
         else {
             continue;

@@ -20,7 +20,7 @@ use pkl_types::members_of_type;
 pub(crate) fn completions(
     node: NodeId,
     tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
     offset: pkl_syntax::TextSize,
 ) -> Vec<CompletionItem> {
@@ -384,7 +384,7 @@ fn collect_defined_property_names(node: NodeId, tree: &pkl_syntax::ast::SyntaxTr
 /// function type
 fn add_inferred_expr_type_completions(
     node: NodeId,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
@@ -497,7 +497,7 @@ fn decapitalize(name: &str) -> String {
 fn add_scope_completions(
     node: NodeId,
     tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {

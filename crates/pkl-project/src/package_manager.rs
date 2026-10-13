@@ -137,9 +137,7 @@ impl PackageManager {
                 else {
                     continue;
                 };
-                if let Some(resolved_dep) = resolved_to_dependency(resolved, &project_dir) {
-                    named_map.insert(name, resolved_dep);
-                }
+                named_map.insert(name, resolved_to_dependency(resolved, &project_dir));
             }
         } else {
             for (name, dep) in metadata.dependencies {
@@ -149,7 +147,7 @@ impl PackageManager {
                         .project_deps
                         .as_ref()?
                         .get_resolved_dependency(&dep.uri.to_display_string())?;
-                    resolved_to_dependency(resolved, &project_dir)
+                    Some(resolved_to_dependency(resolved, &project_dir))
                 });
                 let resolved_dep = from_context.unwrap_or_else(|| {
                     Dependency::Package(PackageDependency {

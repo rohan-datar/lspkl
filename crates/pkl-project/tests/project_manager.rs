@@ -432,3 +432,38 @@ fn configure_preserves_shared_projects_and_applies_exclusions() {
             .as_str()
     );
 }
+
+#[test]
+fn watched_project_inputs_apply_without_io_or_cli_and_drop_stale_metadata() {
+    let ws = tempfile::tempdir().unwrap();
+    fs::write(ws.path().join("PklProject"), "").unwrap();
+    let state = ws.path().join(".lspkl/projects.json");
+    fs::create_dir_all(state.parent().unwrap()).unwrap();
+    fs::write(&state, r#"{"schemaVersion":1,"pklProjects":[{"projectFile":"PklProject","declaredDependencies":{}}]}"#).unwrap();
+    let mut manager = ProjectManager::new(PklCli {
+        binary_path: Some(ws.path().join("nonexistent-cli")),
+    });
+    manager.initialize(vec![ws.path().to_path_buf()]);
+    manager.load_state(&state).unwrap();
+    let pinned = manager.owned_projects().pop().unwrap();
+    let deps = ws.path().join("PklProject.deps.json");
+    let parsed = pkl_project::dto::PklProject::load_project_deps(
+        r#"{"schemaVersion":1,"resolvedDependencies":{}}"#,
+    )
+    .unwrap();
+    assert!(manager.apply_watched_file(&deps, Some(parsed.clone())));
+    assert!(manager.owned_projects()[0].project_deps.is_some());
+    assert!(pinned.project_deps.is_none());
+    // Invalid contents are decoded by the worker and installed as no dependencies.
+    let invalid = pkl_project::dto::PklProject::load_project_deps("invalid json");
+    assert!(invalid.is_err());
+    assert!(manager.apply_watched_file(&deps, invalid.ok()));
+    assert!(manager.owned_projects()[0].project_deps.is_none());
+    assert!(manager.apply_watched_file(&deps, Some(parsed)));
+    // A deletion is likewise installed as no dependencies, without touching disk.
+    assert!(manager.apply_watched_file(&deps, None));
+    assert!(manager.owned_projects()[0].project_deps.is_none());
+    assert!(manager.apply_watched_file(&ws.path().join("PklProject"), None));
+    assert!(manager.owned_projects().is_empty());
+    assert!(!manager.apply_watched_file(&deps, None));
+}

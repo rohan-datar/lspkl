@@ -13,7 +13,7 @@ use pkl_types::{AnalysisContext, NodeRef};
 pub(crate) fn completions(
     node: NodeId,
     tree: &pkl_syntax::ast::SyntaxTree,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) -> Vec<CompletionItem> {
     let body = ClassBody::cast(tree, node).or_else(|| ClassBody::cast(tree, tree.parent(node)?));

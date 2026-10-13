@@ -1,7 +1,8 @@
 //! Run environment-sensitive cache regressions in a fresh test process.
 #![cfg(unix)]
 use lsp_types::*;
-use lspkl::{Workspace, handlers, settings::WorkspaceSettings};
+use lspkl::{Workspace, handlers};
+use pkl_db::settings::WorkspaceSettings;
 use pkl_project::dto::{PackageMetadata, PackageUri};
 use std::{collections::BTreeMap, fs, io::Write, os::unix::fs::PermissionsExt, process::Command};
 
@@ -75,7 +76,11 @@ fn child() {
     };
     assert_eq!(cache, expected);
     let package = PackageUri::create("package://cache-regression.test/library@1.0.0").unwrap();
-    handlers::commands::download_package(&snapshot, package.to_display_string()).unwrap();
+    let command =
+        handlers::commands::prepare_download_package(&snapshot, package.to_display_string())
+            .unwrap();
+    drop(snapshot);
+    handlers::commands::execute_command(command).unwrap();
     let arguments = fs::read_to_string(&calls).unwrap();
     assert_eq!(
         arguments.lines().collect::<Vec<_>>(),
@@ -131,9 +136,17 @@ fn child() {
         panic!("expected package member definition")
     };
     assert_eq!(location.range.start, Position::new(0, 0));
+    let request = handlers::documents::prepare_file_contents(
+        &snapshot,
+        TextDocumentIdentifier { uri: location.uri },
+    )
+    .unwrap();
+    drop(snapshot);
     assert_eq!(
-        handlers::documents::file_contents(&snapshot, TextDocumentIdentifier { uri: location.uri })
-            .unwrap(),
+        handlers::documents::file_contents(request)
+            .unwrap()
+            .source
+            .contents(),
         "value: Int = 42\n"
     );
 }

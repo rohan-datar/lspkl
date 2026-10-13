@@ -6,14 +6,12 @@ use pkl_syntax::ast::nodes;
 use pkl_syntax::ast::{NodeId, SyntaxTree, unquote_identifier};
 use thiserror::Error;
 
-use crate::file_id::{FileId, NodeRef};
+use crate::file_id::NodeRef;
 use crate::ty::Type;
+use pkl_db::File;
 
 #[derive(Debug, Error)]
 pub enum BaseModuleError {
-    #[error("failed to parse base.pkl: {0}")]
-    Parse(#[from] pkl_syntax::ParseError),
-
     #[error("base.pkl is missing the required class `{0}`")]
     MissingClass(String),
 
@@ -28,10 +26,10 @@ pub enum BaseModuleError {
 #[derive(Debug)]
 pub struct BaseModule {
     tree: Arc<SyntaxTree>,
-    file_id: FileId,
+    file_id: File,
 
     // Cached `Type` values for the classes the type checker references most
-    // often. Populated by `load` so callers can grab them without re-walking
+    // often. Populated by `from_tree` so callers can grab them without re-walking
     // the AST.
 
     // classes
@@ -83,13 +81,8 @@ pub struct BaseModule {
 }
 
 impl BaseModule {
-    /// Parse `base.pkl` from a source string and resolve well-known types.
-    pub fn load(source: &str) -> Result<Self, BaseModuleError> {
-        Self::from_tree(Arc::new(pkl_syntax::parse(source)?))
-    }
-
     /// Load well-known metadata from an already parsed base module.
-    pub fn from_tree(tree: Arc<SyntaxTree>) -> Result<Self, BaseModuleError> {
+    pub fn from_tree(file: File, tree: Arc<SyntaxTree>) -> Result<Self, BaseModuleError> {
         let classes: Vec<_> = nodes::Module::cast(&tree, tree.root())
             .into_iter()
             .flat_map(|n| n.members(&tree))
@@ -102,68 +95,87 @@ impl BaseModule {
             .collect();
 
         Ok(Self {
-            tree: tree.clone(),
-            file_id: FileId::BASE,
+            file_id: file,
 
             // well-known types
-            any_type: find_class(&tree, &classes, "Any")?,
-            annotation_type: find_class(&tree, &classes, "Annotation")?,
-            dynamic_type: find_class(&tree, &classes, "Dynamic")?,
-            null_type: find_class(&tree, &classes, "Null")?,
-            boolean_type: find_class(&tree, &classes, "Boolean")?,
-            int_type: find_class(&tree, &classes, "Int")?,
-            float_type: find_class(&tree, &classes, "Float")?,
-            duration_type: find_class(&tree, &classes, "Duration")?,
-            data_size_type: find_class(&tree, &classes, "DataSize")?,
-            number_type: find_class(&tree, &classes, "Number")?,
-            string_type: find_class(&tree, &classes, "String")?,
-            bytes_type: find_class(&tree, &classes, "Bytes")?,
-            collection_type: find_class(&tree, &classes, "Collection")?,
-            listing_type: find_class(&tree, &classes, "Listing")?,
-            list_type: find_class(&tree, &classes, "List")?,
-            set_type: find_class(&tree, &classes, "Set")?,
-            mapping_type: find_class(&tree, &classes, "Mapping")?,
-            map_type: find_class(&tree, &classes, "Map")?,
-            object_type: find_class(&tree, &classes, "Object")?,
-            module_type: find_class(&tree, &classes, "Module")?,
-            function_type: find_class(&tree, &classes, "Function")?,
-            non_null_type: find_alias(&tree, &aliases, "NonNull")?,
-            comparable_type: find_alias(&tree, &aliases, "Comparable")?,
-            varargs_type: find_class(&tree, &classes, "VarArgs")?,
+            any_type: find_class(file, &tree, &classes, "Any")?,
+            annotation_type: find_class(file, &tree, &classes, "Annotation")?,
+            dynamic_type: find_class(file, &tree, &classes, "Dynamic")?,
+            null_type: find_class(file, &tree, &classes, "Null")?,
+            boolean_type: find_class(file, &tree, &classes, "Boolean")?,
+            int_type: find_class(file, &tree, &classes, "Int")?,
+            float_type: find_class(file, &tree, &classes, "Float")?,
+            duration_type: find_class(file, &tree, &classes, "Duration")?,
+            data_size_type: find_class(file, &tree, &classes, "DataSize")?,
+            number_type: find_class(file, &tree, &classes, "Number")?,
+            string_type: find_class(file, &tree, &classes, "String")?,
+            bytes_type: find_class(file, &tree, &classes, "Bytes")?,
+            collection_type: find_class(file, &tree, &classes, "Collection")?,
+            listing_type: find_class(file, &tree, &classes, "Listing")?,
+            list_type: find_class(file, &tree, &classes, "List")?,
+            set_type: find_class(file, &tree, &classes, "Set")?,
+            mapping_type: find_class(file, &tree, &classes, "Mapping")?,
+            map_type: find_class(file, &tree, &classes, "Map")?,
+            object_type: find_class(file, &tree, &classes, "Object")?,
+            module_type: find_class(file, &tree, &classes, "Module")?,
+            function_type: find_class(file, &tree, &classes, "Function")?,
+            non_null_type: find_alias(file, &tree, &aliases, "NonNull")?,
+            comparable_type: find_alias(file, &tree, &aliases, "Comparable")?,
+            varargs_type: find_class(file, &tree, &classes, "VarArgs")?,
 
             // conversion methods
-            listing_to_list_method: find_class_member(&tree, &classes, "Listing", "toList")?,
-            mapping_to_map_method: find_class_member(&tree, &classes, "Mapping", "toMap")?,
+            listing_to_list_method: find_class_member(file, &tree, &classes, "Listing", "toList")?,
+            mapping_to_map_method: find_class_member(file, &tree, &classes, "Mapping", "toMap")?,
 
             // List members duplicated on Listing
-            list_join_method: find_class_member(&tree, &classes, "List", "join")?,
-            list_is_distinct_by_method: find_class_member(&tree, &classes, "List", "isDistinctBy")?,
-            list_fold_method: find_class_member(&tree, &classes, "List", "fold")?,
-            list_fold_indexed_method: find_class_member(&tree, &classes, "List", "foldIndexed")?,
-            list_is_empty_property: find_class_member(&tree, &classes, "List", "isEmpty")?,
-            list_length_property: find_class_member(&tree, &classes, "List", "length")?,
-            list_is_distinct_property: find_class_member(&tree, &classes, "List", "isDistinct")?,
+            list_join_method: find_class_member(file, &tree, &classes, "List", "join")?,
+            list_is_distinct_by_method: find_class_member(
+                file,
+                &tree,
+                &classes,
+                "List",
+                "isDistinctBy",
+            )?,
+            list_fold_method: find_class_member(file, &tree, &classes, "List", "fold")?,
+            list_fold_indexed_method: find_class_member(
+                file,
+                &tree,
+                &classes,
+                "List",
+                "foldIndexed",
+            )?,
+            list_is_empty_property: find_class_member(file, &tree, &classes, "List", "isEmpty")?,
+            list_length_property: find_class_member(file, &tree, &classes, "List", "length")?,
+            list_is_distinct_property: find_class_member(
+                file,
+                &tree,
+                &classes,
+                "List",
+                "isDistinct",
+            )?,
 
             // Map members duplicated on Mapping
-            map_contains_key_method: find_class_member(&tree, &classes, "Map", "containsKey")?,
-            map_get_or_null_method: find_class_member(&tree, &classes, "Map", "getOrNull")?,
-            map_fold_method: find_class_member(&tree, &classes, "Map", "fold")?,
-            map_is_empty_property: find_class_member(&tree, &classes, "Map", "isEmpty")?,
-            map_length_property: find_class_member(&tree, &classes, "Map", "length")?,
-            map_keys_property: find_class_member(&tree, &classes, "Map", "keys")?,
+            map_contains_key_method: find_class_member(
+                file,
+                &tree,
+                &classes,
+                "Map",
+                "containsKey",
+            )?,
+            map_get_or_null_method: find_class_member(file, &tree, &classes, "Map", "getOrNull")?,
+            map_fold_method: find_class_member(file, &tree, &classes, "Map", "fold")?,
+            map_is_empty_property: find_class_member(file, &tree, &classes, "Map", "isEmpty")?,
+            map_length_property: find_class_member(file, &tree, &classes, "Map", "length")?,
+            map_keys_property: find_class_member(file, &tree, &classes, "Map", "keys")?,
+            tree,
         })
-    }
-
-    /// Load `pkl:base` from the embedded standard-library artifact.
-    pub fn load_embedded() -> Result<Self, BaseModuleError> {
-        Self::load(pkl_stdlib::BASE)
     }
 
     pub fn tree(&self) -> &Arc<SyntaxTree> {
         &self.tree
     }
 
-    pub fn file_id(&self) -> FileId {
+    pub fn file_id(&self) -> File {
         self.file_id
     }
 
@@ -192,7 +204,7 @@ impl BaseModule {
                 nodes::Class::cast(tree, id).is_some() && tree.name(id) == Some(fn_class_name)
             })?;
         let classes = [id];
-        let Ok(fn_class) = find_class(tree, &classes, fn_class_name) else {
+        let Ok(fn_class) = find_class(self.file_id, tree, &classes, fn_class_name) else {
             return None;
         };
         Some(fn_class)
@@ -326,33 +338,38 @@ impl BaseModule {
     }
 }
 
-fn find_class(tree: &SyntaxTree, classes: &[NodeId], name: &str) -> Result<Type, BaseModuleError> {
+fn find_class(
+    file: File,
+    tree: &SyntaxTree,
+    classes: &[NodeId],
+    name: &str,
+) -> Result<Type, BaseModuleError> {
     let name = unquote_identifier(name);
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {
         return Err(BaseModuleError::MissingClass(name.to_string()));
     };
-    Ok(Type::class(NodeRef {
-        file: FileId::BASE,
-        value: *id,
-    }))
+    Ok(Type::class(NodeRef { file, value: *id }))
 }
 
-fn find_alias(tree: &SyntaxTree, aliases: &[NodeId], name: &str) -> Result<Type, BaseModuleError> {
+fn find_alias(
+    file: File,
+    tree: &SyntaxTree,
+    aliases: &[NodeId],
+    name: &str,
+) -> Result<Type, BaseModuleError> {
     let name = unquote_identifier(name);
     let Some(id) = aliases.iter().find(|&c| tree.name(*c) == Some(name)) else {
         return Err(BaseModuleError::MissingAlias(name.to_string()));
     };
 
     Ok(Type::Alias {
-        alias_node: NodeRef {
-            file: FileId::BASE,
-            value: *id,
-        },
+        alias_node: NodeRef { file, value: *id },
         type_args: vec![],
     })
 }
 
 fn find_class_member(
+    file: File,
     tree: &SyntaxTree,
     classes: &[NodeId],
     class_name: &str,
@@ -376,7 +393,7 @@ fn find_class_member(
         });
     };
     Ok(NodeRef {
-        file: FileId::BASE,
+        file,
         value: member_id,
     })
 }

@@ -13,7 +13,7 @@ pub mod ty;
 pub use base_module::{BaseModule, BaseModuleError};
 pub use constraint::{CompareOp, ConstraintExpr, ConstraintValue};
 pub use context::{AnalysisContext, ImportResolution};
-pub use file_id::{FileId, InFile, NodeRef};
+pub use file_id::{InFile, NodeRef};
 pub use ty::{Type, UnionMembers};
 
 mod members;

@@ -31,7 +31,10 @@ async fn main() {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    let workspace = Arc::new(parking_lot::Mutex::new(Workspace::new()));
+    let workspace = tokio::task::spawn_blocking(Workspace::new)
+        .await
+        .expect("workspace bootstrap task");
+    let workspace = Arc::new(parking_lot::Mutex::new(workspace));
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     // Custom `pkl/*` RPC methods

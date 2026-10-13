@@ -53,13 +53,16 @@ async fn diagnostics(client: &mut LspClient, uri: &str) -> Value {
     }
 }
 async fn at(client: &mut LspClient, method: &str, uri: &str, source: &str, token: &str) -> Value {
-    let mut response = client
-        .request(
-            method,
-            json!({"textDocument":{"uri":uri},"position":position(source,token)}),
-        )
-        .await;
-    assert!(response.get("error").is_none(), "{response}");
+    let params = json!({"textDocument":{"uri":uri},"position":position(source,token)});
+    let mut response = client.request(method, params.clone()).await;
+    if response.get("error").is_some() {
+        assert_eq!(response["error"]["code"], -32801, "{response}");
+        response = client.request(method, params).await;
+    }
+    assert!(
+        response.get("error").is_none(),
+        "quiescent retry failed: {response}"
+    );
     response["result"].take()
 }
 
@@ -562,5 +565,191 @@ async fn typed_syntax_uses_if_branches_and_real_null_safe_tokens() {
             .unwrap();
         assert_eq!(declaration, expected, "{hover}");
     }
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn watched_disk_changes_republish_importer_diagnostics_and_recover_missing_targets() {
+    let temp = tempfile::tempdir().unwrap();
+    let target_path = temp.path().join("library.pkl");
+    let target = uri(&target_path);
+    let main = uri(&temp.path().join("main.pkl"));
+    let source = "import \"./library.pkl\" as library\nanswer = library.value\n";
+    fs::write(&target_path, "value: Int = 1\n").unwrap();
+    let mut client = LspClient::spawn(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path()).await;
+    let response = client
+        .request(
+            "initialize",
+            json!({
+                "rootUri":uri(temp.path()),
+                "workspaceFolders":[{"uri":uri(temp.path()),"name":"fixture"}],
+                "capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}
+            }),
+        )
+        .await;
+    assert!(response.get("error").is_none(), "{response}");
+    client.notify("initialized", json!({})).await;
+    let registration = client.notification("client/registerCapability").await;
+    let registrations = registration["params"]["registrations"].as_array().unwrap();
+    let watchers = registrations
+        .iter()
+        .find(|entry| entry["method"] == "workspace/didChangeWatchedFiles")
+        .unwrap()["registerOptions"]["watchers"]
+        .as_array()
+        .unwrap();
+    let mut patterns: Vec<_> = watchers
+        .iter()
+        .map(|watcher| watcher["globPattern"].as_str().unwrap())
+        .collect();
+    patterns.sort_unstable();
+    assert_eq!(
+        patterns,
+        ["**/*.pkl", "**/PklProject", "**/PklProject.deps.json"]
+    );
+    for watcher in watchers {
+        assert_eq!(watcher["kind"], 7);
+    }
+    open(&mut client, &main, source).await;
+    assert_eq!(
+        diagnostics(&mut client, &main).await["diagnostics"],
+        json!([])
+    );
+    // The importer stays at version 1 throughout: only watched disk inputs change.
+    for (kind, text, expect_error) in [
+        (2, Some("other: String = \"changed\"\n"), true),
+        (2, Some("value: String = \"recovered\"\n"), false),
+        (3, None, true),
+        (1, Some("value: Int = 42\n"), false),
+    ] {
+        if let Some(text) = text {
+            fs::write(&target_path, text).unwrap();
+        } else {
+            fs::remove_file(&target_path).unwrap();
+        }
+        client
+            .notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":target,"type":kind}]}),
+            )
+            .await;
+        let published = diagnostics(&mut client, &main).await;
+        assert_eq!(published["version"], 1, "{published}");
+        let errors = published["diagnostics"].as_array().unwrap();
+        if expect_error {
+            if kind == 2 {
+                assert_eq!(errors.len(), 1, "{published}");
+                assert_eq!(errors[0]["range"], range(1, 17, 22));
+            } else {
+                assert_eq!(errors.len(), 1, "{published}");
+                assert_eq!(errors[0]["range"], range(0, 7, 22));
+            }
+        } else {
+            assert!(errors.is_empty(), "{published}");
+        }
+    }
+    let hover = at(&mut client, "textDocument/hover", &main, source, "value").await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: Int"),
+        "{hover}"
+    );
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn watched_archive_changes_refresh_present_and_missing_members() {
+    fn write_archive(path: &Path, value: &str, include_future: bool) {
+        let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        zip.start_file("existing.pkl", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(value.as_bytes()).unwrap();
+        if include_future {
+            zip.start_file("future.pkl", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"value = 1\n").unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    // The backing archive is covered by the registered **/*.pkl watch pattern.
+    let archive = temp.path().join("library.pkl");
+    write_archive(&archive, "value: Int = 1\n", false);
+    let mut client = LspClient::spawn(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path()).await;
+    let initialized = client
+        .request(
+            "initialize",
+            json!({
+                "rootUri":uri(temp.path()),
+                "capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}},
+                "initializationOptions":{"pkl":{"modulepath":[archive]}}
+            }),
+        )
+        .await;
+    assert!(initialized.get("error").is_none(), "{initialized}");
+    client.notify("initialized", json!({})).await;
+    let main = uri(&temp.path().join("main.pkl"));
+    let source = "import \"modulepath:/existing.pkl\" as existing\nimport \"modulepath:/future.pkl\" as future\nanswer = existing.value\n";
+    open(&mut client, &main, source).await;
+    assert_eq!(
+        diagnostics(&mut client, &main).await["diagnostics"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    write_archive(&archive, "value: String = \"updated\"\n", true);
+    client
+        .notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri(&archive),"type":2}]}),
+        )
+        .await;
+    assert_eq!(
+        diagnostics(&mut client, &main).await["diagnostics"],
+        json!([])
+    );
+    let hover = at(&mut client, "textDocument/hover", &main, source, "value").await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: String"),
+        "{hover}"
+    );
+    fs::remove_file(&archive).unwrap();
+    client
+        .notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri(&archive),"type":3}]}),
+        )
+        .await;
+    assert_eq!(
+        diagnostics(&mut client, &main).await["diagnostics"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    write_archive(&archive, "value: Boolean = true\n", true);
+    client
+        .notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri(&archive),"type":1}]}),
+        )
+        .await;
+    assert_eq!(
+        diagnostics(&mut client, &main).await["diagnostics"],
+        json!([])
+    );
+    let hover = at(&mut client, "textDocument/hover", &main, source, "value").await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: Boolean"),
+        "{hover}"
+    );
     client.shutdown().await;
 }

@@ -1,4 +1,4 @@
-//! Imported-module parsing contracts, including editor-update snapshot behavior.
+//! Imported-module parsing and owned tree observations across editor updates.
 
 use std::fs;
 use std::path::Path;
@@ -6,24 +6,21 @@ use std::sync::Arc;
 
 use fluent_uri::Uri;
 use lspkl::Workspace;
+use pkl_db::{File, ImportResolution, parse, resolve_import};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_vfs::VirtualFile;
 
 fn file_uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
 }
 
-fn importing_source(
-    state: &mut Workspace,
-    dir: &Path,
-) -> (Arc<VirtualFile>, Arc<SyntaxTree>, NodeId) {
+fn importing_source(state: &mut Workspace, dir: &Path) -> (File, Arc<SyntaxTree>, NodeId) {
     let file = open(
         state,
         file_uri(&dir.join("main.pkl")),
         "import \"./library.pkl\"\n".into(),
         Some(1),
     );
-    let tree = state.snapshot().file_manager.parse(&file.url).unwrap();
+    let tree = parse(&state.db, file).as_ref().unwrap().clone();
     let import = tree
         .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
         .unwrap();
@@ -43,21 +40,20 @@ fn resolves_and_parses_the_target_not_the_importing_tree() {
     let target_path = temp.path().join("library.pkl");
     fs::write(&target_path, "answer = 42\n").unwrap();
     let mut state = Workspace::new();
-    let (source, tree, import) = importing_source(&mut state, temp.path());
+    let (source, _tree, import) = importing_source(&mut state, temp.path());
 
-    let module = state
-        .snapshot()
-        .resolve_import_module(&tree, import, &source)
-        .unwrap()
-        .unwrap();
+    let ImportResolution::Single(target) = resolve_import(&state.db, source, import, None) else {
+        panic!("target must resolve")
+    };
+    let target_tree = parse(&state.db, target).as_ref().unwrap();
 
-    assert_eq!(module.file.url, file_uri(&target_path));
-    assert_eq!(property_name(&module.tree), "answer");
-    assert_eq!(module.tree.source(), "answer = 42\n");
+    assert_eq!(*target.uri(&state.db), file_uri(&target_path));
+    assert_eq!(property_name(target_tree), "answer");
+    assert_eq!(target_tree.source(), "answer = 42\n");
 }
 
 #[test]
-fn editor_changes_refresh_imported_tree_without_mutating_previous_snapshot() {
+fn editor_changes_refresh_imported_tree_without_mutating_owned_observations() {
     let temp = tempfile::tempdir().unwrap();
     let target_path = temp.path().join("library.pkl");
     fs::write(&target_path, "diskValue = 0\n").unwrap();
@@ -68,42 +64,42 @@ fn editor_changes_refresh_imported_tree_without_mutating_previous_snapshot() {
         "oldValue = 1\n".into(),
         Some(1),
     );
-    let (source, tree, import) = importing_source(&mut state, temp.path());
-    let before = state
-        .snapshot()
-        .resolve_import_module(&tree, import, &source)
-        .unwrap()
-        .unwrap();
-    assert!(Arc::ptr_eq(&before.file, &opened));
-    assert_eq!(property_name(&before.tree), "oldValue");
+    let (source, _tree, import) = importing_source(&mut state, temp.path());
+    let ImportResolution::Single(before_file) = resolve_import(&state.db, source, import, None)
+    else {
+        panic!("target must resolve")
+    };
+    let before = parse(&state.db, before_file).as_ref().unwrap().clone();
+    assert_eq!(before_file, opened);
+    assert_eq!(property_name(&before), "oldValue");
 
-    change(&mut state, &opened.url, "newValue = 2\n", 2);
-    let after = state
-        .snapshot()
-        .resolve_import_module(&tree, import, &source)
-        .unwrap()
-        .unwrap();
+    change(&mut state, &file_uri(&target_path), "newValue = 2\n", 2);
+    let ImportResolution::Single(after_file) = resolve_import(&state.db, source, import, None)
+    else {
+        panic!("target must resolve")
+    };
+    let after = parse(&state.db, after_file).as_ref().unwrap();
 
-    assert_eq!(after.file.version(), Some(2));
-    assert_eq!(property_name(&after.tree), "newValue");
-    assert_eq!(after.tree.source(), "newValue = 2\n");
-    assert_eq!(property_name(&before.tree), "oldValue");
-    assert_eq!(before.tree.source(), "oldValue = 1\n");
+    assert_eq!(after_file.version(&state.db), Some(2));
+    assert_eq!(property_name(after), "newValue");
+    assert_eq!(after.source(), "newValue = 2\n");
+    assert_eq!(property_name(&before), "oldValue");
+    assert_eq!(before.source(), "oldValue = 1\n");
 }
 
 #[test]
 fn missing_target_is_unresolved_rather_than_a_parse_error() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = Workspace::new();
-    let (source, tree, import) = importing_source(&mut state, temp.path());
+    let (source, _tree, import) = importing_source(&mut state, temp.path());
 
-    assert!(
-        state
-            .snapshot()
-            .resolve_import_module(&tree, import, &source)
-            .expect("unresolved import is not a parsing error")
-            .is_none()
-    );
+    assert!(parse(&state.db, source).is_ok());
+    assert!(matches!(
+        resolve_import(&state.db, source, import, None),
+        ImportResolution::Unresolved {
+            package_to_download: None
+        }
+    ));
 }
 
 fn open(
@@ -111,7 +107,7 @@ fn open(
     url: Uri<String>,
     text: String,
     version: Option<i32>,
-) -> Arc<pkl_vfs::VirtualFile> {
+) -> pkl_db::File {
     state
         .apply_open(lsp_types::DidOpenTextDocumentParams {
             text_document: lsp_types::TextDocumentItem {
@@ -122,7 +118,7 @@ fn open(
             },
         })
         .unwrap();
-    state.snapshot().document(url.as_str()).unwrap()
+    state.document(url.as_str()).unwrap()
 }
 
 fn change(state: &mut Workspace, url: &Uri<String>, text: &str, version: i32) {

@@ -151,7 +151,7 @@ fn check_recursive(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) {
     let Some(source_tree) = ctx.tree(file) else {
@@ -173,7 +173,7 @@ fn check_const_access(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) {
     let Some(source_tree) = ctx.tree(file) else {
@@ -197,7 +197,7 @@ fn check_static_body_access(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) {
     let Some(source_tree) = ctx.tree(file) else {
@@ -247,7 +247,7 @@ fn check_argument_count(
     access: NodeId,
     target: NodeRef,
     holder: &mut DiagnosticsHolder,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) {
     let Some(source_tree) = ctx.tree(file) else {
@@ -353,7 +353,7 @@ fn target_is_const(target: NodeRef, ctx: &AnalysisContext) -> bool {
 }
 
 /// Returns `(is_const, is_in_const_scope)` for the given access node.
-fn const_scope(access: NodeId, file: pkl_types::FileId, ctx: &AnalysisContext) -> (bool, bool) {
+fn const_scope(access: NodeId, file: pkl_db::File, ctx: &AnalysisContext) -> (bool, bool) {
     let Some(source_tree) = ctx.tree(file) else {
         return (false, false);
     };
@@ -385,7 +385,7 @@ fn const_scope(access: NodeId, file: pkl_types::FileId, ctx: &AnalysisContext) -
 /// Resolve a `SuperAccessExpr` to the inherited member it refers to.
 fn resolve_super_access(
     access: NodeId,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
     let source_tree = ctx.tree(file)?;
@@ -404,7 +404,7 @@ fn check_redundant_conversion(
     receiver_type: &Type,
     outer_target: NodeRef,
     holder: &mut DiagnosticsHolder,
-    file: pkl_types::FileId,
+    file: pkl_db::File,
     ctx: &AnalysisContext,
 ) {
     let Some(source_tree) = ctx.tree(file) else {

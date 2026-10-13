@@ -91,14 +91,7 @@ pub(crate) fn https_contents(
     client: &reqwest::blocking::Client,
     cache: &Path,
 ) -> Result<String, FileError> {
-    let parsed =
-        url::Url::parse(uri.as_str()).map_err(|_| FileError::InvalidSource(uri.to_string()))?;
-    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
-        return Err(FileError::InvalidSource(uri.to_string()));
-    }
-    // Hash the entire canonical URI: host, port, path and query all participate.
-    let key = format!("{:x}", Sha256::digest(uri.as_str().as_bytes()));
-    let path = cache.join("https").join(format!("{key}.pkl"));
+    let path = https_cache_path(uri, cache)?;
     match fs::read_to_string(&path) {
         Ok(contents) => return Ok(contents),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -131,4 +124,15 @@ pub fn default_cache() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache")))
         .unwrap_or_else(std::env::temp_dir)
         .join("lspkl/modules")
+}
+
+pub(crate) fn https_cache_path(uri: &Uri<String>, cache: &Path) -> Result<PathBuf, FileError> {
+    let parsed =
+        url::Url::parse(uri.as_str()).map_err(|_| FileError::InvalidSource(uri.to_string()))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
+        return Err(FileError::InvalidSource(uri.to_string()));
+    }
+    // Hash the entire canonical URI: host, port, path and query all participate.
+    let key = format!("{:x}", Sha256::digest(uri.as_str().as_bytes()));
+    Ok(cache.join("https").join(format!("{key}.pkl")))
 }

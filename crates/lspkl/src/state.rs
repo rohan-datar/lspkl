@@ -1,248 +1,258 @@
-//! Process-wide state shared across LSP handlers.
+//! Notification-side workspace ownership and short-lived Salsa request handles.
 
-use std::collections::{HashMap, hash_map::Entry};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 
+use fluent_uri::Uri;
 use lsp_features::positions::PositionEncoding;
+use pkl_db::{Db, DirectoryUpdate, File, FileStatus, RootDatabase, settings::WorkspaceSettings};
 use pkl_diagnostics::DiagnosticsEngine;
-use pkl_project::PklProject;
-use pkl_project::cli::PklCli;
-use pkl_project::import_resolver::ImportResolver;
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::{AnalysisContext, BaseModule, FileId, ImportResolution, NodeRef};
-use pkl_vfs::{FileError, FileManager, VirtualFile, url_to_path};
+use pkl_project::{PklProject, cli::PklCli, dto::ProjectDeps};
+use pkl_types::{AnalysisContext, BaseModule};
+use pkl_vfs::{FileError, Source, SourceLoader, effective_uri, url_to_path};
+use salsa::{Database, Setter};
 
-use crate::file_registry::FileRegistry;
-use crate::settings::WorkspaceSettings;
+use crate::{
+    handlers::{HandlerError, Result},
+    perf,
+};
 
-/// A resolved file paired with the immutable syntax snapshot used for analysis.
-pub struct ParsedModule {
-    pub file_id: FileId,
-    pub file: Arc<VirtualFile>,
-    pub tree: Arc<SyntaxTree>,
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceError {
+    #[error(transparent)]
+    Source(#[from] FileError),
+    #[error("file is not open: {0}")]
+    NotOpen(Uri<String>),
 }
 
-/// Snapshot used for analysis during a single request
-pub struct AnalysisSnapshot {
-    pub module: ParsedModule,
-    pub trees: HashMap<FileId, Arc<SyntaxTree>>,
-    pub imports: HashMap<NodeRef, ImportResolution>,
-}
-
-impl AnalysisSnapshot {
-    pub fn context<'a>(&'a self, base: &'a BaseModule) -> AnalysisContext<'a> {
-        AnalysisContext::new(base, &self.trees, &self.imports)
-    }
-}
-
-type PendingModule = (FileId, Arc<VirtualFile>, Option<Arc<PklProject>>);
-
-/// Exclusive notification-side workspace owner. Requests use immutable snapshots.
-#[derive(Debug)]
+/// Owns the writable database. No idle database clones may survive an input write.
 pub struct Workspace {
-    current: Snapshot,
-    buffers: Arc<HashMap<fluent_uri::Uri<String>, Arc<VirtualFile>>>,
+    pub db: RootDatabase,
+    project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
+    settings: Arc<WorkspaceSettings>,
+    base_module: Arc<BaseModule>,
+    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
+    position_encoding: PositionEncoding,
+    client_configuration: bool,
+    pub watched_files: bool,
+    generation: u64,
+    project_generation: u64,
+    next_reload: u64,
+    // Newer source reads inherit pending watched-project invalidation intent.
+    pending_reloads: HashMap<Uri<String>, (u64, bool)>,
+    // Editor identities are distinct even when they resolve to the same Salsa input.
+    open_documents: HashMap<lsp_types::Uri, Uri<String>>,
+    directory_reload: u64,
 }
 
-/// Cheap request capture. Open files and settings retain their captured epoch;
-/// loader/project/package caches remain shared until the later database cutover.
+/// A database clone owned only by an actively running request or worker.
 #[derive(Clone)]
 pub struct Snapshot {
-    pub file_manager: Arc<FileManager>,
-    pub file_registry: Arc<parking_lot::Mutex<FileRegistry>>,
-    base_module: Arc<OnceLock<BaseModule>>,
-    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
+    pub db: RootDatabase,
     pub project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
-    pub package_manager: Arc<parking_lot::Mutex<pkl_project::package_manager::PackageManager>>,
     pub settings: Arc<WorkspaceSettings>,
-    pub client_configuration: bool,
+    base_module: Arc<BaseModule>,
+    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
     pub position_encoding: PositionEncoding,
+    pub client_configuration: bool,
     pub generation: u64,
-    pub open_documents: Arc<HashMap<FileId, Arc<lsp_types::Uri>>>,
-    buffers: Arc<HashMap<fluent_uri::Uri<String>, Arc<VirtualFile>>>,
+    pub project_generation: u64,
 }
 
+impl std::fmt::Debug for Workspace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workspace")
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
 impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Snapshot")
             .field("generation", &self.generation)
-            .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
-
 impl Default for Workspace {
     fn default() -> Self {
-        let settings = Arc::new(WorkspaceSettings::default());
-        let buffers = Arc::new(HashMap::new());
-        let file_manager = Arc::new(FileManager::new().with_open_documents(
-            Arc::clone(&buffers),
-            settings.effective_cache_dir().to_owned(),
-        ));
-        Self {
-            buffers: Arc::clone(&buffers),
-            current: Snapshot {
-                file_manager,
-                file_registry: Arc::new(parking_lot::Mutex::new(FileRegistry::default())),
-                base_module: Arc::new(OnceLock::new()),
-                diagnostics: Arc::new(LazyLock::new(DiagnosticsEngine::default)),
-                project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
-                package_manager: Arc::new(parking_lot::Mutex::new(
-                    pkl_project::package_manager::PackageManager::new(Default::default()),
-                )),
-                settings,
-                client_configuration: false,
-                position_encoding: PositionEncoding::default(),
-                generation: 0,
-                open_documents: Arc::new(HashMap::new()),
-                buffers,
-            },
-        }
+        Self::with_database(RootDatabase::default())
     }
 }
-
 impl Workspace {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// No parsing, I/O, map traversal, or source copies occurs during capture.
+    /// Bootstrap immutable SDK analysis before exposing any request snapshots.
+    pub fn with_database(db: RootDatabase) -> Self {
+        let uri = Uri::parse("pkl:base".to_owned()).expect("embedded base URI");
+        let file = db.file(&uri).expect("embedded base input");
+        let tree = pkl_db::parse(&db, file)
+            .as_ref()
+            .expect("embedded base syntax")
+            .clone();
+        let base_module =
+            Arc::new(BaseModule::from_tree(file, tree).expect("embedded base declarations"));
+        let settings = Arc::new(db.config().settings(&db).clone());
+        Self {
+            db,
+            project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
+            settings,
+            base_module,
+            diagnostics: Arc::new(LazyLock::new(DiagnosticsEngine::default)),
+            position_encoding: PositionEncoding::default(),
+            client_configuration: false,
+            watched_files: false,
+            generation: 0,
+            project_generation: 0,
+            next_reload: 0,
+            pending_reloads: HashMap::new(),
+            open_documents: HashMap::new(),
+            directory_reload: 0,
+        }
+    }
+    /// No parsing, I/O, traversal, or text copying occurs during capture.
     pub fn snapshot(&self) -> Snapshot {
-        self.current.clone()
+        Snapshot {
+            db: self.db.clone(),
+            project_manager: Arc::clone(&self.project_manager),
+            settings: Arc::clone(&self.settings),
+            base_module: Arc::clone(&self.base_module),
+            diagnostics: Arc::clone(&self.diagnostics),
+            position_encoding: self.position_encoding,
+            client_configuration: self.client_configuration,
+            generation: self.generation,
+            project_generation: self.project_generation,
+        }
     }
-
+    pub(crate) fn project_generation(&self) -> u64 {
+        self.project_generation
+    }
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
     pub fn invalidate_analysis(&mut self) {
-        self.current.generation += 1;
+        self.generation += 1;
     }
-
-    fn refresh_buffers(&mut self) {
-        self.current.buffers = Arc::clone(&self.buffers);
-        self.current.file_manager = Arc::new(self.current.file_manager.with_open_documents(
-            Arc::clone(&self.buffers),
-            self.current.settings.effective_cache_dir().to_owned(),
-        ));
-        self.invalidate_analysis();
+    pub fn document(&self, uri: &str) -> Option<File> {
+        document(&self.db, uri)
     }
-
+    pub fn open_document_uris(&self) -> Vec<lsp_types::Uri> {
+        self.open_documents.keys().cloned().collect()
+    }
+    pub(crate) fn is_document_open(&self, uri: &lsp_types::Uri) -> bool {
+        self.open_documents.contains_key(uri)
+    }
     pub fn apply_open(
         &mut self,
         params: lsp_types::DidOpenTextDocumentParams,
-    ) -> Result<(), FileError> {
+    ) -> std::result::Result<(), FileError> {
         let document = params.text_document;
-        let url =
-            pkl_vfs::effective_uri(&fluent_uri::Uri::parse(document.uri.as_str().to_owned())?)?;
-        let origin = match url.scheme().as_str() {
-            "file" => pkl_vfs::Origin::Fs { url: url.clone() },
-            "pkl" => pkl_vfs::Origin::Stdlib,
-            "https" => pkl_vfs::Origin::Https,
-            "jar" => pkl_vfs::Origin::Jar,
-            _ => pkl_vfs::Origin::Ephemeral,
-        };
-        let file = self.capture_file(url.clone(), origin, document.text, document.version)?;
-        let id = self.current.file_id(&file);
-        Arc::make_mut(&mut self.buffers).insert(url, file);
-        Arc::make_mut(&mut self.current.open_documents).insert(id, Arc::new(document.uri));
-        self.refresh_buffers();
+        let uri = effective_uri(&Uri::parse(document.uri.as_str().to_owned())?)?;
+        let _write = perf::Compute::runtime("salsa_write");
+        self.db
+            .open_file(&uri, Arc::from(document.text), Some(document.version))?;
+        self.open_documents.insert(document.uri, uri);
+        self.invalidate_analysis();
         Ok(())
     }
-
     pub fn apply_change(
         &mut self,
         params: lsp_types::DidChangeTextDocumentParams,
-    ) -> Result<(), FileError> {
-        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(
-            params.text_document.uri.as_str().to_owned(),
-        )?)?;
-        let Some(file) = self.buffers.get(&url) else {
-            return Err(FileError::NotOpen(url));
-        };
+    ) -> std::result::Result<(), WorkspaceError> {
+        let uri = effective_uri(
+            &Uri::parse(params.text_document.uri.as_str().to_owned()).map_err(FileError::from)?,
+        )?;
+        if self.document(uri.as_str()).is_none() {
+            return Err(WorkspaceError::NotOpen(uri));
+        }
         let Some(change) = params.content_changes.into_iter().last() else {
             return Ok(());
         };
-        let updated = self.capture_file(
-            url.clone(),
-            file.origin.clone(),
-            change.text,
-            params.text_document.version,
+        let _write = perf::Compute::runtime("salsa_write");
+        self.db.open_file(
+            &uri,
+            Arc::from(change.text),
+            Some(params.text_document.version),
         )?;
-        Arc::make_mut(&mut self.buffers).insert(url, updated);
-        self.refresh_buffers();
+        self.invalidate_analysis();
         Ok(())
     }
-
-    fn capture_file(
-        &self,
-        url: fluent_uri::Uri<String>,
-        origin: pkl_vfs::Origin,
-        contents: String,
-        version: i32,
-    ) -> Result<Arc<VirtualFile>, FileError> {
-        let file = if matches!(origin, pkl_vfs::Origin::Stdlib) {
-            // Embedded-source lookup only; parsing remains on the blocking analysis worker.
-            let source = self.current.file_manager.get_or_load_source(&url)?;
-            source.editor_epoch(contents, version)
-        } else {
-            VirtualFile::new(url, origin, contents, Some(version))
-        };
-        Ok(Arc::new(file))
-    }
-
+    /// End editor ownership immediately; backing I/O runs without a database handle.
     pub fn apply_close(
         &mut self,
         params: lsp_types::DidCloseTextDocumentParams,
-    ) -> Result<(), FileError> {
-        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(
-            params.text_document.uri.as_str().to_owned(),
-        )?)?;
-        // A pre-open disk entry may predate a save made while this buffer was open.
-        self.current.file_manager.close(&url);
-        if let Some(file) = Arc::make_mut(&mut self.buffers).remove(&url) {
-            let id = self.current.file_id(&file);
-            Arc::make_mut(&mut self.current.open_documents).remove(&id);
-            self.refresh_buffers();
+    ) -> std::result::Result<ReloadWork, FileError> {
+        let uri = effective_uri(&Uri::parse(params.text_document.uri.as_str().to_owned())?)?;
+        self.open_documents.remove(&params.text_document.uri);
+        if self
+            .open_documents
+            .values()
+            .any(|open_uri| open_uri == &uri)
+        {
+            self.invalidate_analysis();
+            return Ok(self.reload_work(Vec::new(), false, false));
         }
-        Ok(())
+        if let Some(file) = self.document(uri.as_str()) {
+            let _write = perf::Compute::runtime("salsa_write");
+            let status = if uri.scheme().as_str() == "pkl" {
+                FileStatus::Present
+            } else {
+                FileStatus::Missing
+            };
+            file.set_status(&mut self.db).to(status);
+            file.set_version(&mut self.db).to(None);
+            self.invalidate_analysis();
+        }
+        Ok(self.reload_work(vec![uri], false, false))
     }
-
-    // Full-sync save does not replace the editor's versioned buffer.
     pub fn apply_save(
         &mut self,
         _params: lsp_types::DidSaveTextDocumentParams,
-    ) -> Result<(), FileError> {
+    ) -> std::result::Result<(), FileError> {
         Ok(())
     }
-
     pub fn apply_settings(&mut self, mut settings: WorkspaceSettings) {
         let cli = PklCli {
             binary_path: settings.cli.path.clone(),
         };
         {
-            let mut projects = self.current.project_manager.lock();
+            let mut projects = self.project_manager.lock();
             settings.resolve_paths(projects.workspace_folders());
             projects.configure(cli.clone(), settings.projects.excluded_directories.clone());
         }
-        self.current.package_manager.lock().set_cli(cli);
-        self.current.settings = Arc::new(settings);
-        self.refresh_buffers();
+        self.project_generation += 1;
+        let _write = perf::Compute::runtime("salsa_write");
+        self.db.set_settings(settings.clone());
+        self.settings = Arc::new(settings);
+        self.invalidate_analysis();
     }
-
     pub fn apply_initialize(&mut self, params: &lsp_types::InitializeParams) {
-        self.current.position_encoding = if params
+        self.position_encoding = if params
             .capabilities
             .general
             .as_ref()
-            .and_then(|general| general.position_encodings.as_ref())
+            .and_then(|caps| caps.position_encodings.as_ref())
             .is_some_and(|encodings| encodings.contains(&lsp_types::PositionEncodingKind::UTF8))
         {
             PositionEncoding::Utf8
         } else {
             PositionEncoding::Utf16
         };
-        self.current.client_configuration = params
+        self.client_configuration = params
             .capabilities
             .workspace
             .as_ref()
             .and_then(|caps| caps.configuration)
+            .unwrap_or(false);
+        self.watched_files = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|caps| caps.did_change_watched_files.as_ref())
+            .and_then(|caps| caps.dynamic_registration)
             .unwrap_or(false);
         #[allow(deprecated)]
         let uris: Vec<_> = params
@@ -252,10 +262,10 @@ impl Workspace {
             .unwrap_or_else(|| params.root_uri.iter().collect());
         let folders = uris
             .into_iter()
-            .filter_map(|uri| fluent_uri::Uri::parse(uri.as_str().to_owned()).ok())
+            .filter_map(|uri| Uri::parse(uri.as_str().to_owned()).ok())
             .filter_map(|uri| url_to_path(&uri).ok())
             .collect();
-        self.current.project_manager.lock().initialize(folders);
+        self.project_manager.lock().initialize(folders);
         match params
             .initialization_options
             .clone()
@@ -266,207 +276,267 @@ impl Workspace {
             None => {}
         }
     }
-
     pub fn apply_workspace_folders(&mut self, params: lsp_types::DidChangeWorkspaceFoldersParams) {
-        let mut folders = self
-            .current
-            .project_manager
-            .lock()
-            .workspace_folders()
-            .to_vec();
+        let mut folders = self.project_manager.lock().workspace_folders().to_vec();
         for folder in params.event.removed {
-            if let Ok(uri) = fluent_uri::Uri::parse(folder.uri.as_str().to_owned())
+            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
                 && let Ok(path) = url_to_path(&uri)
             {
                 folders.retain(|existing| existing != &path);
             }
         }
         for folder in params.event.added {
-            if let Ok(uri) = fluent_uri::Uri::parse(folder.uri.as_str().to_owned())
+            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
                 && let Ok(path) = url_to_path(&uri)
                 && !folders.contains(&path)
             {
                 folders.push(path);
             }
         }
-        self.current.project_manager.lock().initialize(folders);
+        self.project_manager.lock().initialize(folders);
+        self.refresh_projects();
         let settings = self
-            .current
             .settings
-            .rebind(self.current.project_manager.lock().workspace_folders());
+            .rebind(self.project_manager.lock().workspace_folders());
         self.apply_settings(settings);
+    }
+    pub fn apply_project_manager(&mut self, manager: pkl_project::project_manager::ProjectManager) {
+        self.project_generation += 1;
+        self.project_manager = Arc::new(parking_lot::Mutex::new(manager));
+        self.refresh_projects();
+    }
+    pub fn refresh_projects(&mut self) {
+        let projects = self.project_manager.lock().owned_projects();
+        let _write = perf::Compute::runtime("salsa_write");
+        self.db.set_projects(projects);
+        self.invalidate_analysis();
+    }
+    pub fn prepare_watched_files(
+        &mut self,
+        params: lsp_types::DidChangeWatchedFilesParams,
+    ) -> ReloadWork {
+        let mut uris: Vec<_> = params
+            .changes
+            .into_iter()
+            .filter_map(|event| Uri::parse(event.uri.as_str().to_owned()).ok())
+            .filter_map(|uri| effective_uri(&uri).ok())
+            .collect();
+        let changed = uris.len();
+        for file in self.db.all_files() {
+            let uri = file.uri(&self.db);
+            if uri.scheme().as_str() != "jar" {
+                continue;
+            }
+            if let Ok(archive) = pkl_vfs::archive_file_uri(uri)
+                && uris[..changed].contains(&archive)
+            {
+                uris.push(uri.clone());
+            }
+        }
+        uris.sort();
+        uris.dedup();
+        self.reload_work(uris, true, true)
+    }
+    pub fn prepare_refresh(&mut self) -> ReloadWork {
+        let uris = self
+            .db
+            .all_files()
+            .into_iter()
+            .filter(|file| {
+                file.status(&self.db) != FileStatus::Open
+                    && file.uri(&self.db).scheme().as_str() != "pkl"
+            })
+            .map(|file| file.uri(&self.db).clone())
+            .collect();
+        self.reload_work(uris, true, false)
+    }
+    fn reload_work(
+        &mut self,
+        uris: Vec<Uri<String>>,
+        directories: bool,
+        watched_projects: bool,
+    ) -> ReloadWork {
+        self.next_reload += 1;
+        let token = self.next_reload;
+        let uris = uris
+            .into_iter()
+            .map(|uri| {
+                let pending = self
+                    .pending_reloads
+                    .entry(uri.clone())
+                    .or_insert((token, false));
+                *pending = (token, pending.1 || watched_projects);
+                (uri, pending.1)
+            })
+            .collect();
+        let roots = if directories {
+            self.directory_reload = token;
+            self.db.directory_roots()
+        } else {
+            Vec::new()
+        };
+        ReloadWork {
+            uris,
+            token,
+            roots,
+            loader: self.db.source_loader_handle(),
+            cache_dir: self.settings.effective_cache_dir().to_owned(),
+        }
+    }
+    pub fn apply_reload(&mut self, loaded: LoadedFiles) {
+        let _write = perf::Compute::runtime("salsa_write");
+        let mut project_changed = false;
+        for update in loaded.updates {
+            if self
+                .pending_reloads
+                .get(&update.uri)
+                .map(|pending| pending.0)
+                != Some(loaded.token)
+            {
+                continue;
+            }
+            self.pending_reloads.remove(&update.uri);
+            if let Some(path) = update.project_path {
+                project_changed |= self
+                    .project_manager
+                    .lock()
+                    .apply_watched_file(&path, update.deps);
+            }
+            if let Err(error) = self.db.apply_source(
+                &update.uri,
+                update.source.ok().map(|source| Arc::clone(&source.text)),
+            ) {
+                tracing::error!(?error, "could not install watched source");
+            }
+        }
+        if loaded.token == self.directory_reload {
+            self.db.apply_directory_updates(loaded.directories);
+        }
+        if project_changed {
+            self.project_generation += 1;
+            let projects = self.project_manager.lock().owned_projects();
+            self.db.set_projects(projects);
+        }
+        self.invalidate_analysis();
+    }
+    pub fn apply_loaded_source(
+        &mut self,
+        source: Arc<Source>,
+    ) -> std::result::Result<(), FileError> {
+        let _write = perf::Compute::runtime("salsa_write");
+        let uri = source.url.clone();
+        self.db.apply_source(&uri, Some(Arc::clone(&source.text)))?;
+        self.invalidate_analysis();
+        Ok(())
     }
 }
 
+fn document(db: &RootDatabase, uri: &str) -> Option<File> {
+    let uri = Uri::parse(uri.to_owned()).ok()?;
+    let file = db.known_file(&uri)?;
+    (file.status(db) == FileStatus::Open).then_some(file)
+}
 impl Snapshot {
+    pub fn document(&self, uri: &str) -> Option<File> {
+        document(&self.db, uri)
+    }
+    pub fn document_version(&self, uri: &str) -> Option<i32> {
+        self.document(uri).and_then(|file| file.version(&self.db))
+    }
     pub fn base_module(&self) -> &BaseModule {
-        self.base_module.get_or_init(|| {
-            let uri = fluent_uri::Uri::parse("pkl:base".to_owned()).expect("static base URI");
-            let file = self
-                .file_manager
-                .get_or_load_source(&uri)
-                .expect("embedded base source");
-            let tree = file.parsed_tree().expect("embedded base syntax");
-            BaseModule::from_tree(tree).expect("embedded base declarations")
-        })
+        &self.base_module
+    }
+    pub fn context(&self, root: File) -> AnalysisContext<'_> {
+        AnalysisContext::new(self.base_module(), &self.db, root)
     }
     pub fn diagnostics(&self) -> &DiagnosticsEngine {
         &self.diagnostics
     }
-
-    /// Only captured editor buffers qualify as request roots, never loader entries.
-    pub fn document(&self, uri: &str) -> Option<Arc<VirtualFile>> {
-        let url = pkl_vfs::effective_uri(&fluent_uri::Uri::parse(uri.to_owned()).ok()?).ok()?;
-        self.buffers.get(&url).cloned()
-    }
-
-    pub fn open_document_analysis(&self, uri: &str) -> Result<Option<AnalysisSnapshot>, FileError> {
-        self.document(uri)
-            .map(|file| {
-                self.parse_module(file)
-                    .and_then(|module| self.prepare_analysis(module))
-            })
-            .transpose()
-    }
-
-    fn project_for(&self, source: &VirtualFile) -> Option<Arc<PklProject>> {
-        let path = url_to_path(&source.url).ok()?;
-        self.project_manager.lock().get_pkl_project_shared(&path)
-    }
-
-    /// Resolve a single URI owner; globs have a separate multi-target path.
-    pub fn resolve_import_file(
-        &self,
-        tree: &SyntaxTree,
-        import: NodeId,
-        source: &VirtualFile,
-    ) -> Option<Arc<VirtualFile>> {
-        if !tree.kind(import).is_module_uri_owner() || tree.is_glob_import(import) {
-            return None;
-        }
-        let literal = tree.child(import, NodeKind::is_string_literal)?;
-        let uri = tree.escaped_string_literal(literal)?;
-        let settings = &self.settings;
-        let cache_dir = settings.effective_cache_dir();
-        let project = self.project_for(source);
-        ImportResolver::with_settings(&self.file_manager, &settings.module_paths, cache_dir)
-            .resolve_file(&uri, source, project.as_deref())
-    }
-
-    pub fn resolve_import_module(
-        &self,
-        tree: &SyntaxTree,
-        import: NodeId,
-        source: &VirtualFile,
-    ) -> Result<Option<ParsedModule>, FileError> {
-        self.resolve_import_file(tree, import, source)
-            .map(|file| self.parse_module(file))
-            .transpose()
-    }
-
-    pub(crate) fn file_id(&self, file: &VirtualFile) -> FileId {
-        self.file_registry.lock().register(&file.url)
-    }
-
-    /// Parse through the ordinary VFS cache for every registered file.
-    pub fn parse_module(&self, file: Arc<VirtualFile>) -> Result<ParsedModule, FileError> {
-        let file_id = self.file_id(&file);
-        let tree = file.parsed_tree()?;
-        Ok(ParsedModule {
-            file_id,
-            file,
-            tree,
+    /// Catch only Salsa cancellation; unrelated panics remain ordinary worker failures.
+    pub fn run<R>(self, stage: &'static str, work: impl FnOnce(&Self) -> Result<R>) -> Result<R> {
+        salsa::Cancelled::catch(std::panic::AssertUnwindSafe(|| {
+            self.db.unwind_if_revision_cancelled();
+            let result = work(&self);
+            self.db.unwind_if_revision_cancelled();
+            result
+        }))
+        .unwrap_or_else(|_| {
+            perf::cancelled(stage);
+            Err(HandlerError::ContentModified)
         })
     }
+}
 
-    /// Include declarations, import expressions, and extends/amends clauses.
-    /// Package/remote descendants retain the importing project's dependency context.
-    /// Local files select their own nearest project. No project lock spans I/O.
-    pub fn prepare_analysis(&self, module: ParsedModule) -> Result<AnalysisSnapshot, FileError> {
-        let settings = &self.settings;
-        let cache_dir = settings.effective_cache_dir();
-        let resolver =
-            ImportResolver::with_settings(&self.file_manager, &settings.module_paths, cache_dir);
-        let base = self.base_module();
-        let mut trees = HashMap::from([(base.file_id(), Arc::clone(base.tree()))]);
-        let mut imports = HashMap::new();
-        trees.insert(module.file_id, Arc::clone(&module.tree));
-        let context = self.project_for(&module.file);
-        let mut pending = vec![(module.file_id, Arc::clone(&module.file), context)];
-        while let Some((file_id, source, inherited_context)) = pending.pop() {
-            let context = if source.url.scheme().as_str() == "file" {
-                self.project_for(&source)
-            } else {
-                inherited_context
-            };
-            let tree = Arc::clone(&trees[&file_id]);
-            let mut nodes = vec![tree.root()];
-            while let Some(node) = nodes.pop() {
-                nodes.extend(tree.children(node).iter().rev().copied());
-                if !tree.kind(node).is_module_uri_owner() {
-                    continue;
-                }
-                let Some(literal) = tree.child(node, NodeKind::is_string_literal) else {
-                    continue;
-                };
-                let Some(uri) = tree.escaped_string_literal(literal) else {
-                    continue;
-                };
-                let key = NodeRef::new(file_id, node);
-                if tree.is_glob_import(node) {
-                    let mut targets = Vec::new();
-                    for file in resolver.resolve_glob(&uri, &source, context.as_deref()) {
-                        targets.push(self.pin_target(file, &context, &mut trees, &mut pending)?);
-                    }
-                    let resolution = if targets.is_empty() {
-                        resolver
-                            .missing_package_uri(&uri, &source, context.as_deref())
-                            .map(|uri| ImportResolution::Unresolved {
-                                package_to_download: Some(uri),
-                            })
-                            .unwrap_or(ImportResolution::Glob(targets))
-                    } else {
-                        ImportResolution::Glob(targets)
-                    };
-                    imports.insert(key, resolution);
-                } else if let Some(file) = resolver.resolve_file(&uri, &source, context.as_deref())
-                {
-                    let target = self.pin_target(file, &context, &mut trees, &mut pending)?;
-                    imports.insert(key, ImportResolution::Single(target));
+/// No Salsa handles: slow reads cannot hold up input writes or editor notifications.
+pub struct ReloadWork {
+    uris: Vec<(Uri<String>, bool)>,
+    token: u64,
+    roots: Vec<Uri<String>>,
+    loader: Arc<dyn SourceLoader + Send + Sync>,
+    cache_dir: PathBuf,
+}
+pub struct LoadedFiles {
+    token: u64,
+    updates: Vec<LoadedFile>,
+    directories: Vec<DirectoryUpdate>,
+}
+struct LoadedFile {
+    uri: Uri<String>,
+    source: std::result::Result<Arc<Source>, FileError>,
+    project_path: Option<PathBuf>,
+    deps: Option<ProjectDeps>,
+}
+impl ReloadWork {
+    pub fn load(self) -> LoadedFiles {
+        let updates = self
+            .uris
+            .into_iter()
+            .map(|(uri, watched_projects)| {
+                // Only explicit watcher events invalidate derived project metadata.
+                // Closing a document or refreshing sources must retain synced routing.
+                let project_path = watched_projects
+                    .then(|| url_to_path(&uri).ok())
+                    .flatten()
+                    .filter(|path| {
+                        matches!(
+                            path.file_name().and_then(|name| name.to_str()),
+                            Some("PklProject" | "PklProject.deps.json")
+                        )
+                    });
+                let source = self.loader.load(&uri, &self.cache_dir);
+                let deps = if project_path.as_ref().is_some_and(|path| {
+                    path.file_name()
+                        .is_some_and(|name| name == "PklProject.deps.json")
+                }) {
+                    source.as_ref().ok().and_then(|source| {
+                        match PklProject::load_project_deps(source.contents()) {
+                            Ok(deps) => Some(deps),
+                            Err(error) => {
+                                tracing::error!(?error, "invalid watched project dependencies");
+                                None
+                            }
+                        }
+                    })
                 } else {
-                    imports.insert(
-                        key,
-                        ImportResolution::Unresolved {
-                            package_to_download: resolver.missing_package_uri(
-                                &uri,
-                                &source,
-                                context.as_deref(),
-                            ),
-                        },
-                    );
+                    None
+                };
+                LoadedFile {
+                    uri,
+                    source,
+                    project_path,
+                    deps,
                 }
-            }
+            })
+            .collect();
+        let directories = self
+            .roots
+            .iter()
+            .map(|root| DirectoryUpdate::load(&*self.loader, root))
+            .collect();
+        LoadedFiles {
+            token: self.token,
+            updates,
+            directories,
         }
-        Ok(AnalysisSnapshot {
-            module,
-            trees,
-            imports,
-        })
-    }
-
-    fn pin_target(
-        &self,
-        file: Arc<VirtualFile>,
-        context: &Option<Arc<PklProject>>,
-        trees: &mut HashMap<FileId, Arc<SyntaxTree>>,
-        pending: &mut Vec<PendingModule>,
-    ) -> Result<NodeRef, FileError> {
-        let file_id = self.file_id(&file);
-        if let Entry::Vacant(entry) = trees.entry(file_id) {
-            let tree = file.parsed_tree()?;
-            entry.insert(tree);
-            pending.push((file_id, file, context.clone()));
-        }
-        Ok(NodeRef::new(file_id, NodeId::ROOT))
     }
 }

@@ -1,4 +1,4 @@
-//! Validate module URI syntax and request-pinned import resolution.
+//! Validate module URI syntax and database-backed import resolution.
 
 use pkl_types::NodeRef;
 
@@ -70,8 +70,7 @@ impl Analyzer for ModuleUriAnalyzer {
             holder.add_warning(span, message);
             return true;
         }
-        // Absence means the caller supplied no graph evidence, not resolution failure.
-        match ctx.imports.get(&NodeRef::new(file, node)) {
+        match ctx.import(NodeRef::new(file, node)) {
             Some(ImportResolution::Unresolved {
                 package_to_download: Some(package),
             }) => {

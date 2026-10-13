@@ -26,11 +26,11 @@ fn same_file_definition_returns_location_in_document() {
     let base = harness::load_test_base();
     let src = "x = 1\ny = x\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 4);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 4);
 
         let result = goto_definition(
             ctx,
-            pkl_types::InFile::new(pkl_types::FileId(1), offset),
+            pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |_| Some(doc_uri()),
             harness::range,
         )
@@ -57,12 +57,12 @@ fn stdlib_target_uses_uri_callback() {
     let base = harness::load_test_base();
     let src = "x: String = \"\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 3);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 3);
 
         let uri = Uri::from_str("lspkl://stdlib/base.pkl").unwrap();
         let result = goto_definition(
             ctx,
-            pkl_types::InFile::new(pkl_types::FileId(1), offset),
+            pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |id| (id == base.file_id()).then(|| uri.clone()),
             harness::range,
         )
@@ -74,7 +74,7 @@ fn stdlib_target_uses_uri_callback() {
         assert!(
             goto_definition(
                 ctx,
-                pkl_types::InFile::new(pkl_types::FileId(1), offset),
+                pkl_types::InFile::new(harness::file(ctx, 1), offset),
                 |_| None,
                 harness::range
             )
@@ -89,12 +89,12 @@ fn whitespace_returns_none() {
     let base = harness::load_test_base();
     let src = "x = 1\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 10);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 10);
 
         assert!(
             goto_definition(
                 ctx,
-                pkl_types::InFile::new(pkl_types::FileId(1), offset),
+                pkl_types::InFile::new(harness::file(ctx, 1), offset),
                 |_| Some(doc_uri()),
                 harness::range
             )

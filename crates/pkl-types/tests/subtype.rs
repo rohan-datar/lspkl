@@ -2,20 +2,13 @@
 
 mod harness;
 
-use pkl_types::{AnalysisContext, FileId, Type};
-
-fn ctx<'a>(
-    base: &'a pkl_types::BaseModule,
-    trees: &'a std::collections::HashMap<FileId, std::sync::Arc<pkl_syntax::ast::SyntaxTree>>,
-) -> AnalysisContext<'a> {
-    AnalysisContext::new(base, trees, harness::empty_imports())
-}
+use pkl_types::Type;
 
 #[test]
 fn unknown_is_subtype_of_anything() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(Type::Unknown.is_subtype_of(base.string_type(), &ctx));
     assert!(Type::Unknown.is_subtype_of(base.int_type(), &ctx));
@@ -25,8 +18,8 @@ fn unknown_is_subtype_of_anything() {
 #[test]
 fn anything_is_subtype_of_unknown() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(base.string_type().is_subtype_of(&Type::Unknown, &ctx));
     assert!(Type::Nothing.is_subtype_of(&Type::Unknown, &ctx));
@@ -35,8 +28,8 @@ fn anything_is_subtype_of_unknown() {
 #[test]
 fn nothing_is_subtype_of_anything() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(Type::Nothing.is_subtype_of(base.string_type(), &ctx));
     assert!(Type::Nothing.is_subtype_of(base.int_type(), &ctx));
@@ -45,8 +38,8 @@ fn nothing_is_subtype_of_anything() {
 #[test]
 fn string_is_subtype_of_any_but_not_int() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(base.string_type().is_subtype_of(base.any_type(), &ctx));
     assert!(!base.string_type().is_subtype_of(base.int_type(), &ctx));
@@ -55,8 +48,8 @@ fn string_is_subtype_of_any_but_not_int() {
 #[test]
 fn string_literal_is_subtype_of_string() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     let lit = Type::string_literal("hello");
     assert!(lit.is_subtype_of(base.string_type(), &ctx));
@@ -67,8 +60,8 @@ fn string_literal_is_subtype_of_string() {
 #[test]
 fn union_subtype_iff_each_component_is() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     // (Int | String) <: Any : both Int and String are subtypes of Any.
     let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
@@ -81,8 +74,8 @@ fn union_subtype_iff_each_component_is() {
 #[test]
 fn member_is_subtype_of_a_union_containing_it() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
     assert!(base.int_type().is_subtype_of(&int_or_string, &ctx));
@@ -93,8 +86,8 @@ fn member_is_subtype_of_a_union_containing_it() {
 #[test]
 fn type_is_subtype_of_itself() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(base.string_type().is_subtype_of(base.string_type(), &ctx));
     assert!(base.int_type().is_subtype_of(base.int_type(), &ctx));
@@ -105,8 +98,8 @@ fn type_is_subtype_of_itself() {
 #[test]
 fn string_literal_union_accepts_only_its_values() {
     let base = harness::load_test_base();
-    let trees = harness::pinned(&base, std::sync::Arc::new(pkl_syntax::parse("").unwrap()));
-    let ctx = ctx(&base, &trees);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
     let union = Type::union(
         [Type::string_literal("foo"), Type::string_literal("bar")],
         &ctx,

@@ -31,16 +31,29 @@ pub enum ParseError {
 
 /// Parse a Pkl source string into a [`SyntaxTree`].
 pub fn parse(source: &str) -> Result<SyntaxTree, ParseError> {
+    parse_with_line_index(
+        std::sync::Arc::from(source),
+        std::sync::Arc::new(crate::LineIndex::new(source)),
+    )
+}
+
+/// Parse shared source using its already-computed line index. The index must describe `source`.
+pub fn parse_with_line_index(
+    source: std::sync::Arc<str>,
+    line_index: std::sync::Arc<crate::LineIndex>,
+) -> Result<SyntaxTree, ParseError> {
     let mut parser = Parser::new();
     parser
         .set_language(grammar())
         .map_err(|e| ParseError::Language(e.to_string()))?;
 
-    let ts_tree = parser.parse(source, None).ok_or(ParseError::Halted)?;
+    let ts_tree = parser
+        .parse(source.as_ref(), None)
+        .ok_or(ParseError::Halted)?;
 
     let mut builder = TreeBuilder::new();
     builder.visit(ts_tree.root_node(), None, None);
-    Ok(SyntaxTree::from_parts(source.to_string(), builder.nodes))
+    Ok(SyntaxTree::from_parts(source, builder.nodes, line_index))
 }
 
 /// Build the index-based AST from a tree-sitter tree, depth-first.

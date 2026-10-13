@@ -3,11 +3,11 @@
 use super::{HandlerError, Result};
 use crate::{
     perf,
-    settings::WorkspaceSettings,
-    state::{Snapshot, Workspace},
+    state::{ReloadWork, Snapshot, Workspace},
 };
 use lsp_features::positions::PositionEncoding;
 use lsp_types::*;
+use pkl_db::settings::WorkspaceSettings;
 use tracing::error;
 
 pub fn initialize(workspace: &mut Workspace, params: &InitializeParams) -> InitializeResult {
@@ -92,9 +92,8 @@ pub fn did_open(workspace: &mut Workspace, params: DidOpenTextDocumentParams) ->
 }
 pub fn did_change(workspace: &mut Workspace, params: DidChangeTextDocumentParams) -> Result<()> {
     if let Some(stored_version) = workspace
-        .snapshot()
         .document(params.text_document.uri.as_str())
-        .and_then(|file| file.version())
+        .and_then(|file| file.version(&workspace.db))
         && params.text_document.version <= stored_version
     {
         let ordering_violations = perf::ordering_violation();
@@ -103,9 +102,11 @@ pub fn did_change(workspace: &mut Workspace, params: DidChangeTextDocumentParams
     workspace.apply_change(params)?;
     Ok(())
 }
-pub fn did_close(workspace: &mut Workspace, params: DidCloseTextDocumentParams) -> Result<()> {
-    workspace.apply_close(params)?;
-    Ok(())
+pub fn did_close(
+    workspace: &mut Workspace,
+    params: DidCloseTextDocumentParams,
+) -> Result<ReloadWork> {
+    Ok(workspace.apply_close(params)?)
 }
 pub fn did_save(workspace: &mut Workspace, params: DidSaveTextDocumentParams) -> Result<()> {
     workspace.apply_save(params)?;
@@ -127,8 +128,14 @@ pub fn did_change_workspace_folders(
     workspace.apply_workspace_folders(params);
 }
 
-pub fn restore_workspaces(snapshot: &Snapshot) -> Result<()> {
-    let mut manager = snapshot.project_manager.lock();
+pub fn prepare_restore_workspaces(
+    snapshot: &Snapshot,
+) -> pkl_project::project_manager::ProjectManager {
+    snapshot.project_manager.lock().clone()
+}
+pub fn restore_workspaces(
+    mut manager: pkl_project::project_manager::ProjectManager,
+) -> Result<pkl_project::project_manager::ProjectManager> {
     for root in manager.workspace_folders().to_vec() {
         let path = root.join(".lspkl/projects.json");
         match path.try_exists() {
@@ -141,5 +148,5 @@ pub fn restore_workspaces(snapshot: &Snapshot) -> Result<()> {
             Err(err) => error!(path = %path.display(), ?err, "could not inspect project state"),
         }
     }
-    Ok(())
+    Ok(manager)
 }

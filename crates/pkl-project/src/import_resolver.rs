@@ -8,32 +8,32 @@ use crate::modulepath::{
 };
 use crate::package_manager::PackageManager;
 use fluent_uri::{Uri, UriRef};
-use pkl_vfs::{FileManager, VirtualFile, effective_uri, url_to_path};
+use pkl_vfs::{Source, SourceLoader, effective_uri, url_to_path};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct ImportResolver<'a> {
-    file_manager: &'a FileManager,
+    loader: &'a dyn SourceLoader,
     modulepath: ModulepathResolver<'a>,
-    cache_dir: Option<&'a Path>,
+    cache_dir: &'a Path,
 }
 impl<'a> ImportResolver<'a> {
-    pub fn new(file_manager: &'a FileManager) -> Self {
+    pub fn new(loader: &'a dyn SourceLoader, cache_dir: &'a Path) -> Self {
         Self {
-            file_manager,
-            modulepath: ModulepathResolver::new(file_manager),
-            cache_dir: None,
+            loader,
+            modulepath: ModulepathResolver::new(loader, cache_dir),
+            cache_dir,
         }
     }
     pub fn with_settings(
-        file_manager: &'a FileManager,
+        loader: &'a dyn SourceLoader,
         modulepaths: &'a [PathBuf],
         cache_dir: &'a Path,
     ) -> Self {
         Self {
-            file_manager,
-            modulepath: ModulepathResolver::with_modulepaths(file_manager, modulepaths),
-            cache_dir: Some(cache_dir),
+            loader,
+            modulepath: ModulepathResolver::with_modulepaths(loader, modulepaths, cache_dir),
+            cache_dir,
         }
     }
     fn dependency_root(&self, dependency: Dependency) -> Option<Uri<String>> {
@@ -41,7 +41,7 @@ impl<'a> ImportResolver<'a> {
             Dependency::LocalProject(dep) => root_uri(&dep.project_dir),
             Dependency::Package(dep) => Some(
                 PackageManager::new(PklCli::default())
-                    .get_library_roots(&dep, self.cache_dir?)
+                    .get_library_roots(&dep, self.cache_dir)
                     .ok()??
                     .package_root,
             ),
@@ -57,11 +57,11 @@ impl<'a> ImportResolver<'a> {
             .project_deps
             .as_ref()?
             .get_resolved_dependency(&uri.to_display_string())?;
-        resolved_to_dependency(resolved, &project.project_dir()?)
+        Some(resolved_to_dependency(resolved, &project.project_dir()?))
     }
     fn named_dependencies(
         &self,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
     ) -> Option<std::collections::BTreeMap<String, Dependency>> {
         let source_uri = effective_uri(&source.url).ok()?;
@@ -72,14 +72,15 @@ impl<'a> ImportResolver<'a> {
                 .split_once("!/")?
                 .0;
             let path = url_to_path(&Uri::parse(archive.to_owned()).ok()?).ok()?;
-            let json = std::fs::read_to_string(path.with_extension("json")).ok()?;
-            let metadata: PackageMetadata = serde_json::from_str(&json).ok()?;
+            let metadata_uri = pkl_vfs::path_to_uri(&path.with_extension("json")).ok()?;
+            let json = self.loader.load(&metadata_uri, self.cache_dir).ok()?;
+            let metadata: PackageMetadata = serde_json::from_str(json.contents()).ok()?;
             let dep = PackageDependency {
                 uri: metadata.package_uri,
                 checksums: None,
             };
             return PackageManager::new(PklCli::default())
-                .get_resolved_dependencies(&dep, None, context, self.cache_dir?)
+                .get_resolved_dependencies(&dep, None, context, self.cache_dir)
                 .ok()?;
         }
         let project = context?;
@@ -104,7 +105,7 @@ impl<'a> ImportResolver<'a> {
     fn reference_dependency(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
     ) -> Option<Dependency> {
         if reference.starts_with("package:") {
@@ -125,7 +126,7 @@ impl<'a> ImportResolver<'a> {
     fn package_root(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
     ) -> Option<Uri<String>> {
         self.dependency_root(self.reference_dependency(reference, source, context)?)
@@ -136,7 +137,7 @@ impl<'a> ImportResolver<'a> {
     pub fn missing_package_uri(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         project: Option<&PklProject>,
     ) -> Option<String> {
         let Dependency::Package(dep) = self.reference_dependency(reference, source, project)?
@@ -144,7 +145,7 @@ impl<'a> ImportResolver<'a> {
             return None;
         };
         let roots = PackageManager::new(PklCli::default())
-            .get_library_roots(&dep, self.cache_dir?)
+            .get_library_roots(&dep, self.cache_dir)
             .ok()?;
         roots.is_none().then(|| {
             let mut uri = dep.uri.to_display_string();
@@ -160,18 +161,14 @@ impl<'a> ImportResolver<'a> {
     pub fn completion_root(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
     ) -> Option<Uri<String>> {
         self.package_root(reference, source, context)
     }
 
     /// Dependency names visible to this source, including cached package metadata.
-    pub fn dependency_names(
-        &self,
-        source: &VirtualFile,
-        context: Option<&PklProject>,
-    ) -> Vec<String> {
+    pub fn dependency_names(&self, source: &Source, context: Option<&PklProject>) -> Vec<String> {
         self.named_dependencies(source, context)
             .map(|deps| deps.into_keys().collect())
             .unwrap_or_default()
@@ -180,9 +177,9 @@ impl<'a> ImportResolver<'a> {
     pub fn resolve_file(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
-    ) -> Option<Arc<VirtualFile>> {
+    ) -> Option<Arc<Source>> {
         let uri = UriRef::parse(reference).ok()?;
         let source_uri = effective_uri(&source.url).ok()?;
         let scheme = uri.scheme().map(|s| s.as_str());
@@ -198,18 +195,18 @@ impl<'a> ImportResolver<'a> {
                     return None;
                 }
                 let root = self.package_root(reference, source, context)?;
-                resolve_member(self.file_manager, &root, fragment.strip_prefix('/')?)?
+                resolve_member(self.loader, &root, fragment.strip_prefix('/')?)?
             }
             Some("file") if source_uri.scheme().as_str() != "file" => return None,
             Some("file" | "https" | "pkl") => Uri::parse(reference.to_owned()).ok()?,
             Some(_) => return None,
             None if source_uri.scheme().as_str() == "https" => {
-                self.file_manager.resolve_uri(&source_uri, reference).ok()?
+                self.loader.resolve_uri(&source_uri, reference).ok()?
             }
             None if reference.starts_with('@') => {
                 let root = self.package_root(reference, source, context)?;
                 resolve_member(
-                    self.file_manager,
+                    self.loader,
                     &root,
                     reference.split_once('/').map_or("", |(_, path)| path),
                 )?
@@ -223,33 +220,33 @@ impl<'a> ImportResolver<'a> {
                     .resolve_relative(source, uri.path().as_str(), context);
             }
             None if matches!(source_uri.scheme().as_str(), "file" | "jar") => {
-                self.file_manager.resolve_uri(&source_uri, reference).ok()?
+                self.loader.resolve_uri(&source_uri, reference).ok()?
             }
             None => return None,
         };
-        self.file_manager.get_or_load(&target).ok()
+        self.loader.load(&target, self.cache_dir).ok()
     }
     fn resolve_upward(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         _context: Option<&PklProject>,
-    ) -> Option<Arc<VirtualFile>> {
+    ) -> Option<Arc<Source>> {
         let uri = effective_uri(&source.url).ok()?;
         if !matches!(uri.scheme().as_str(), "file" | "jar") {
             return None;
         }
         let name = uri.as_str().rsplit('/').next()?;
         let path = reference.strip_prefix(".../").unwrap_or(name);
-        let mut dir = self.file_manager.resolve_uri(&uri, "../").ok()?;
+        let mut dir = self.loader.resolve_uri(&uri, "../").ok()?;
         loop {
-            let target = resolve_member(self.file_manager, &dir, path)?;
+            let target = resolve_member(self.loader, &dir, path)?;
             if target != uri
-                && let Ok(file) = self.file_manager.get_or_load(&target)
+                && let Ok(file) = self.loader.load(&target, self.cache_dir)
             {
                 return Some(file);
             }
-            let parent = self.file_manager.resolve_uri(&dir, "../").ok()?;
+            let parent = self.loader.resolve_uri(&dir, "../").ok()?;
             if parent == dir {
                 return None;
             }
@@ -260,17 +257,17 @@ impl<'a> ImportResolver<'a> {
     pub fn resolve_glob(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
-    ) -> Vec<Arc<VirtualFile>> {
+    ) -> Vec<Arc<Source>> {
         self.glob(reference, source, context).unwrap_or_default()
     }
     fn glob(
         &self,
         reference: &str,
-        source: &VirtualFile,
+        source: &Source,
         context: Option<&PklProject>,
-    ) -> Option<Vec<Arc<VirtualFile>>> {
+    ) -> Option<Vec<Arc<Source>>> {
         if reference.starts_with("...") {
             return None;
         }
@@ -333,7 +330,7 @@ impl<'a> ImportResolver<'a> {
             let wildcard = path.find(['*', '?', '[', '{']).unwrap_or(path.len());
             let split = path[..wildcard].rfind('/').map_or(0, |i| i + 1);
             let root = self
-                .file_manager
+                .loader
                 .resolve_uri(&source_uri, &format!("{}./", &path[..split]))
                 .ok()?;
             (Some(root), decode_path(&path[split..])?.into_owned(), false)
@@ -349,7 +346,7 @@ impl<'a> ImportResolver<'a> {
             self.modulepath.files(context)
         } else {
             let root = root?;
-            self.file_manager
+            self.loader
                 .list_files(&root)
                 .ok()?
                 .into_iter()
@@ -360,7 +357,7 @@ impl<'a> ImportResolver<'a> {
             candidates
                 .into_iter()
                 .filter(|(path, _)| matcher.is_match(path))
-                .filter_map(|(_, uri)| self.file_manager.get_or_load(&uri).ok())
+                .filter_map(|(_, uri)| self.loader.load(&uri, self.cache_dir).ok())
                 .collect(),
         )
     }

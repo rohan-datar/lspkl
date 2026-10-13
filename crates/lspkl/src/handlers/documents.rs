@@ -4,11 +4,14 @@ use super::{
     HandlerError, Result,
     diagnostics::{analyze_document, open_document_analysis},
 };
-use crate::{perf, settings::GrammarVersion, state::Snapshot};
+use crate::{perf, state::Snapshot};
 use fluent_uri::Uri;
 use lsp_features::positions::PositionConverter;
 use lsp_types::*;
+use pkl_db::FileStatus;
 use pkl_types::InFile;
+use pkl_vfs::{Source, SourceLoader};
+use std::{path::PathBuf, sync::Arc};
 use tracing::{error, info};
 
 pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> {
@@ -16,19 +19,16 @@ pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> 
     let uri_str = doc.text_document.uri.as_str();
     info!(uri = uri_str, "hover");
 
-    let Some(analysis) = open_document_analysis(snapshot, uri_str)? else {
+    let Some((file, tree)) = open_document_analysis(snapshot, uri_str)? else {
         return Ok(None);
     };
-    let positions = PositionConverter::new(&analysis.module.tree, snapshot.position_encoding);
+    let positions = PositionConverter::new(tree, snapshot.position_encoding);
     let Some(offset) = positions.offset(doc.position) else {
         return Ok(None);
     };
     let _compute = perf::Compute::start("hover");
-    let ctx = analysis.context(snapshot.base_module());
-    Ok(lsp_features::hover::hover(
-        &ctx,
-        InFile::new(analysis.module.file_id, offset),
-    ))
+    let ctx = snapshot.context(file);
+    Ok(lsp_features::hover::hover(&ctx, InFile::new(file, offset)))
 }
 pub fn definition(
     snapshot: &Snapshot,
@@ -38,22 +38,21 @@ pub fn definition(
     let uri_str = doc.text_document.uri.as_str();
     info!(uri = uri_str, "gotoDefinition");
 
-    let Some(analysis) = open_document_analysis(snapshot, uri_str)? else {
+    let Some((file, tree)) = open_document_analysis(snapshot, uri_str)? else {
         return Ok(None);
     };
     let encoding = snapshot.position_encoding;
-    let positions = PositionConverter::new(&analysis.module.tree, encoding);
+    let positions = PositionConverter::new(tree, encoding);
     let Some(offset) = positions.offset(doc.position) else {
         return Ok(None);
     };
     let _compute = perf::Compute::start("goto_definition");
-    let ctx = analysis.context(snapshot.base_module());
+    let ctx = snapshot.context(file);
     Ok(lsp_features::goto_definition::goto_definition(
         &ctx,
-        InFile::new(analysis.module.file_id, offset),
-        |file_id| {
-            let registry = snapshot.file_registry.lock();
-            let uri = registry.uri_for(file_id)?;
+        InFile::new(file, offset),
+        |file| {
+            let uri = file.uri(&snapshot.db);
             match uri.scheme().as_str() {
                 "pkl" | "https" | "jar" => pkl_vfs::to_editor_uri(uri).ok()?.as_str().parse().ok(),
                 _ => uri.as_str().parse().ok(),
@@ -70,24 +69,23 @@ pub fn completion(
     let uri_str = doc.text_document.uri.as_str();
     info!(uri = uri_str, "completion");
 
-    let Some(analysis) = open_document_analysis(snapshot, uri_str)? else {
+    let Some((file, tree)) = open_document_analysis(snapshot, uri_str)? else {
         return Ok(None);
     };
     let encoding = snapshot.position_encoding;
-    let Some(offset) = PositionConverter::new(&analysis.module.tree, encoding).offset(doc.position)
-    else {
+    let Some(offset) = PositionConverter::new(tree, encoding).offset(doc.position) else {
         return Ok(None);
     };
-    let uri_completion = crate::module_uri_completion::completion(snapshot, &analysis, offset);
+    let uri_completion = crate::module_uri_completion::completion(snapshot, file, offset);
     if uri_completion.is_some() {
         return Ok(uri_completion);
     }
     let _compute = perf::Compute::start("completion");
-    let ctx = analysis.context(snapshot.base_module());
-    let positions = PositionConverter::new(&analysis.module.tree, encoding);
+    let ctx = snapshot.context(file);
+    let positions = PositionConverter::new(tree, encoding);
     Ok(lsp_features::completion::completion(
         &ctx,
-        InFile::new(analysis.module.file_id, offset),
+        InFile::new(file, offset),
         |range| positions.range(range),
     ))
 }
@@ -101,50 +99,108 @@ pub fn code_action(
     let uri_str = params.text_document.uri.as_str();
     info!(uri = uri_str, "codeAction");
 
-    // Recompute rather than cache: the VFS holds the current contents,
-    // so analysis is deterministic and there is no state to invalidate.
-    let Some((analysis, diags)) = analyze_document(snapshot, uri_str)? else {
+    let Some((tree, diags)) = analyze_document(snapshot, uri_str)? else {
         return Ok(None);
     };
     let _compute = perf::Compute::start("code_action");
-    let positions = PositionConverter::new(&analysis.module.tree, snapshot.position_encoding);
+    let positions = PositionConverter::new(tree, snapshot.position_encoding);
     let actions =
         lsp_features::code_action::code_action(&params, &diags, |range| positions.range(range));
     Ok(Some(CodeActionResponse::from(actions)))
 }
-pub fn formatting(
+/// Extract owned formatter input before starting a subprocess.
+pub struct FormatRequest {
+    source: Arc<str>,
+    settings: Arc<pkl_db::settings::WorkspaceSettings>,
+    uri: String,
+}
+pub fn prepare_formatting(
     snapshot: &Snapshot,
     params: DocumentFormattingParams,
-) -> Result<Option<Vec<TextEdit>>> {
+) -> Result<Option<FormatRequest>> {
     let uri = params.text_document.uri.as_str();
-    let Some(file) = snapshot.document(uri) else {
-        return Ok(None);
-    };
-    let source = file.contents();
-    let settings = &snapshot.settings;
+    Ok(snapshot.document(uri).map(|file| FormatRequest {
+        source: Arc::clone(file.text(&snapshot.db)),
+        settings: Arc::clone(&snapshot.settings),
+        uri: uri.to_owned(),
+    }))
+}
+pub fn formatting(request: FormatRequest) -> Result<Option<Vec<TextEdit>>> {
     match lsp_features::formatting::formatting(
-        &source,
-        settings.cli_path(),
-        settings
+        &request.source,
+        request.settings.cli_path(),
+        request
+            .settings
             .formatter
             .grammar_version
             .as_ref()
-            .map(GrammarVersion::as_str),
+            .map(pkl_db::settings::GrammarVersion::as_str),
     ) {
         Ok(edits) => Ok(Some(edits)),
-        Err(err) => {
-            error!(uri, ?err, "formatting failed");
+        Err(error) => {
+            error!(uri = request.uri, ?error, "formatting failed");
             Ok(None)
         }
     }
 }
 
-pub fn file_contents(snapshot: &Snapshot, document: TextDocumentIdentifier) -> Result<String> {
-    if let Some(file) = snapshot.document(document.uri.as_str()) {
-        return Ok(file.contents());
-    }
+pub enum FileContentsRequest {
+    Cached(Arc<Source>),
+    Load {
+        uri: Uri<String>,
+        loader: Arc<dyn SourceLoader + Send + Sync>,
+        cache_dir: PathBuf,
+    },
+}
+pub struct FileContentsResult {
+    pub source: Arc<Source>,
+    pub loaded: bool,
+}
+pub fn prepare_file_contents(
+    snapshot: &Snapshot,
+    document: TextDocumentIdentifier,
+) -> Result<FileContentsRequest> {
     let uri = Uri::parse(document.uri.as_str())
-        .map_err(|err| HandlerError::InvalidParams(err.to_string()))?
+        .map_err(|error| HandlerError::InvalidParams(error.to_string()))?
         .to_owned();
-    Ok(snapshot.file_manager.get_or_load(&uri)?.contents())
+    let uri = pkl_vfs::effective_uri(&uri)?;
+    if let Some(file) = snapshot.db.known_file(&uri)
+        && file.status(&snapshot.db) != FileStatus::Missing
+    {
+        return Ok(FileContentsRequest::Cached(Arc::new(Source {
+            url: file.uri(&snapshot.db).clone(),
+            text: Arc::clone(file.text(&snapshot.db)),
+        })));
+    }
+    Ok(FileContentsRequest::Load {
+        uri,
+        loader: snapshot.db.source_loader_handle(),
+        cache_dir: snapshot.settings.effective_cache_dir().to_owned(),
+    })
+}
+/// Disk/network work deliberately runs without a Salsa handle.
+pub fn file_contents(request: FileContentsRequest) -> Result<FileContentsResult> {
+    match request {
+        FileContentsRequest::Cached(source) => Ok(FileContentsResult {
+            source,
+            loaded: false,
+        }),
+        FileContentsRequest::Load {
+            uri,
+            loader,
+            cache_dir,
+        } => {
+            let source = match loader.load(&uri, &cache_dir) {
+                Ok(source) => source,
+                Err(_) if uri.scheme().as_str() == "https" => {
+                    pkl_vfs::StandardSourceLoader::new().fetch(&uri, &cache_dir)?
+                }
+                Err(error) => return Err(error.into()),
+            };
+            Ok(FileContentsResult {
+                source,
+                loaded: true,
+            })
+        }
+    }
 }

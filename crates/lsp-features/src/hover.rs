@@ -9,7 +9,8 @@ use pkl_syntax::ast::nodes::{
 };
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
-use pkl_types::{AnalysisContext, FileId, NodeRef, Type, resolve_reference};
+use pkl_db::File;
+use pkl_types::{AnalysisContext, NodeRef, Type, resolve_reference};
 
 /// Resolve hover information for the given cursor byte `offset`.
 ///
@@ -139,7 +140,7 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
 fn method_signature(
     tree: &SyntaxTree,
     node_id: NodeId,
-    file_id: FileId,
+    file_id: File,
     ctx: &AnalysisContext,
 ) -> Option<String> {
     let header = ClassMethod::cast(tree, node_id)
@@ -212,7 +213,7 @@ fn return_type_text(
     tree: &SyntaxTree,
     method_id: NodeId,
     header: NodeId,
-    file_id: FileId,
+    file_id: File,
     ctx: &AnalysisContext,
 ) -> String {
     if let Some(ann) = MethodHeader::cast(tree, header).and_then(|h| h.type_annotation(tree)) {
@@ -235,12 +236,7 @@ fn return_type_text(
 /// Render a type annotation's inner type semantically (`to_type` +
 /// `render`), falling back to the raw source text when the type can't be
 /// resolved.
-fn annotation_text(
-    tree: &SyntaxTree,
-    ann: NodeId,
-    file_id: FileId,
-    ctx: &AnalysisContext,
-) -> String {
+fn annotation_text(tree: &SyntaxTree, ann: NodeId, file_id: File, ctx: &AnalysisContext) -> String {
     match TypeAnnotation::cast(tree, ann).and_then(|ann| ann.ty(tree)) {
         Some(ty_node) => {
             let ty = NodeRef::new(file_id, ty_node)

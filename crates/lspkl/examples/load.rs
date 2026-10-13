@@ -46,6 +46,9 @@ fn source(index: u32, modules: u32, version: i64) -> String {
 }
 
 fn stats(values: &mut [f64]) -> Value {
+    if values.is_empty() {
+        return json!({"samples":0,"p50":null,"p95":null,"max":null});
+    }
     values.sort_unstable_by(f64::total_cmp);
     json!({"samples": values.len(), "p50": values[(values.len() - 1) / 2],
         "p95": values[(values.len() * 95).div_ceil(100) - 1], "max": values[values.len() - 1]})
@@ -98,7 +101,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::fs::write(&path, source(index, args.modules, 1))?;
         uris.push(pkl_vfs::path_to_uri(&path)?.to_string());
     }
-    let mut client = LspClient::spawn(&binary, workspace.path()).await;
+    let mut client =
+        LspClient::spawn_with_stderr_limit(&binary, workspace.path(), usize::MAX).await;
     let initialized = client.request("initialize", json!({
         "processId":null, "rootUri":url::Url::from_directory_path(workspace.path()).unwrap().as_str(),
         "capabilities":{}, "initializationOptions":{"pkl":{"cacheDir":workspace.path().join("cache")}}
@@ -183,6 +187,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut final_publish = None::<Instant>;
     let mut hover_ms = Vec::new();
     let mut completion_ms = Vec::new();
+    let mut hover_cancelled = 0_u64;
+    let mut completion_cancelled = 0_u64;
     loop {
         // Ready receives (including queued messages) can beat an expired Tokio
         // timeout. Enforce the absolute limit independently of queue readiness.
@@ -248,7 +254,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 barrier_seen = true;
             } else if let Some((request, hover)) = pending.remove(&id) {
-                if !valid_response(&message, hover) {
+                if message["error"]["code"] == -32801 {
+                    if hover {
+                        hover_cancelled += 1;
+                    } else {
+                        completion_cancelled += 1;
+                    }
+                } else if !valid_response(&message, hover) {
                     return Err(
                         format!("request did not resolve meaningful result: {message}").into(),
                     );
@@ -276,25 +288,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
         })
         .collect();
+    let trace = client.stderr();
+    client.shutdown().await;
+    let mut cancellation_stages = BTreeMap::<String, u64>::new();
+    let mut setter_ms = Vec::new();
+    let mut ordering_violations: Option<u64> = None;
+    for line in trace.lines() {
+        if line.contains("request_cancelled")
+            && let Some(stage) = line
+                .split("stage=\"")
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+        {
+            *cancellation_stages.entry(stage.to_owned()).or_default() += 1;
+        }
+        if line.contains("compute_end")
+            && line.contains("stage=\"salsa_write\"")
+            && let Some(us) = line
+                .split("compute_us=")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<f64>().ok())
+        {
+            setter_ms.push(us / 1000.0);
+        }
+        if let Some(count) = line
+            .split("ordering_violations=")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            ordering_violations = Some(ordering_violations.unwrap_or(0).max(count));
+        }
+    }
     let output = json!({
         "schemaVersion":1,"binary":binary,"modules":args.modules,"open":args.open,
         "bursts":args.bursts,"changesPerBurst":args.changes,"intervalMs":args.interval_ms,"quietMs":args.quiet_ms,
         "hoverMs":stats(&mut hover_ms),"completionMs":stats(&mut completion_ms),
+        "cancellations":{"hover":hover_cancelled,"completion":completion_cancelled},
+        "serverCancellations":cancellation_stages,
+        "runtimeSetterMs":stats(&mut setter_ms),
+        "orderingViolations":ordering_violations,
         "burstScheduleLagMs":stats(&mut schedule_lag),
         "lastChangeToFinalDiagnosticsMs":final_publish.ok_or("no publish after last change")?.saturating_duration_since(last_change).as_secs_f64()*1000.0,
         "publishes":per_document,
         "metricDefinitions":{
-            "latency":"request frame flush to response frame receipt; nearest-rank p50/p95; barrier excluded",
+            "latency":"request frame flush to response frame receipt, including ContentModified; nearest-rank p50/p95; barrier excluded",
             "stale":"publish version < latest document version whose frame was flushed by publish receipt",
             "finalDiagnostics":"last change frame flush to last observed publish for an open document, including stale publishes",
-            "publishWindow":"all didOpen/didChange publishes through final-version diagnostics, request barrier and quiet period"
+            "publishWindow":"all didOpen/didChange publishes through final-version diagnostics, request barrier and quiet period",
+            "runtimeSetterMs":"synchronous input mutation duration on the runtime, including Salsa reader cancellation/wait; upper bound on reader wait alone; requires RUST_LOG=lspkl::perf=debug",
+            "serverCancellations":"server trace counts by compute stage, including dropped diagnostics; requires perf tracing"
         },
         "limitations":["quiet period is empirical, not a transport guarantee of no future work",
             "write backpressure and client scheduling can delay bursts; schedule lag is reported",
             "timestamps are client-side frame observations, not server compute times",
-            "unversioned diagnostics cannot be classified as stale; final version is required"]
+            "unversioned diagnostics cannot be classified as stale; final version is required",
+            "perf trace capture is unbounded in this measurement harness"]
     });
-    client.shutdown().await;
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
 }

@@ -34,79 +34,80 @@ fn hover(snapshot: &Snapshot, uri: &Uri) -> Hover {
     .unwrap()
 }
 #[test]
-fn semantic_handlers_use_the_captured_buffer_epoch() {
+fn semantic_handlers_complete_before_writes_and_use_fresh_source_afterwards() {
     let mut workspace = Workspace::new();
     let uri: Uri = "inmemory:///handler.pkl".parse().unwrap();
     open(&mut workspace, &uri, "x: Int = 1\ny = x\n");
-    let before = workspace.snapshot();
-    handlers::lifecycle::did_change(
-        &mut workspace,
-        DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier {
-                uri: uri.clone(),
-                version: 2,
+    for (version, source, expected) in [
+        (1, "x: Int = 1\ny = x\n", "x: Int"),
+        (2, "x: String = \"edited\"\ny = x\n", "x: String"),
+    ] {
+        if version == 2 {
+            handlers::lifecycle::did_change(
+                &mut workspace,
+                DidChangeTextDocumentParams {
+                    text_document: VersionedTextDocumentIdentifier {
+                        uri: uri.clone(),
+                        version,
+                    },
+                    content_changes: vec![TextDocumentContentChangeEvent {
+                        range: None,
+                        range_length: None,
+                        text: source.into(),
+                    }],
+                },
+            )
+            .unwrap();
+        }
+        let snapshot = workspace.snapshot();
+        let HoverContents::Markup(markup) = hover(&snapshot, &uri).contents else {
+            panic!("expected markup")
+        };
+        assert!(markup.value.contains(expected), "{}", markup.value);
+        let contents = handlers::documents::prepare_file_contents(
+            &snapshot,
+            TextDocumentIdentifier { uri: uri.clone() },
+        )
+        .unwrap();
+        assert_eq!(
+            handlers::documents::file_contents(contents)
+                .unwrap()
+                .source
+                .contents(),
+            source
+        );
+        let definition = handlers::documents::definition(
+            &snapshot,
+            GotoDefinitionParams {
+                text_document_position_params: point(&uri, 1, 4),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
             },
-            content_changes: vec![TextDocumentContentChangeEvent {
-                range: None,
-                range_length: None,
-                text: "x: String = \"edited\"\ny = x\n".into(),
-            }],
-        },
-    )
-    .unwrap();
-    let after = workspace.snapshot();
-    let HoverContents::Markup(before_hover) = hover(&before, &uri).contents else {
-        panic!("expected markup")
-    };
-    let HoverContents::Markup(after_hover) = hover(&after, &uri).contents else {
-        panic!("expected markup")
-    };
-    assert!(
-        before_hover.value.contains("x: Int"),
-        "{}",
-        before_hover.value
-    );
-    assert!(
-        after_hover.value.contains("x: String"),
-        "{}",
-        after_hover.value
-    );
-    assert_eq!(
-        handlers::documents::file_contents(&before, TextDocumentIdentifier { uri: uri.clone() })
-            .unwrap(),
-        "x: Int = 1\ny = x\n"
-    );
-    let definition = handlers::documents::definition(
-        &before,
-        GotoDefinitionParams {
-            text_document_position_params: point(&uri, 1, 4),
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        },
-    )
-    .unwrap()
-    .unwrap();
-    let GotoDefinitionResponse::Scalar(location) = definition else {
-        panic!("expected one definition")
-    };
-    assert_eq!(location.uri, uri);
-    assert_eq!(location.range.start, Position::new(0, 0));
-    let completion = handlers::documents::completion(
-        &before,
-        CompletionParams {
-            text_document_position: point(&uri, 1, 5),
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-            context: None,
-        },
-    )
-    .unwrap()
-    .unwrap();
-    let items = match completion {
-        CompletionResponse::Array(items) => items,
-        CompletionResponse::List(list) => list.items,
-    };
-    assert!(items.iter().any(|item| item.label == "x"));
+        )
+        .unwrap()
+        .unwrap();
+        let GotoDefinitionResponse::Scalar(location) = definition else {
+            panic!("expected one definition")
+        };
+        assert_eq!(location.uri, uri);
+        assert_eq!(location.range.start, Position::new(0, 0));
+        let completion = handlers::documents::completion(
+            &snapshot,
+            CompletionParams {
+                text_document_position: point(&uri, 1, 5),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let items = match completion {
+            CompletionResponse::Array(items) => items,
+            CompletionResponse::List(list) => list.items,
+        };
+        assert!(items.iter().any(|item| item.label == "x"));
+    }
     handlers::lifecycle::did_close(
         &mut workspace,
         DidCloseTextDocumentParams {
@@ -115,14 +116,6 @@ fn semantic_handlers_use_the_captured_buffer_epoch() {
     )
     .unwrap();
     assert!(workspace.snapshot().document(uri.as_str()).is_none());
-    let HoverContents::Markup(closed_hover) = hover(&before, &uri).contents else {
-        panic!("expected markup")
-    };
-    assert!(
-        closed_hover.value.contains("x: Int"),
-        "{}",
-        closed_hover.value
-    );
 }
 #[test]
 fn diagnostics_and_quickfix_share_actual_analysis() {
@@ -166,6 +159,7 @@ fn diagnostics_and_quickfix_share_actual_analysis() {
             "local ".into()
         )]
     );
+    drop(snapshot);
     handlers::lifecycle::did_change(
         &mut workspace,
         DidChangeTextDocumentParams {
@@ -203,8 +197,9 @@ fn command_errors_have_one_protocol_mapping() {
         },
     ] {
         let error: tower_lsp_server::jsonrpc::Error =
-            handlers::commands::execute_command(&snapshot, params)
-                .unwrap_err()
+            handlers::commands::prepare_execute_command(&snapshot, params)
+                .err()
+                .expect("invalid command must fail validation")
                 .into();
         assert_eq!(
             error.code,
@@ -212,8 +207,9 @@ fn command_errors_have_one_protocol_mapping() {
         );
     }
     let error: tower_lsp_server::jsonrpc::Error =
-        handlers::commands::download_package(&snapshot, "not-a-package".into())
-            .unwrap_err()
+        handlers::commands::prepare_download_package(&snapshot, "not-a-package".into())
+            .err()
+            .expect("invalid package must fail validation")
             .into();
     assert_eq!(
         error.code,
@@ -244,12 +240,11 @@ esac
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
     let mut workspace = Workspace::new();
     workspace.apply_settings(
-        lspkl::settings::WorkspaceSettings::parse(serde_json::json!({"cli": {"path": cli}}))
+        pkl_db::settings::WorkspaceSettings::parse(serde_json::json!({"cli": {"path": cli}}))
             .unwrap(),
     );
     let uri: Uri = "inmemory:///format.pkl".parse().unwrap();
     open(&mut workspace, &uri, "x=1");
-    let before = workspace.snapshot();
     let params = || DocumentFormattingParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
         options: FormattingOptions {
@@ -259,11 +254,14 @@ esac
         },
         work_done_progress_params: Default::default(),
     };
+    let captured = handlers::documents::prepare_formatting(&workspace.snapshot(), params())
+        .unwrap()
+        .unwrap();
+    let first = handlers::documents::prepare_formatting(&workspace.snapshot(), params())
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        handlers::documents::formatting(&before, params())
-            .unwrap()
-            .unwrap()[0]
-            .new_text,
+        handlers::documents::formatting(first).unwrap().unwrap()[0].new_text,
         "x = 1\n"
     );
     for source in ["unchanged", "fail"] {
@@ -282,7 +280,10 @@ esac
             },
         )
         .unwrap();
-        let result = handlers::documents::formatting(&workspace.snapshot(), params()).unwrap();
+        let request = handlers::documents::prepare_formatting(&workspace.snapshot(), params())
+            .unwrap()
+            .unwrap();
+        let result = handlers::documents::formatting(request).unwrap();
         if source == "unchanged" {
             assert!(result.unwrap().is_empty());
         } else {
@@ -290,10 +291,7 @@ esac
         }
     }
     assert_eq!(
-        handlers::documents::formatting(&before, params())
-            .unwrap()
-            .unwrap()[0]
-            .new_text,
+        handlers::documents::formatting(captured).unwrap().unwrap()[0].new_text,
         "x = 1\n"
     );
 }

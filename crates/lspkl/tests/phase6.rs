@@ -221,6 +221,45 @@ async fn initialization_restores_project_modulepaths_without_invoking_the_cli() 
         scalar(definition(&backend, &main, position(source, "value")).await).uri,
         uri(&temp.path().join("lib/library.pkl"))
     );
+    fs::write(
+        temp.path().join("PklProject"),
+        "amends \"pkl:Project\"\n// changed on disk\n",
+    )
+    .unwrap();
+    backend
+        .did_change_watched_files(DidChangeWatchedFilesParams {
+            changes: vec![FileEvent {
+                uri: uri(&temp.path().join("PklProject")),
+                typ: FileChangeType::CHANGED,
+            }],
+        })
+        .await;
+    let result = backend
+        .goto_definition(GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: main },
+                position: position(source, "value"),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        result.is_none(),
+        "changed PklProject must invalidate stale cached modulepaths: {result:?}"
+    );
+    assert_eq!(
+        backend
+            .workspace
+            .lock()
+            .snapshot()
+            .project_manager
+            .lock()
+            .projects()
+            .count(),
+        0
+    );
 }
 
 fn package(
@@ -295,4 +334,45 @@ async fn cached_transitive_packages_and_stdlib_return_editor_openable_definition
     assert!(contents.value.contains("value: Int"), "{}", contents.value);
     let stdlib = scalar(definition(&backend, &main, position(&source, "String")).await);
     assert_eq!(stdlib.uri.as_str(), "lspkl://stdlib/base.pkl");
+}
+
+#[test]
+fn source_rpc_install_does_not_cancel_a_newer_watched_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("library.pkl");
+    fs::write(&path, "value: Int = 1\n").unwrap();
+    let mut workspace = lspkl::Workspace::new();
+    let view = workspace.snapshot();
+    let request = lspkl::handlers::documents::prepare_file_contents(
+        &view,
+        TextDocumentIdentifier { uri: uri(&path) },
+    )
+    .unwrap();
+    drop(view);
+    let old = lspkl::handlers::documents::file_contents(request)
+        .unwrap()
+        .source;
+    fs::write(&path, "value: String = \"new\"\n").unwrap();
+    let watched = workspace.prepare_watched_files(DidChangeWatchedFilesParams {
+        changes: vec![FileEvent {
+            uri: uri(&path),
+            typ: FileChangeType::CHANGED,
+        }],
+    });
+    workspace.apply_loaded_source(old).unwrap();
+    workspace.apply_reload(watched.load());
+    let view = workspace.snapshot();
+    let request = lspkl::handlers::documents::prepare_file_contents(
+        &view,
+        TextDocumentIdentifier { uri: uri(&path) },
+    )
+    .unwrap();
+    drop(view);
+    assert_eq!(
+        lspkl::handlers::documents::file_contents(request)
+            .unwrap()
+            .source
+            .contents(),
+        "value: String = \"new\"\n"
+    );
 }

@@ -6,16 +6,16 @@ use std::sync::Arc;
 
 use fluent_uri::Uri;
 use lspkl::Workspace;
+use pkl_db::{File, ImportResolution, parse, resolve_import};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_vfs::VirtualFile;
 
 fn file_uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
 }
 
-fn source(state: &mut Workspace, path: &Path, text: &str) -> (Arc<VirtualFile>, Arc<SyntaxTree>) {
+fn source(state: &mut Workspace, path: &Path, text: &str) -> (File, Arc<SyntaxTree>) {
     let file = open(state, file_uri(path), text.into(), Some(1));
-    let tree = state.snapshot().file_manager.parse(&file.url).unwrap();
+    let tree = parse(&state.db, file).as_ref().unwrap().clone();
     (file, tree)
 }
 
@@ -58,6 +58,9 @@ fn load_projects(state: &mut Workspace, workspace: &Path, projects: &[(&str, &[&
     let view = state.snapshot();
     let mut manager = view.project_manager.lock();
     manager.load_state(&state_file).unwrap();
+    drop(manager);
+    drop(view);
+    state.refresh_projects();
 }
 
 #[test]
@@ -73,13 +76,13 @@ fn relative_import_uses_ast_literal_and_source_directory_without_a_project() {
         "// import \"./not-the-target.pkl\"\nimport \"./library.pkl\"\n",
     );
 
-    let target = state
-        .snapshot()
-        .resolve_import_file(&tree, import_node(&tree), &source)
-        .unwrap();
+    let target = match resolve_import(&state.db, source, import_node(&tree), None) {
+        ImportResolution::Single(file) => file,
+        other => panic!("expected single import: {other:?}"),
+    };
 
-    assert_eq!(target.url, file_uri(&dir.join("library.pkl")));
-    assert_eq!(target.contents(), "answer = 42\n");
+    assert_eq!(*target.uri(&state.db), file_uri(&dir.join("library.pkl")));
+    assert_eq!(target.text(&state.db).as_ref(), "answer = 42\n");
 }
 
 #[test]
@@ -118,25 +121,25 @@ fn modulepath_import_selects_the_nearest_project_for_each_source() {
         "import \"modulepath:/library.pkl\"\n",
     );
 
-    let outer_target = state
-        .snapshot()
-        .resolve_import_file(&outer_tree, import_node(&outer_tree), &outer)
-        .unwrap();
-    let inner_target = state
-        .snapshot()
-        .resolve_import_file(&inner_tree, import_node(&inner_tree), &inner)
-        .unwrap();
+    let outer_target = match resolve_import(&state.db, outer, import_node(&outer_tree), None) {
+        ImportResolution::Single(file) => file,
+        other => panic!("expected single import: {other:?}"),
+    };
+    let inner_target = match resolve_import(&state.db, inner, import_node(&inner_tree), None) {
+        ImportResolution::Single(file) => file,
+        other => panic!("expected single import: {other:?}"),
+    };
 
     assert_eq!(
-        outer_target.url,
+        *outer_target.uri(&state.db),
         file_uri(&workspace.join("outer-lib/library.pkl"))
     );
     assert_eq!(
-        inner_target.url,
+        *inner_target.uri(&state.db),
         file_uri(&workspace.join("app/inner-lib/library.pkl"))
     );
-    assert_eq!(outer_target.contents(), "owner = \"outer\"\n");
-    assert_eq!(inner_target.contents(), "owner = \"inner\"\n");
+    assert_eq!(outer_target.text(&state.db).as_ref(), "owner = \"outer\"\n");
+    assert_eq!(inner_target.text(&state.db).as_ref(), "owner = \"inner\"\n");
 }
 
 #[test]
@@ -157,14 +160,14 @@ fn imported_file_reuses_unsaved_editor_contents() {
         "import \"./library.pkl\"\n",
     );
 
-    let target = state
-        .snapshot()
-        .resolve_import_file(&tree, import_node(&tree), &source)
-        .unwrap();
+    let target = match resolve_import(&state.db, source, import_node(&tree), None) {
+        ImportResolution::Single(file) => file,
+        other => panic!("expected single import: {other:?}"),
+    };
 
-    assert!(Arc::ptr_eq(&target, &opened));
-    assert_eq!(target.contents(), "answer = 42\n");
-    assert_eq!(target.version(), Some(2));
+    assert_eq!(target, opened);
+    assert_eq!(target.text(&state.db).as_ref(), "answer = 42\n");
+    assert_eq!(target.version(&state.db), Some(2));
 }
 
 #[test]
@@ -182,17 +185,17 @@ fn missing_or_unsupported_import_targets_return_none() {
             &format!("import \"{uri}\"\n"),
         );
         assert!(
-            state
-                .snapshot()
-                .resolve_import_file(&tree, import_node(&tree), &source)
-                .is_none(),
+            matches!(
+                resolve_import(&state.db, source, import_node(&tree), None),
+                ImportResolution::Unresolved { .. }
+            ),
             "unsupported or unresolved import: {uri}"
         );
     }
 }
 
 #[test]
-fn glob_imports_and_non_import_nodes_are_rejected() {
+fn glob_imports_resolve_and_non_import_nodes_are_unresolved() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("library.pkl"), "answer = 42\n").unwrap();
     let mut state = Workspace::new();
@@ -209,17 +212,12 @@ fn glob_imports_and_non_import_nodes_are_rejected() {
         .unwrap();
 
     assert!(
-        state
-            .snapshot()
-            .resolve_import_file(&tree, glob, &source)
-            .is_none()
+        matches!(resolve_import(&state.db, source, glob, None), ImportResolution::Glob(targets) if targets.len() == 1)
     );
-    assert!(
-        state
-            .snapshot()
-            .resolve_import_file(&tree, property, &source)
-            .is_none()
-    );
+    assert!(matches!(
+        resolve_import(&state.db, source, property, None),
+        ImportResolution::Unresolved { .. }
+    ));
 }
 
 fn open(
@@ -227,7 +225,7 @@ fn open(
     url: Uri<String>,
     text: String,
     version: Option<i32>,
-) -> Arc<pkl_vfs::VirtualFile> {
+) -> pkl_db::File {
     state
         .apply_open(lsp_types::DidOpenTextDocumentParams {
             text_document: lsp_types::TextDocumentItem {
@@ -238,5 +236,86 @@ fn open(
             },
         })
         .unwrap();
-    state.snapshot().document(url.as_str()).unwrap()
+    state.document(url.as_str()).unwrap()
+}
+
+#[test]
+fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
+    use pkl_db::Db;
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["outer", "inner"] {
+        fs::create_dir_all(temp.path().join(name).join("lib")).unwrap();
+    }
+    fs::write(
+        temp.path().join("outer/lib/library.pkl"),
+        "value: Int = 1\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("inner/lib/library.pkl"),
+        "value: String = \"inner\"\n",
+    )
+    .unwrap();
+    let archive = temp.path().join("shared.zip");
+    let mut writer = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+    writer
+        .start_file("bridge.pkl", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    writer
+        .write_all(b"import \"modulepath:/library.pkl\" as library\nvalue = library.value\n")
+        .unwrap();
+    writer.finish().unwrap();
+    let remote = Uri::parse(format!("jar:{}!/bridge.pkl", file_uri(&archive))).unwrap();
+    let mut state = Workspace::new();
+    load_projects(
+        &mut state,
+        temp.path(),
+        &[
+            ("outer/PklProject", &["lib"]),
+            ("inner/PklProject", &["lib"]),
+        ],
+    );
+    state.apply_settings(pkl_db::settings::WorkspaceSettings {
+        modulepath: vec![archive],
+        ..Default::default()
+    });
+    let shared = state.db.file(&remote).unwrap();
+    // A contextless warmup must not freeze the remote's project routing.
+    {
+        let view = state.snapshot();
+        let ctx = view.context(shared);
+        assert!(
+            ctx.import(pkl_types::NodeRef::new(
+                shared,
+                import_node(ctx.tree(shared).unwrap())
+            ))
+            .unwrap()
+            .single()
+            .is_none()
+        );
+    }
+    let text = "import \"modulepath:/bridge.pkl\" as bridge\nanswer = bridge.value\n";
+    let (outer, _) = source(&mut state, &temp.path().join("outer/main.pkl"), text);
+    let (inner, _) = source(&mut state, &temp.path().join("inner/main.pkl"), text);
+    let view = state.snapshot();
+    for (root, expected) in [(outer, "Int"), (inner, "String"), (outer, "Int")] {
+        let ctx = view.context(root);
+        let tree = ctx.tree(root).unwrap();
+        let property = tree
+            .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
+            .unwrap();
+        assert_eq!(
+            pkl_types::resolver::definition_type(pkl_types::NodeRef::new(root, property), &ctx)
+                .render(&ctx),
+            expected
+        );
+        let imported = ctx
+            .import(pkl_types::NodeRef::new(root, import_node(tree)))
+            .unwrap()
+            .single()
+            .unwrap();
+        assert_eq!(imported.file, shared);
+        assert!(pkl_db::project_for_file(&view.db, shared).is_none());
+    }
 }

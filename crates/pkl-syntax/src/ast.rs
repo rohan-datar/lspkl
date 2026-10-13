@@ -266,14 +266,17 @@ pub(crate) struct NodeEntry {
 #[derive(Debug)]
 pub struct SyntaxTree {
     nodes: Vec<NodeEntry>,
-    source: String,
-    line_index: LineIndex,
+    source: std::sync::Arc<str>,
+    line_index: std::sync::Arc<LineIndex>,
 }
 
 impl SyntaxTree {
-    pub(crate) fn from_parts(source: String, nodes: Vec<NodeEntry>) -> Self {
+    pub(crate) fn from_parts(
+        source: std::sync::Arc<str>,
+        nodes: Vec<NodeEntry>,
+        line_index: std::sync::Arc<LineIndex>,
+    ) -> Self {
         debug_assert!(!nodes.is_empty(), "tree must contain at least a root node");
-        let line_index = LineIndex::new(&source);
         Self {
             nodes,
             source,

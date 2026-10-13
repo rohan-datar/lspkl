@@ -201,7 +201,7 @@ fn collect(
 
 fn collect_body_members(
     tree: &SyntaxTree,
-    file_id: crate::FileId,
+    file_id: pkl_db::File,
     body: NodeId,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
@@ -218,7 +218,7 @@ fn collect_body_members(
 
 fn push_member(
     tree: &SyntaxTree,
-    file_id: crate::FileId,
+    file_id: pkl_db::File,
     member: NodeId,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,

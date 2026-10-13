@@ -3,7 +3,8 @@
 
 use lsp_types::{GotoDefinitionResponse, Location, Range, Uri};
 
-use pkl_types::{AnalysisContext, FileId, NodeRef, resolve_reference};
+use pkl_db::File;
+use pkl_types::{AnalysisContext, NodeRef, resolve_reference};
 
 use pkl_syntax::{TextRange, TextSize, ast::SyntaxTree};
 
@@ -11,7 +12,7 @@ use pkl_syntax::{TextRange, TextSize, ast::SyntaxTree};
 pub fn goto_definition(
     ctx: &AnalysisContext,
     offset: pkl_types::InFile<TextSize>,
-    uri_for: impl Fn(FileId) -> Option<Uri>,
+    uri_for: impl Fn(File) -> Option<Uri>,
     range_for: impl Fn(&SyntaxTree, TextRange) -> Range,
 ) -> Option<GotoDefinitionResponse> {
     let file = offset.file;
@@ -24,7 +25,7 @@ pub fn goto_definition(
         in_string |= tree.kind(id).is_string_literal();
         if in_string
             && let Some(pkl_types::ImportResolution::Glob(targets)) =
-                ctx.imports.get(&NodeRef::new(file, id))
+                ctx.import(NodeRef::new(file, id))
         {
             let locations: Vec<_> = targets
                 .iter()

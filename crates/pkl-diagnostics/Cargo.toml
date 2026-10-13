@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pkl-db.workspace = true
 pkl-syntax.workspace = true
 pkl-types.workspace = true
 fluent-uri.workspace = true
 semver = "1"
 
 [dev-dependencies]
+pkl-project.workspace = true
+pkl-vfs.workspace = true
 insta.workspace = true

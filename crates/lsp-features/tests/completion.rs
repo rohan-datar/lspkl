@@ -29,10 +29,10 @@ fn module_level_unqualified_access_suggests_sibling_properties() {
         let items = labels(completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
-                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 7),
+                harness::file(ctx, 1),
+                harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 7),
             ),
-            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+            |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
         ));
 
         assert!(
@@ -59,10 +59,10 @@ fn qualified_access_suggests_receiver_members() {
         let items = labels(completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
-                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 10),
+                harness::file(ctx, 1),
+                harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 10),
             ),
-            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+            |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
         ));
 
         assert!(
@@ -92,10 +92,10 @@ fn string_literal_offers_union_alternatives() {
         let response = completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
-                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 21),
+                harness::file(ctx, 1),
+                harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 21),
             ),
-            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+            |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
         );
         let Some(CompletionResponse::Array(candidates)) = &response else {
             panic!("literal candidates")
@@ -105,7 +105,7 @@ fn string_literal_offers_union_alternatives() {
                 continue;
             };
             let converter = lsp_features::positions::PositionConverter::new(
-                ctx.tree(pkl_types::FileId(1)).unwrap(),
+                ctx.tree(harness::file(ctx, 1)).unwrap(),
                 Default::default(),
             );
             let bytes = converter.text_range(edit.range).unwrap();
@@ -141,10 +141,10 @@ fn string_literal_in_amends_clause_yields_no_candidates_yet() {
             completion(
                 ctx,
                 pkl_types::InFile::new(
-                    pkl_types::FileId(1),
-                    harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 9)
+                    harness::file(ctx, 1),
+                    harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 9)
                 ),
-                |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range)
+                |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range)
             )
             .is_none(),
             "amends-position completion is deferred with ModuleUriCompletionProvider",
@@ -163,10 +163,10 @@ fn whitespace_returns_none() {
             completion(
                 ctx,
                 pkl_types::InFile::new(
-                    pkl_types::FileId(1),
-                    harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 10)
+                    harness::file(ctx, 1),
+                    harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 10)
                 ),
-                |range| { harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range) }
+                |range| { harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range) }
             )
             .is_none()
         );
@@ -190,10 +190,10 @@ fn implement_method_suggests_abstract_superclass_methods() {
         let items = labels(completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
-                harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 4, 1),
+                harness::file(ctx, 1),
+                harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 4, 1),
             ),
-            |range| harness::range(ctx.tree(pkl_types::FileId(1)).unwrap(), range),
+            |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
         ));
 
         let speak = items
@@ -219,7 +219,7 @@ fn constrained_literal_alias_expands_every_member_with_alias_details_and_typed_e
         let response = completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
+                harness::file(ctx, 1),
                 pkl_syntax::TextSize::try_from(value_start + 2).unwrap(),
             ),
             |range| harness::range(tree, range),
@@ -260,7 +260,7 @@ fn constrained_function_union_offers_every_lambda_shape() {
         let items = completion(
             ctx,
             pkl_types::InFile::new(
-                pkl_types::FileId(1),
+                harness::file(ctx, 1),
                 pkl_syntax::TextSize::try_from(src.rfind("missing").unwrap() + 2).unwrap(),
             ),
             |range| harness::range(tree, range),

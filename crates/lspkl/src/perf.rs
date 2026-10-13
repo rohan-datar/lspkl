@@ -56,7 +56,15 @@ pub(super) struct Compute {
     execution: &'static str,
 }
 
+pub(super) fn cancelled(stage: &'static str) {
+    tracing::debug!(target: "lspkl::perf", event = "request_cancelled", stage);
+}
+
 impl Compute {
+    pub(super) fn runtime(stage: &'static str) -> Self {
+        Self::begin(stage, "runtime", None)
+    }
+
     pub(super) fn start(stage: &'static str) -> Self {
         Self::begin(stage, "blocking", None)
     }

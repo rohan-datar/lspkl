@@ -22,9 +22,9 @@ class MyPerson extends Person {
 "#;
 
     harness::with_snippet(&base, src, |ctx| {
-        let my_person = find_class_named(ctx.tree(pkl_types::FileId(1)).unwrap(), "MyPerson")
+        let my_person = find_class_named(ctx.tree(harness::file(ctx, 1)).unwrap(), "MyPerson")
             .expect("expected class MyPerson");
-        let my_person_ty = Type::class(NodeRef::new(pkl_types::FileId(1), my_person));
+        let my_person_ty = Type::class(NodeRef::new(harness::file(ctx, 1), my_person));
 
         let resolved = pkl_types::find_member(&my_person_ty, "age", ctx)
             .expect("expected to resolve inherited property `age`");
@@ -52,11 +52,11 @@ class MyPerson extends Person {
 
     harness::with_snippet(&base, src, |ctx| {
         let age_access =
-            find_unqualified_access_named(ctx.tree(pkl_types::FileId(1)).unwrap(), "age")
+            find_unqualified_access_named(ctx.tree(harness::file(ctx, 1)).unwrap(), "age")
                 .expect("expected unqualified access `age` in subclass body");
 
         let resolved = resolve_unqualified_access(
-            pkl_types::NodeRef::new(pkl_types::FileId(1), age_access),
+            pkl_types::NodeRef::new(harness::file(ctx, 1), age_access),
             "age",
             ctx,
         )
@@ -80,10 +80,10 @@ fn type_parameter_resolves_inside_typealias_body() {
 
     harness::with_snippet(&base, src, |ctx| {
         // Find the inner `T` — the DeclaredType inside Listing's TypeArgumentList.
-        let inner_t = find_declared_type_named(ctx.tree(pkl_types::FileId(1)).unwrap(), "T")
+        let inner_t = find_declared_type_named(ctx.tree(harness::file(ctx, 1)).unwrap(), "T")
             .expect("expected a DeclaredType named `T` inside the typealias body");
 
-        let resolved = resolve_declared_type(ctx, NodeRef::new(pkl_types::FileId(1), inner_t))
+        let resolved = resolve_declared_type(ctx, NodeRef::new(harness::file(ctx, 1), inner_t))
             .expect("expected `T` to resolve via the enclosing typealias's TypeParameterList");
 
         // The resolved NodeRef should point at a TypeParameter node — that's

@@ -28,8 +28,15 @@ fn range(source: &str, start: usize, end: usize, utf8: bool) -> Value {
 }
 
 async fn request(client: &mut LspClient, method: &str, params: Value) -> Value {
-    let response = client.request(method, params).await;
-    assert!(response.get("error").is_none(), "{response}");
+    let mut response = client.request(method, params.clone()).await;
+    if response.get("error").is_some() {
+        assert_eq!(response["error"]["code"], -32801, "{response}");
+        response = client.request(method, params).await;
+    }
+    assert!(
+        response.get("error").is_none(),
+        "quiescent retry failed: {response}"
+    );
     response["result"].clone()
 }
 

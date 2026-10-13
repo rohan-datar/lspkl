@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pkl-stdlib.workspace = true
+pkl-db.workspace = true
 pkl-syntax.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+pkl-vfs.workspace = true
+fluent-uri.workspace = true

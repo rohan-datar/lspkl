@@ -66,10 +66,7 @@ pub fn resolve_type_name(ctx: &AnalysisContext, parts: &[&str], node: NodeRef) -
             .map(|id| NodeRef::new(ctx.base.file_id(), id));
     }
     let import = find_import(tree, parts[0])?;
-    let mut module = ctx
-        .imports
-        .get(&NodeRef::new(node.file, import))?
-        .single()?;
+    let mut module = ctx.import(NodeRef::new(node.file, import))?.single()?;
     let mut seen = std::collections::HashSet::new();
     while seen.insert(module) {
         let t = ctx.tree(module.file)?;
@@ -89,7 +86,7 @@ pub fn module_super(module: NodeRef, ctx: &AnalysisContext) -> Option<NodeRef> {
     let tree = ctx.tree(module.file)?;
     let header = nodes::Module::cast(tree, module.value)?.header(tree)?;
     let clause = nodes::ModuleHeader::cast(tree, header)?.extends_amends_clause(tree)?;
-    ctx.imports.get(&module.with_value(clause))?.single()
+    ctx.import(module.with_value(clause))?.single()
 }
 
 pub fn import_name(tree: &SyntaxTree, import: NodeId) -> Option<String> {
@@ -117,8 +114,8 @@ fn find_import(tree: &SyntaxTree, name: &str) -> Option<NodeId> {
 }
 
 pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
-    match ctx.imports.get(&node) {
-        Some(crate::ImportResolution::Single(root)) => module_type(*root, ctx),
+    match ctx.import(node) {
+        Some(crate::ImportResolution::Single(root)) => module_type(root, ctx),
         Some(crate::ImportResolution::Glob(roots)) => {
             let value = Type::union(roots.iter().map(|r| module_type(*r, ctx)), ctx);
             ctx.base
@@ -203,9 +200,8 @@ pub fn resolve_reference(
                 && tree.text(identifier) == segments[0]
             {
                 return ctx
-                    .imports
-                    .get(&NodeRef::new(node.file, import))
-                    .and_then(crate::ImportResolution::single);
+                    .import(NodeRef::new(node.file, import))
+                    .and_then(|resolution| resolution.single());
             }
             let parent = tree.parent(node_id)?;
             match tree.kind(parent) {
@@ -222,9 +218,8 @@ pub fn resolve_reference(
             let alias = tree.identifier(node_id)?;
             if tree.span(alias).contains_inclusive(offset) {
                 return ctx
-                    .imports
-                    .get(&node.with_value(node_id))
-                    .and_then(crate::ImportResolution::single);
+                    .import(node.with_value(node_id))
+                    .and_then(|resolution| resolution.single());
             }
             None
         }
@@ -232,9 +227,8 @@ pub fn resolve_reference(
             let parent = tree.parent(node_id)?;
             match tree.kind(parent) {
                 NodeKind::Import | NodeKind::ImportExpr | NodeKind::ModuleExtendsAmendsClause => {
-                    ctx.imports
-                        .get(&node.with_value(parent))
-                        .and_then(crate::ImportResolution::single)
+                    ctx.import(node.with_value(parent))
+                        .and_then(|resolution| resolution.single())
                 }
                 _ => None,
             }
@@ -644,9 +638,8 @@ pub(crate) fn resolve_unqualified_access_with_bindings(
     if let Some(import) = find_import(tree, name) {
         let declaration = NodeRef::new(file, import);
         let target = ctx
-            .imports
-            .get(&declaration)
-            .and_then(crate::ImportResolution::single)
+            .import(declaration)
+            .and_then(|resolution| resolution.single())
             .unwrap_or(declaration);
         return Some(ResolvedType::new(target, import_type(declaration, ctx)));
     }

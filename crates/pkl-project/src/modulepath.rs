@@ -2,25 +2,31 @@
 
 use crate::dto::PklProject;
 use fluent_uri::Uri;
-use pkl_vfs::{FileManager, VirtualFile, effective_uri, url_to_path};
+use pkl_vfs::{Source, SourceLoader, effective_uri, url_to_path};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 pub struct ModulepathResolver<'a> {
-    file_manager: &'a FileManager,
+    loader: &'a dyn SourceLoader,
     configured: &'a [PathBuf],
+    cache_dir: &'a Path,
 }
 
 impl<'a> ModulepathResolver<'a> {
-    pub fn new(file_manager: &'a FileManager) -> Self {
-        Self::with_modulepaths(file_manager, &[])
+    pub fn new(loader: &'a dyn SourceLoader, cache_dir: &'a Path) -> Self {
+        Self::with_modulepaths(loader, &[], cache_dir)
     }
-    pub fn with_modulepaths(file_manager: &'a FileManager, configured: &'a [PathBuf]) -> Self {
+    pub fn with_modulepaths(
+        loader: &'a dyn SourceLoader,
+        configured: &'a [PathBuf],
+        cache_dir: &'a Path,
+    ) -> Self {
         Self {
-            file_manager,
+            loader,
             configured,
+            cache_dir,
         }
     }
     /// Project entries precede globally configured entries.
@@ -48,11 +54,7 @@ impl<'a> ModulepathResolver<'a> {
             .filter_map(|path| root_uri(path))
             .collect()
     }
-    pub fn relative_path(
-        &self,
-        file: &VirtualFile,
-        context: Option<&PklProject>,
-    ) -> Option<String> {
+    pub fn relative_path(&self, file: &Source, context: Option<&PklProject>) -> Option<String> {
         let uri = effective_uri(&file.url).ok()?;
         self.roots(context)
             .iter()
@@ -62,19 +64,19 @@ impl<'a> ModulepathResolver<'a> {
         &self,
         path: &str,
         context: Option<&PklProject>,
-    ) -> Option<Arc<VirtualFile>> {
+    ) -> Option<Arc<Source>> {
         let path = path.strip_prefix('/')?;
         self.roots(context).iter().find_map(|root| {
-            let target = resolve_member(self.file_manager, root, path)?;
-            self.file_manager.get_or_load(&target).ok()
+            let target = resolve_member(self.loader, root, path)?;
+            self.loader.load(&target, self.cache_dir).ok()
         })
     }
     pub fn resolve_relative(
         &self,
-        file: &VirtualFile,
+        file: &Source,
         path: &str,
         context: Option<&PklProject>,
-    ) -> Option<Arc<VirtualFile>> {
+    ) -> Option<Arc<Source>> {
         if path.starts_with('/') {
             return self.resolve_absolute(path, context);
         }
@@ -101,7 +103,7 @@ impl<'a> ModulepathResolver<'a> {
     pub fn files(&self, context: Option<&PklProject>) -> BTreeMap<String, Uri<String>> {
         let mut files = BTreeMap::new();
         for root in self.roots(context) {
-            if let Ok(entries) = self.file_manager.list_files(&root) {
+            if let Ok(entries) = self.loader.list_files(&root) {
                 for uri in entries {
                     if let Some(path) = relative_uri(&root, &uri) {
                         files.entry(path).or_insert(uri);
@@ -166,7 +168,7 @@ pub(crate) fn decode_path(path: &str) -> Option<std::borrow::Cow<'_, str>> {
 /// its re-encoded normalized path prevents VFS scheme/authority dispatch and
 /// ensures literal percent signs are not decoded a second time.
 pub(crate) fn resolve_member(
-    files: &FileManager,
+    files: &dyn SourceLoader,
     root: &Uri<String>,
     path: &str,
 ) -> Option<Uri<String>> {

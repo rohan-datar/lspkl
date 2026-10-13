@@ -28,9 +28,9 @@ fn hover_on_unqualified_access_renders_property() {
     let base = harness::load_test_base();
     let src = "x = 1\ny = x\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 1, 4);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 4);
 
-        let result = hover(ctx, pkl_types::InFile::new(pkl_types::FileId(1), offset))
+        let result = hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset))
             .expect("hover should produce a result for `x`");
 
         let HoverContents::Markup(markup) = result.contents else {
@@ -52,10 +52,10 @@ fn hover_on_whitespace_returns_none() {
     let src = "x = 1\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         // Column 10 is well past `x = 1` (length 5).
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 0, 10);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 10);
 
         assert!(
-            hover(ctx, pkl_types::InFile::new(pkl_types::FileId(1), offset)).is_none(),
+            hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset)).is_none(),
             "no hover info expected past end of line",
         );
     });
@@ -70,9 +70,9 @@ fn hover_includes_doc_comment_and_signature() {
     let src = "/// Doubles a number.\nfunction double(n: Int): Int = n\ny = double(1)\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         // Cursor on the `double` reference in `y = double(1)`.
-        let offset = harness::offset(ctx.tree(pkl_types::FileId(1)).unwrap(), 2, 6);
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 2, 6);
 
-        let result = hover(ctx, pkl_types::InFile::new(pkl_types::FileId(1), offset))
+        let result = hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset))
             .expect("hover should resolve `double`");
         let HoverContents::Markup(markup) = result.contents else {
             panic!("expected MarkupContent, got something else");

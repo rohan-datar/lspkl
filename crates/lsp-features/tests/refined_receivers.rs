@@ -2,7 +2,7 @@ mod harness;
 
 use lsp_features::{goto_definition::goto_definition, hover::hover};
 use lsp_types::{GotoDefinitionResponse, HoverContents, Position, Range};
-use pkl_types::{FileId, InFile};
+use pkl_types::InFile;
 
 #[test]
 fn constrained_receiver_keeps_qualified_hover_and_definition() {
@@ -10,7 +10,7 @@ fn constrained_receiver_keeps_qualified_hover_and_definition() {
     let source = "class Box {\n  /// The stored text.\n  value: String\n}\nbox: Box(true)\nresult = box.value\n";
     harness::with_snippet(&base, source, |_tree, ctx| {
         let cursor = InFile::new(
-            FileId(1),
+            harness::file(ctx, 1),
             source.rfind("value").unwrap().try_into().unwrap(),
         );
         let hovered = hover(ctx, cursor).unwrap();
@@ -27,7 +27,7 @@ fn constrained_receiver_keeps_qualified_hover_and_definition() {
         let definition = goto_definition(
             ctx,
             cursor,
-            |file| (file == FileId(1)).then(|| uri.clone()),
+            |file| (file == harness::file(ctx, 1)).then(|| uri.clone()),
             harness::range,
         )
         .unwrap();

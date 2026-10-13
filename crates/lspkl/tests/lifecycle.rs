@@ -89,17 +89,13 @@ async fn did_open_then_state_has_file() {
         .did_open(open_params(uri.clone(), "foo = 1", 1))
         .await;
 
-    // state.file_manager should now know about the URL.
-    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
-    let file = backend
-        .workspace
-        .lock()
-        .snapshot()
-        .file_manager
-        .get(&url)
-        .expect("file should be registered after did_open");
-    assert_eq!(file.contents(), "foo = 1");
-    assert_eq!(file.version(), Some(1));
+    let snapshot = backend.workspace.lock().snapshot();
+    let file = snapshot
+        .document(uri.as_str())
+        .expect("file should be open after did_open");
+    assert_eq!(file.text(&snapshot.db).as_ref(), "foo = 1");
+    assert_eq!(file.version(&snapshot.db), Some(1));
+    assert_eq!(file.status(&snapshot.db), pkl_db::FileStatus::Open);
 }
 
 #[tokio::test]
@@ -129,16 +125,10 @@ async fn did_change_updates_contents() {
         })
         .await;
 
-    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
-    let file = backend
-        .workspace
-        .lock()
-        .snapshot()
-        .file_manager
-        .get(&url)
-        .unwrap();
-    assert_eq!(file.contents(), "foo = 2");
-    assert_eq!(file.version(), Some(2));
+    let snapshot = backend.workspace.lock().snapshot();
+    let file = snapshot.document(uri.as_str()).unwrap();
+    assert_eq!(file.text(&snapshot.db).as_ref(), "foo = 2");
+    assert_eq!(file.version(&snapshot.db), Some(2));
 }
 
 #[tokio::test]
@@ -160,16 +150,9 @@ async fn did_close_removes_file_from_state() {
         })
         .await;
 
-    let url = fluent_uri::Uri::parse(uri.as_str().to_string()).unwrap();
     assert!(
-        backend
-            .workspace
-            .lock()
-            .snapshot()
-            .file_manager
-            .get(&url)
-            .is_none(),
-        "file must be removed after did_close"
+        backend.workspace.lock().document(uri.as_str()).is_none(),
+        "file must no longer be open after did_close"
     );
 }
 
@@ -212,6 +195,7 @@ async fn initialization_without_settings_preserves_project_discovery_exclusions(
             .unwrap(),
         [temp.path().join("src/PklProject")]
     );
+    drop(snapshot);
     let params = InitializeParams {
         initialization_options: Some(
             serde_json::json!({"pkl":{"projects":{"excludedDirectories":[]}}}),
@@ -219,6 +203,7 @@ async fn initialization_without_settings_preserves_project_discovery_exclusions(
         ..params
     };
     backend.initialize(params).await.unwrap();
+    let snapshot = backend.workspace.lock().snapshot();
     assert_eq!(
         snapshot
             .project_manager
@@ -254,4 +239,101 @@ async fn dropping_backend_releases_workspace_held_by_diagnostic_workers() {
     })
     .await
     .expect("closed diagnostic workers must release their workspace");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backend_request_cancellation_returns_content_modified_and_next_request_is_fresh() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let armed = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let callback_armed = armed.clone();
+    let callback_entered = entered.clone();
+    let callback_release = release.clone();
+    let db = pkl_db::RootDatabase::with_event_callback(
+        Arc::new(pkl_vfs::StandardSourceLoader::default()),
+        Default::default(),
+        Some(Box::new(move |event| match event.kind {
+            salsa::EventKind::WillExecute { .. }
+                if callback_armed.swap(false, Ordering::SeqCst) =>
+            {
+                callback_entered.notify_one();
+                let (lock, condition) = &*callback_release;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = condition.wait(released).unwrap();
+                }
+            }
+            salsa::EventKind::DidSetCancellationFlag => {
+                let (lock, condition) = &*callback_release;
+                *lock.lock().unwrap() = true;
+                condition.notify_all();
+            }
+            _ => {}
+        })),
+    );
+    let workspace = Arc::new(parking_lot::Mutex::new(lspkl::Workspace::with_database(db)));
+    let backend = Arc::new(PklBackend::new(workspace, None));
+    let uri = pkl_url("cancel.pkl");
+    backend
+        .did_open(open_params(
+            uri.clone(),
+            "value: Int = 1\nanswer = value\n",
+            1,
+        ))
+        .await;
+    *release.0.lock().unwrap() = false;
+    armed.store(true, Ordering::SeqCst);
+    let params = HoverParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position::new(1, 10),
+        },
+        work_done_progress_params: Default::default(),
+    };
+    let request_backend = backend.clone();
+    let request_params = params.clone();
+    let request = tokio::spawn(async move { request_backend.hover(request_params).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .expect("worker must reach WillExecute");
+    let writer = backend.clone();
+    let write_uri = uri.clone();
+    tokio::task::spawn_blocking(move || {
+        writer
+            .workspace
+            .lock()
+            .apply_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: write_uri,
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "value: String = \"new\"\nanswer = value\n".into(),
+                }],
+            })
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), request)
+        .await
+        .unwrap()
+        .expect("request must return a protocol error, not panic")
+        .unwrap_err();
+    assert_eq!(serde_json::to_value(error).unwrap()["code"], -32801);
+    let hover = backend.hover(params).await.unwrap().unwrap();
+    let HoverContents::Markup(contents) = hover.contents else {
+        panic!("expected markup")
+    };
+    assert!(
+        contents.value.contains("value: String"),
+        "{}",
+        contents.value
+    );
 }

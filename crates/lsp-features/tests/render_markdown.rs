@@ -8,7 +8,7 @@
 mod harness;
 
 use pkl_syntax::ast::NodeKind;
-use pkl_types::{FileId, NodeRef};
+use pkl_types::NodeRef;
 
 use lsp_features::hover::render_markdown;
 
@@ -21,7 +21,7 @@ fn render_first(source: &str, kind: NodeKind) -> Option<String> {
             .children_matching(tree.root(), |k| *k == kind)
             .first()
             .unwrap_or_else(|| panic!("no top-level {kind:?} in snippet"));
-        let node = NodeRef::new(FileId(1), node_id);
+        let node = NodeRef::new(harness::file(ctx, 1), node_id);
         render_markdown(node, node, ctx)
     })
 }
@@ -143,7 +143,7 @@ fn renders_method_modifiers_with_signature() {
 fn renders_module_value_root() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = 1\n", |tree, ctx| {
-        let node = NodeRef::new(FileId(1), tree.root());
+        let node = NodeRef::new(harness::file(ctx, 1), tree.root());
         assert_eq!(
             render_markdown(node, node, ctx).as_deref(),
             Some("```pkl\nmodule \n```")

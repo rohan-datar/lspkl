@@ -168,3 +168,20 @@ fn project_metadata_parses_from_cli_output() {
         "unknown fields must be ignored"
     );
 }
+
+#[test]
+fn missing_local_dependency_keeps_declared_identity_and_path() {
+    use pkl_project::dto::{Dependency, resolved_to_dependency};
+    let root = tempfile::tempdir().unwrap();
+    let uri = PackageUri::create("package://localhost/utils@0.0.1").unwrap();
+    let dep = ResolvedDependency::Local(LocalDependency {
+        uri: uri.clone(),
+        path: "missing".into(),
+    });
+    let Dependency::LocalProject(local) = resolved_to_dependency(&dep, root.path()) else {
+        panic!("declared local dependency must not become a package");
+    };
+    assert_eq!(local.uri, uri);
+    assert_eq!(local.project_dir, root.path().join("missing"));
+    assert!(!local.project_dir.exists());
+}

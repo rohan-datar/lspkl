@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(unix)]
-use lspkl::settings::WorkspaceSettings;
+use pkl_db::settings::WorkspaceSettings;
 
 use lspkl::{PklBackend, Workspace};
 use parking_lot::Mutex;
@@ -296,4 +296,194 @@ async fn read_message<R: AsyncReadExt + Unpin>(reader: &mut R) -> String {
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body).await.expect("body read");
     String::from_utf8(body).expect("body utf8")
+}
+
+// Run in a separate executable: a non-yielding worker would also starve a Tokio
+// timeout on the server's current-thread runtime, so the parent owns the deadline.
+#[test]
+fn stale_diagnostic_generation_waits_for_close_and_settings_refresh() {
+    const CHILD: &str = "LSPKL_STALE_DIAGNOSTIC_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "stale_diagnostic_generation_waits_for_close_and_settings_refresh",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "current-thread diagnostic child failed: {status}"
+                );
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "stale diagnostic generation busy-spun or blocked the current-thread server"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        use tower_lsp_server::LanguageServer;
+        use lsp_types::*;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("main.pkl");
+        fs::write(&path, "value: String = \"disk\"\n").unwrap();
+        let uri: Uri = pkl_vfs::path_to_uri(&path).unwrap().as_str().parse().unwrap();
+        let workspace = Arc::new(Mutex::new(Workspace::new()));
+        let (service, socket) = LspService::build(move |client| PklBackend::new(workspace, Some(client)))
+            .custom_method("pkl/fileContents", PklBackend::file_contents).finish();
+        let backend = service.inner();
+        backend.initialize(InitializeParams::default()).await.unwrap();
+        let opened = |version, text: &str| DidOpenTextDocumentParams {
+            text_document: TextDocumentItem { uri: uri.clone(), language_id: "pkl".into(), version, text: text.into() }
+        };
+        // No await can yield between didOpen's spawn and didClose's generation
+        // bump. The first worker poll therefore sees the obsolete watch slot.
+        backend.did_open(opened(1, "value: Int = \"wrong\"\n")).await;
+        backend.did_close(DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() }
+        }).await;
+        backend.did_open(opened(2, "value: Int = \"wrong\"\n")).await;
+        // Likewise, settings mutate the generation before refresh reload yields.
+        backend.did_change_configuration(DidChangeConfigurationParams {
+            settings: serde_json::json!({"modulepath": [temp.path()]})
+        }).await;
+        backend.did_change(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 3 },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None, range_length: None, text: "value: String = \"latest\"\n".into()
+            }]
+        }).await;
+        let (mut tx, rx) = tokio::io::duplex(16384);
+        let (output, mut input) = tokio::io::duplex(16384);
+        let server = tokio::spawn(async move { Server::new(rx, output, socket).serve(service).await });
+        write_message(&mut tx, r#"{"jsonrpc":"2.0","id":90,"method":"initialize","params":{"capabilities":{}}}"#).await;
+        loop {
+            let message: serde_json::Value = serde_json::from_str(&read_message(&mut input).await).unwrap();
+            if message["method"] == "textDocument/publishDiagnostics" && message["params"]["version"] == 3 {
+                assert_eq!(message["params"]["diagnostics"], serde_json::json!([]), "{message}");
+            }
+            if message["id"] == 90 {
+                assert!(message.get("error").is_none(), "{message}");
+                break;
+            }
+        }
+        // Require publication after the real protocol initialization handshake.
+        let mut published = false;
+        write_message(&mut tx, &serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":4},"contentChanges":[{"text":"value: String = \"latest\"\n"}]}}).to_string()).await;
+        write_message(&mut tx, &serde_json::json!({"jsonrpc":"2.0","id":91,"method":"pkl/fileContents","params":{"uri":uri}}).to_string()).await;
+        let mut responded = false;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !responded || !published {
+                let message: serde_json::Value = serde_json::from_str(&read_message(&mut input).await).unwrap();
+                if message["id"] == 91 {
+                    assert_eq!(message["result"], "value: String = \"latest\"\n", "{message}");
+                    responded = true;
+                }
+                if message["method"] == "textDocument/publishDiagnostics" && message["params"]["version"] == 4 {
+                    assert_eq!(message["params"]["diagnostics"], serde_json::json!([]), "{message}");
+                    published = true;
+                }
+            }
+        }).await.expect("current-thread server must respond and publish latest diagnostics");
+        server.abort();
+        let _ = server.await;
+    });
+}
+
+#[tokio::test]
+async fn sync_completion_survives_document_edits_and_installs_project_imports() {
+    use tower_lsp_server::LanguageServer;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let project = root.join("PklProject");
+    fs::write(&project, "amends \"pkl:Project\"\n").unwrap();
+    fs::write(
+        root.join("PklProject.deps.json"),
+        r#"{"schemaVersion":1,"resolvedDependencies":{}}"#,
+    )
+    .unwrap();
+    fs::create_dir(root.join("modules")).unwrap();
+    fs::write(root.join("modules/library.pkl"), "value: Int = 1\n").unwrap();
+    let started = root.join("started");
+    let release = root.join("release");
+    let binary = root.join("pkl");
+    let metadata = serde_json::json!({"projectFileUri":url::Url::from_file_path(&project).unwrap().as_str(),
+        "packageUri":null,"declaredDependencies":{},"evaluatorSettings":{"modulePath":["modules"]}});
+    fs::write(&binary, format!("#!/bin/sh\ncase \"$1\" in\nproject) exit 0;;\neval) : > {}; while [ ! -e {} ]; do sleep 0.01; done; printf '%s' {};;\n*) exit 9;;\nesac\n",
+        shell_quote(&started.to_string_lossy()), shell_quote(&release.to_string_lossy()), shell_quote(&metadata.to_string()))).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let backend = Arc::new(PklBackend::for_testing());
+    backend.initialize(serde_json::from_value(serde_json::json!({"capabilities":{},
+        "workspaceFolders":[{"uri":url::Url::from_directory_path(root).unwrap().as_str(),"name":"fixture"}],
+        "initializationOptions":{"pkl":{"cli":{"path":binary}}}})).unwrap()).await.unwrap();
+    let main: lsp_types::Uri = url::Url::from_file_path(root.join("main.pkl"))
+        .unwrap()
+        .as_str()
+        .parse()
+        .unwrap();
+    let source = "import \"modulepath:/library.pkl\" as library\nanswer = library.value\n";
+    backend
+        .did_open(lsp_types::DidOpenTextDocumentParams {
+            text_document: lsp_types::TextDocumentItem {
+                uri: main.clone(),
+                language_id: "pkl".into(),
+                version: 1,
+                text: source.into(),
+            },
+        })
+        .await;
+    let running = backend.clone();
+    let sync = tokio::spawn(async move { running.sync_projects().await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    backend
+        .did_change(lsp_types::DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: main.clone(),
+                version: 2,
+            },
+            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: format!("// changed during CLI\n{source}"),
+            }],
+        })
+        .await;
+    fs::write(&release, "").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), sync)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let hover = backend
+        .hover(lsp_types::HoverParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: main },
+                position: lsp_types::Position::new(2, 18),
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let lsp_types::HoverContents::Markup(contents) = hover.contents else {
+        panic!("expected property hover")
+    };
+    assert!(contents.value.contains("value: Int"), "{}", contents.value);
 }

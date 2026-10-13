@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use pkl_vfs::file_manager::url_to_path;
+use pkl_vfs::url_to_path;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -311,30 +311,19 @@ pub struct LocalProjectDependency {
 
 /// Convert a resolved-deps entry into a [`Dependency`], resolving local paths
 /// against the referencing project's directory.
-///
-/// Returns `None` for local deps whose target directory doesn't exist
-pub fn resolved_to_dependency(
-    resolved: &ResolvedDependency,
-    project_dir: &Path,
-) -> Option<Dependency> {
+pub fn resolved_to_dependency(resolved: &ResolvedDependency, project_dir: &Path) -> Dependency {
     match resolved {
         ResolvedDependency::Local(LocalDependency { uri, path }) => {
-            let project_dir = project_dir.join(path);
-            let exists = project_dir.try_exists().ok()?;
-            if exists {
-                Some(Dependency::LocalProject(LocalProjectDependency {
-                    uri: uri.to_owned(),
-                    project_dir,
-                }))
-            } else {
-                None
-            }
+            Dependency::LocalProject(LocalProjectDependency {
+                uri: uri.to_owned(),
+                project_dir: project_dir.join(path),
+            })
         }
         ResolvedDependency::Remote(RemoteDependency { uri, checksums }) => {
-            Some(Dependency::Package(PackageDependency {
+            Dependency::Package(PackageDependency {
                 uri: uri.to_owned(),
                 checksums: checksums.clone(),
-            }))
+            })
         }
     }
 }
