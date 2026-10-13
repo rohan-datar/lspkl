@@ -37,7 +37,9 @@ impl Analyzer for AccessExprAnalyzer {
                 };
                 let receiver_type = NodeRef::new(file, receiver)
                     .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+                    .map_or(Type::Unknown, |expr| {
+                        pkl_types::expr_type(ctx.db, expr, ctx.root)
+                    });
 
                 // Suppression: receiver type unknown, or Dynamic on property access
                 if matches!(receiver_type, Type::Unknown) {
@@ -50,7 +52,7 @@ impl Analyzer for AccessExprAnalyzer {
                 }
 
                 let name = source_tree.name(node).unwrap_or("");
-                let Some(r) = find_member(&receiver_type, name, ctx) else {
+                let Some(r) = find_member(ctx.db, &receiver_type, name) else {
                     // Identifier-only span if you can; else the whole expr span
                     let ident = source_tree
                         .identifier(node)
@@ -85,7 +87,7 @@ impl Analyzer for AccessExprAnalyzer {
                 let name = source_tree.name(node).unwrap_or("");
                 let Some(entry) = scope_at(NodeRef::new(file, node), ctx).lookup(name) else {
                     // Suppression on this-type:
-                    let this_ty = pkl_types::this_type(NodeRef::new(file, node), ctx);
+                    let this_ty = pkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);
                     if matches!(this_ty, Type::Unknown) {
                         return true;
                     }
@@ -344,8 +346,12 @@ fn is_vararg(method_decl: &NodeRef, ctx: &AnalysisContext) -> bool {
     else {
         return false;
     };
-    pkl_types::resolver::resolve_declared_type(ctx, method_decl.with_value(ty.id()))
-        .is_some_and(|class| Type::class(class).class_equals(ctx.base.varargs_type()))
+    method_decl
+        .with_value(ty.id())
+        .cast(ctx, nodes::TypeNode::cast)
+        .is_some_and(|ty| {
+            pkl_types::to_type(ctx.db, ty, ctx.root).class_equals(ctx.base.varargs_type())
+        })
 }
 
 fn target_is_const(target: NodeRef, ctx: &AnalysisContext) -> bool {
@@ -394,7 +400,7 @@ fn resolve_super_access(
     let source_tree = ctx.tree(file)?;
     let name = source_tree.name(access)?;
     let super_ty = pkl_types::resolver::access_receiver_type(NodeRef::new(file, access), ctx)?;
-    find_member(&super_ty, name, ctx)
+    find_member(ctx.db, &super_ty, name)
 }
 
 /// If the outer access (`outer_target`) resolves to one of the `List` /
@@ -452,8 +458,11 @@ fn check_redundant_conversion(
     };
     let receiver_receiver_type = NodeRef::new(file, receiver_receiver)
         .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-        .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
-    let Some(receiver_resolved) = find_member(&receiver_receiver_type, receiver_name, ctx) else {
+        .map_or(Type::Unknown, |expr| {
+            pkl_types::expr_type(ctx.db, expr, ctx.root)
+        });
+    let Some(receiver_resolved) = find_member(ctx.db, &receiver_receiver_type, receiver_name)
+    else {
         return;
     };
     if receiver_resolved.node != conversion_target {

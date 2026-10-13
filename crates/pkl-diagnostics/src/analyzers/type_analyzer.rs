@@ -32,7 +32,7 @@ impl Analyzer for TypeAnalyzer {
         }
         let node_type = NodeRef::new(file, node)
             .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
-            .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
+            .map_or(Type::Unknown, |ty| pkl_types::to_type(ctx.db, ty, ctx.root));
 
         let param_count = match node_type.unconstrained() {
             Type::Class { type_args, .. } => type_args.len(),

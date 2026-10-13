@@ -20,7 +20,11 @@ fn property_type(ctx: &AnalysisContext, name: &str) -> Type {
         .members(tree)
         .find(|&node| tree.name(node) == Some(name))
         .unwrap();
-    pkl_types::resolver::definition_type(NodeRef::new(harness::file(ctx, 1), property), ctx)
+    pkl_types::resolver::definition_type(
+        ctx.db,
+        NodeRef::new(harness::file(ctx, 1), property),
+        ctx.root,
+    )
 }
 
 #[test]
@@ -30,21 +34,21 @@ fn equivalent_unions_have_canonical_equality_hash_and_rendering() {
         let a = base.int_type().clone();
         let b = base.string_type().clone();
         let c = base.boolean_type().clone();
-        let expected = Type::union([a.clone(), b.clone(), c.clone()], ctx);
+        let expected = Type::union([a.clone(), b.clone(), c.clone()], ctx.db);
         let nested = Type::union(
             [
                 c.clone(),
-                Type::union([b.clone(), a.clone()], ctx),
+                Type::union([b.clone(), a.clone()], ctx.db),
                 b.clone(),
             ],
-            ctx,
+            ctx.db,
         );
-        let reversed = Type::union([c, b, a], ctx);
+        let reversed = Type::union([c, b, a], ctx.db);
         assert_eq!(expected, nested);
         assert_eq!(expected, reversed);
         assert_eq!(hash(&expected), hash(&nested));
         assert_eq!(hash(&expected), hash(&reversed));
-        assert_eq!(expected.render(ctx), nested.render(ctx));
+        assert_eq!(expected.render(ctx.db), nested.render(ctx.db));
         assert_eq!(HashSet::from([expected, nested, reversed]).len(), 1);
     });
 }
@@ -58,9 +62,9 @@ fn syntax_normalizes_duplicate_and_nested_nullable_types() {
         |ctx| {
             assert_eq!(property_type(ctx, "x"), property_type(ctx, "w"));
             assert_eq!(property_type(ctx, "y"), property_type(ctx, "z"));
-            assert_eq!(property_type(ctx, "x").render(ctx), "(A|B)?");
+            assert_eq!(property_type(ctx, "x").render(ctx.db), "(A|B)?");
             let ty = property_type(ctx, "x");
-            assert_eq!(ty.clone().nullable(ctx), ty);
+            assert_eq!(ty.clone().nullable(ctx.db), ty);
         },
     );
 }
@@ -71,19 +75,19 @@ fn union_bottom_unknown_and_subtype_absorption_rules() {
     harness::with_ctx(&base, |ctx| {
         let int = base.int_type().clone();
         let number = base.number_type().clone();
-        assert_eq!(Type::union([], ctx), Type::Nothing);
+        assert_eq!(Type::union([], ctx.db), Type::Nothing);
         assert_eq!(
-            Type::union([Type::Nothing, Type::Nothing], ctx),
+            Type::union([Type::Nothing, Type::Nothing], ctx.db),
             Type::Nothing
         );
-        assert_eq!(Type::union([Type::Nothing, int.clone()], ctx), int);
-        assert_eq!(Type::union([int.clone(), int.clone()], ctx), int);
-        assert_eq!(Type::union([int.clone(), number.clone()], ctx), number);
+        assert_eq!(Type::union([Type::Nothing, int.clone()], ctx.db), int);
+        assert_eq!(Type::union([int.clone(), int.clone()], ctx.db), int);
+        assert_eq!(Type::union([int.clone(), number.clone()], ctx.db), number);
         for types in [
             vec![Type::Unknown, int.clone(), Type::Nothing],
             vec![Type::Nothing, int, Type::Unknown],
         ] {
-            assert_eq!(Type::union(types, ctx), Type::Unknown);
+            assert_eq!(Type::union(types, ctx.db), Type::Unknown);
         }
     });
 }
@@ -100,7 +104,7 @@ fn union_preserves_constraints_and_string_literal_choices() {
             base.int_type().clone(),
             vec![ConstraintExpr::opaque("this < 0")],
         );
-        let union = Type::union([positive.clone(), negative.clone()], ctx);
+        let union = Type::union([positive.clone(), negative.clone()], ctx.db);
         let Type::Union { members } = &union else {
             panic!("constraint distinctions were absorbed")
         };
@@ -113,7 +117,7 @@ fn union_preserves_constraints_and_string_literal_choices() {
                 Type::string_literal("red"),
                 Type::string_literal("blue"),
             ],
-            ctx,
+            ctx.db,
         );
         let Type::Union { members } = &choices else {
             panic!("literal choices were absorbed")
@@ -149,7 +153,7 @@ fn constraints_merge_and_preserve_generic_container_and_member_queries() {
             Some(base.int_type().clone())
         );
         assert_eq!(
-            pkl_types::find_member(&constrained, "length", ctx)
+            pkl_types::find_member(ctx.db, &constrained, "length")
                 .unwrap()
                 .ty,
             *base.int_type()
@@ -185,16 +189,16 @@ fn generic_aliases_keep_identity_arguments_and_constraints() {
                 panic!("alias identity lost")
             };
             assert_eq!(type_args, &[base.string_type().clone()]);
-            assert!(alias.render(ctx).starts_with("Entries<String>"));
+            assert!(alias.render(ctx.db).starts_with("Entries<String>"));
             assert_eq!(
                 pkl_types::resolver::container_value_type(&alias, ctx),
                 Some(base.string_type().clone())
             );
             assert_eq!(
-                pkl_types::find_member(&alias, "length", ctx).unwrap().ty,
+                pkl_types::find_member(ctx.db, &alias, "length").unwrap().ty,
                 *base.int_type()
             );
-            let resolved = alias.unaliased(ctx);
+            let resolved = alias.unaliased(ctx.db);
             assert_eq!(resolved.constraints().len(), 1);
             assert_eq!(
                 resolved.unconstrained(),
@@ -203,7 +207,7 @@ fn generic_aliases_keep_identity_arguments_and_constraints() {
                     .clone()
                     .with_type_args(vec![base.string_type().clone()])
             );
-            let union = Type::union([alias.clone(), alias.clone()], ctx);
+            let union = Type::union([alias.clone(), alias.clone()], ctx.db);
             assert_eq!(union, alias);
         },
     );
@@ -221,9 +225,18 @@ fn member_sets_intersect_all_branches_but_lookup_keeps_available_members() {
                 .unwrap()
                 .members(tree)
                 .filter(|&node| matches!(tree.kind(node), NodeKind::Class))
-                .map(|node| Type::class(NodeRef::new(harness::file(ctx, 1), node)));
-            let union = Type::union(types, ctx);
-            let members = pkl_types::members_of_type(&union, ctx);
+                .map(|node| {
+                    Type::class(
+                        pkl_types::class_id(
+                            ctx.db,
+                            NodeRef::new(harness::file(ctx, 1), node),
+                            ctx.root,
+                        )
+                        .expect("class declaration"),
+                    )
+                });
+            let union = Type::union(types, ctx.db);
+            let members = pkl_types::members_of_type(ctx.db, &union);
             assert_eq!(
                 members
                     .iter()
@@ -236,24 +249,29 @@ fn member_sets_intersect_all_branches_but_lookup_keeps_available_members() {
                         base.string_type().clone(),
                         base.boolean_type().clone()
                     ],
-                    ctx
+                    ctx.db
                 )
             );
             assert!(!members.iter().any(|member| member.name == "partial"));
             assert_eq!(
-                pkl_types::find_member(&union, "shared", ctx).unwrap().ty,
+                pkl_types::find_member(ctx.db, &union, "shared").unwrap().ty,
                 Type::union(
                     [
                         base.int_type().clone(),
                         base.string_type().clone(),
                         base.boolean_type().clone()
                     ],
-                    ctx
+                    ctx.db
                 )
             );
             assert_eq!(
-                pkl_types::find_member(&union, "partial", ctx).unwrap().ty,
-                Type::union([base.int_type().clone(), base.string_type().clone()], ctx)
+                pkl_types::find_member(ctx.db, &union, "partial")
+                    .unwrap()
+                    .ty,
+                Type::union(
+                    [base.int_type().clone(), base.string_type().clone()],
+                    ctx.db
+                )
             );
         },
     );
@@ -284,8 +302,8 @@ fn module_identity_and_rendering_ignore_import_paths_and_aliases() {
         .ty;
     assert_eq!(direct, alternate);
     assert_eq!(hash(&direct), hash(&alternate));
-    assert_eq!(direct.render(&ctx), "Target");
-    assert_eq!(Type::union([direct.clone(), alternate], &ctx), direct);
+    assert_eq!(direct.render(ctx.db), "Target");
+    assert_eq!(Type::union([direct.clone(), alternate], ctx.db), direct);
 }
 
 #[test]
@@ -302,14 +320,14 @@ fn expression_and_container_unions_normalize_without_losing_generic_arguments() 
                 combined,
                 base.list_type().clone().with_type_args(vec![Type::union(
                     [base.int_type().clone(), base.string_type().clone()],
-                    ctx
+                    ctx.db
                 ),])
             );
             assert_eq!(
                 pkl_types::resolver::container_value_type(&combined, ctx),
                 Some(Type::union(
                     [base.int_type().clone(), base.string_type().clone()],
-                    ctx
+                    ctx.db
                 ))
             );
         },
@@ -326,10 +344,10 @@ fn constrained_generic_class_member_substitutes_the_argument() {
             let ty = property_type(ctx, "x");
             assert_eq!(ty.constraints().len(), 1);
             assert_eq!(
-                pkl_types::find_member(&ty, "value", ctx).unwrap().ty,
+                pkl_types::find_member(ctx.db, &ty, "value").unwrap().ty,
                 *base.string_type()
             );
-            let members = pkl_types::members_of_type(&ty, ctx);
+            let members = pkl_types::members_of_type(ctx.db, &ty);
             assert_eq!(
                 members
                     .iter()
@@ -339,14 +357,17 @@ fn constrained_generic_class_member_substitutes_the_argument() {
                 *base.string_type()
             );
             let alternatives = property_type(ctx, "y");
-            let members = pkl_types::members_of_type(&alternatives, ctx);
+            let members = pkl_types::members_of_type(ctx.db, &alternatives);
             assert_eq!(
                 members
                     .iter()
                     .find(|member| member.name == "value")
                     .unwrap()
                     .ty,
-                Type::union([base.int_type().clone(), base.string_type().clone()], ctx)
+                Type::union(
+                    [base.int_type().clone(), base.string_type().clone()],
+                    ctx.db
+                )
             );
         },
     );
@@ -431,11 +452,11 @@ fn non_null_keeps_every_non_null_branch_and_refinement() {
         "class A {}\nclass B {}\ntypealias Maybe = (A?|B)?\nx: Maybe\ny: A|B\nz: ((A?|B)?)(true)",
         |ctx| {
             let expected = property_type(ctx, "y");
-            assert_eq!(property_type(ctx, "x").non_null(ctx), expected);
-            let refined = property_type(ctx, "z").non_null(ctx);
+            assert_eq!(property_type(ctx, "x").non_null(ctx.db), expected);
+            let refined = property_type(ctx, "z").non_null(ctx.db);
             assert_eq!(refined.unconstrained(), &expected);
             assert_eq!(refined.constraints(), &[ConstraintExpr::opaque("true")]);
-            assert_eq!(base.null_type().non_null(ctx), Type::Nothing);
+            assert_eq!(base.null_type().non_null(ctx.db), Type::Nothing);
         },
     );
 }
@@ -470,11 +491,11 @@ fn recursive_aliases_recover_without_crashing() {
     ] {
         harness::with_snippet(&base, source, |ctx| {
             let mixed = property_type(ctx, "x");
-            assert_eq!(property_type(ctx, "y").unaliased(ctx), Type::Unknown);
-            assert_eq!(property_type(ctx, "y").non_null(ctx), Type::Unknown);
-            assert!(base.int_type().is_subtype_of(&mixed, ctx));
+            assert_eq!(property_type(ctx, "y").unaliased(ctx.db), Type::Unknown);
+            assert_eq!(property_type(ctx, "y").non_null(ctx.db), Type::Unknown);
+            assert!(base.int_type().is_subtype_of(&mixed, ctx.db));
             assert_eq!(
-                pkl_types::find_member(&mixed, "length", ctx).unwrap().ty,
+                pkl_types::find_member(ctx.db, &mixed, "length").unwrap().ty,
                 *base.int_type()
             );
         });
@@ -497,28 +518,28 @@ fn finite_nested_alias_arguments_are_not_recursive_bodies() {
         ),
         |ctx| {
             assert_eq!(
-                property_type(ctx, "repeat").unaliased(ctx),
+                property_type(ctx, "repeat").unaliased(ctx.db),
                 *base.string_type()
             );
             assert_eq!(
-                property_type(ctx, "alternate").unaliased(ctx),
+                property_type(ctx, "alternate").unaliased(ctx.db),
                 *base.string_type()
             );
             let refined = property_type(ctx, "refined");
-            assert!(refined.has_constraints(ctx));
-            assert_eq!(refined.unaliased(ctx).unconstrained(), base.int_type());
+            assert!(refined.has_constraints(ctx.db));
+            assert_eq!(refined.unaliased(ctx.db).unconstrained(), base.int_type());
             assert_eq!(
-                refined.unaliased(ctx).constraints(),
+                refined.unaliased(ctx.db).constraints(),
                 &[ConstraintExpr::opaque("this > 0")]
             );
             let contained = property_type(ctx, "contained");
-            assert!(contained.has_constraints(ctx));
+            assert!(contained.has_constraints(ctx.db));
             let element = pkl_types::resolver::container_value_type(&contained, ctx).unwrap();
             assert_eq!(element.unconstrained(), base.int_type());
             assert_eq!(element.constraints(), &[ConstraintExpr::opaque("this > 0")]);
             let nullable = property_type(ctx, "nullable");
-            assert_eq!(nullable.unaliased(ctx), base.int_type().nullable(ctx));
-            assert_eq!(nullable.non_null(ctx), *base.int_type());
+            assert_eq!(nullable.unaliased(ctx.db), base.int_type().nullable(ctx.db));
+            assert_eq!(nullable.non_null(ctx.db), *base.int_type());
         },
     );
 }

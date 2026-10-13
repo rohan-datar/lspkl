@@ -87,14 +87,7 @@ impl Workspace {
     }
     /// Bootstrap immutable SDK analysis before exposing any request snapshots.
     pub fn with_database(db: RootDatabase) -> Self {
-        let uri = Uri::parse("pkl:base".to_owned()).expect("embedded base URI");
-        let file = db.file(&uri).expect("embedded base input");
-        let tree = pkl_db::parse(&db, file)
-            .as_ref()
-            .expect("embedded base syntax")
-            .clone();
-        let base_module =
-            Arc::new(BaseModule::from_tree(file, tree).expect("embedded base declarations"));
+        let base_module = pkl_types::base_module(&db).clone();
         let settings = Arc::new(db.config().settings(&db).clone());
         Self {
             db,

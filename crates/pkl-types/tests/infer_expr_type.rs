@@ -44,8 +44,10 @@ fn class_property_rhs_inherits_declared_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -62,8 +64,10 @@ fn class_property_rhs_without_annotation_is_unknown() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert_eq!(ty, Type::Unknown);
     });
@@ -77,8 +81,10 @@ fn class_method_body_inherits_return_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -99,8 +105,10 @@ fn if_expr_condition_is_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),
@@ -119,8 +127,10 @@ fn if_expr_branch_recurses_to_outer_context() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -137,8 +147,10 @@ fn let_expr_init_uses_binding_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -156,8 +168,10 @@ fn let_expr_body_recurses_to_outer_context() {
             matches!(k, NodeKind::UnqualifiedAccessExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), body), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), body), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -174,8 +188,10 @@ fn parenthesized_expr_is_transparent() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -196,8 +212,10 @@ fn read_expr_arg_is_string() {
             matches!(k, NodeKind::SingleLineStringLiteral)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), s), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), s), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.string_type()),
@@ -214,8 +232,10 @@ fn throw_expr_arg_is_string() {
             matches!(k, NodeKind::SingleLineStringLiteral)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), s), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), s), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.string_type()),
@@ -236,8 +256,10 @@ fn unary_minus_operand_is_number() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.number_type()),
@@ -254,8 +276,10 @@ fn logical_not_operand_is_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),
@@ -276,8 +300,10 @@ fn logical_and_operands_are_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),
@@ -294,8 +320,10 @@ fn logical_or_operands_are_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),
@@ -312,8 +340,10 @@ fn exponentiation_operands_are_number() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.number_type()),
@@ -331,8 +361,10 @@ fn additive_operand_expects_other_operands_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -349,8 +381,10 @@ fn multiplicative_default_is_number() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), lhs), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.number_type()),
@@ -374,8 +408,10 @@ fn for_generator_iterable_is_collection() {
             matches!(k, NodeKind::UnqualifiedAccessExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), iter), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), iter), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.collection_type()),
@@ -403,8 +439,10 @@ fn object_entry_value_uses_mapping_value_type() {
                 matches!(k, NodeKind::IntLiteralExpr)
             });
             let ty = pkl_types::expected_type(
-                harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), val), ctx),
-                ctx,
+                ctx.db,
+                harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), val), ctx)
+                    .map(|expr| expr.id()),
+                ctx.root,
             );
             assert!(
                 ty.class_equals(ctx.base.int_type()),
@@ -423,8 +461,10 @@ fn member_predicate_value_uses_container_value_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), val), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), val), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.int_type()),
@@ -442,8 +482,10 @@ fn member_predicate_condition_is_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),
@@ -460,8 +502,10 @@ fn when_generator_condition_is_boolean() {
             matches!(k, NodeKind::TrueLiteralExpr)
         });
         let ty = pkl_types::expected_type(
-            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx),
-            ctx,
+            ctx.db,
+            harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), cond), ctx)
+                .map(|expr| expr.id()),
+            ctx.root,
         );
         assert!(
             ty.class_equals(ctx.base.boolean_type()),

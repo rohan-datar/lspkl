@@ -30,6 +30,14 @@ impl<'a> AnalysisContext<'a> {
     pub fn new(base: &'a BaseModule, db: &'a dyn Db, root: File) -> Self {
         Self { base, db, root }
     }
+    /// Construct a semantic query context without caller-owned SDK state.
+    pub fn for_root(db: &'a dyn Db, root: File) -> Self {
+        Self {
+            base: crate::base_module(db).as_ref(),
+            db,
+            root,
+        }
+    }
     pub fn tree(&self, file: File) -> Option<&'a SyntaxTree> {
         if file.status(self.db) == pkl_db::FileStatus::Missing {
             return None;

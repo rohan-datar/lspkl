@@ -22,7 +22,7 @@ bitflags::bitflags! {
         const CONST = 64;
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Unknown,
     Nothing,
@@ -91,7 +91,7 @@ pub struct ImportDecl {
     pub uri: String,
     pub glob: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ItemId {
     Class(Idx<ClassDecl>),
     TypeAlias(Idx<TypeAliasDecl>),
@@ -99,10 +99,16 @@ pub enum ItemId {
     Method(Idx<MethodDecl>),
     Import(Idx<ImportDecl>),
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclId {
     pub file: File,
     pub item: ItemId,
+    pub root: File,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TypeParameterId {
+    pub declaration: DeclId,
+    pub index: u32,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModuleItems {
@@ -154,7 +160,7 @@ fn path(db: &dyn Db, tree: &SyntaxTree, node: NodeId) -> Vec<Name> {
         .map(|id| Name::new(db, pkl_syntax::ast::unquote_identifier(tree.text(id))))
         .collect()
 }
-fn lower_type(db: &dyn Db, tree: &SyntaxTree, node: NodeId) -> TypeRef {
+pub(crate) fn lower_type(db: &dyn Db, tree: &SyntaxTree, node: NodeId) -> TypeRef {
     let inner = |id: Option<NodeId>| {
         Box::new(
             id.map(|id| lower_type(db, tree, id))
@@ -234,6 +240,9 @@ fn type_parameters(db: &dyn Db, tree: &SyntaxTree, node: NodeId) -> Vec<TypePara
 }
 fn lower(db: &dyn Db, file: File) -> ModuleItems {
     let mut items = ModuleItems::default();
+    if file.status(db) == pkl_db::FileStatus::Missing {
+        return items;
+    }
     let Ok(tree) = pkl_db::parse(db, file) else {
         return items;
     };
@@ -361,6 +370,9 @@ pub fn module_items(db: &dyn Db, file: File) -> Arc<ModuleItems> {
 pub fn item_source_map(db: &dyn Db, file: File) -> ItemSourceMap {
     let _ = file.text(db);
     let mut map = ItemSourceMap::default();
+    if file.status(db) == pkl_db::FileStatus::Missing {
+        return map;
+    }
     let Ok(tree) = pkl_db::parse(db, file) else {
         return map;
     };
@@ -431,7 +443,7 @@ pub fn item_node(db: &dyn Db, declaration: DeclId) -> Option<NodeRef> {
         .copied()
         .map(|n| NodeRef::new(declaration.file, n))
 }
-pub fn decl_for_node(db: &dyn Db, node: NodeRef) -> Option<DeclId> {
+pub fn decl_for_node(db: &dyn Db, node: NodeRef, root: File) -> Option<DeclId> {
     item_source_map(db, node.file)
         .declarations
         .get(&node.value)
@@ -439,9 +451,14 @@ pub fn decl_for_node(db: &dyn Db, node: NodeRef) -> Option<DeclId> {
         .map(|item| DeclId {
             file: node.file,
             item,
+            root: crate::member_queries::module_id(db, node.file, root).root(db),
         })
 }
-pub fn import_declarations(db: &dyn Db, file: File) -> impl Iterator<Item = (Name, DeclId)> + '_ {
+pub fn import_declarations(
+    db: &dyn Db,
+    file: File,
+    root: File,
+) -> impl Iterator<Item = (Name, DeclId)> + '_ {
     module_items(db, file)
         .imports
         .iter()
@@ -451,6 +468,7 @@ pub fn import_declarations(db: &dyn Db, file: File) -> impl Iterator<Item = (Nam
                 DeclId {
                     file,
                     item: ItemId::Import(id),
+                    root: crate::member_queries::module_id(db, file, root).root(db),
                 },
             )
         })
@@ -479,8 +497,5 @@ impl ModuleItems {
     }
 }
 pub(crate) fn arena_item<T>(arena: &Arena<T>, index: Idx<T>) -> Option<&T> {
-    arena
-        .iter()
-        .nth(index.into_raw().into_u32() as usize)
-        .map(|(_, item)| item)
+    ((index.into_raw().into_u32() as usize) < arena.len()).then(|| &arena[index])
 }

@@ -29,7 +29,9 @@ pub(crate) fn completions(
     // value positions, argument positions, etc.).
     let expected = NodeRef::new(file, literal)
         .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-        .map_or(Type::Unknown, |expr| pkl_types::expected_type(expr, ctx));
+        .map_or(Type::Unknown, |expr| {
+            pkl_types::expected_type(ctx.db, expr.map(|expr| expr.id()), ctx.root)
+        });
     let mut out = Vec::new();
     let detailed = render_detail(&expected, ctx);
     expand(
@@ -95,7 +97,7 @@ fn expand(
             out.push(literal_item_with_alias(
                 value,
                 detailed,
-                original_alias.map(|t| t.render(ctx)),
+                original_alias.map(|t| t.render(ctx.db)),
                 literal.value,
                 tree,
                 range_for,
@@ -115,7 +117,7 @@ fn expand(
             }
         }
         Type::Alias { .. } => expand(
-            &result_type.unaliased(ctx),
+            &result_type.unaliased(ctx.db),
             Some(result_type),
             detailed,
             literal,
@@ -130,7 +132,7 @@ fn expand(
 fn render_detail(ty: &Type, ctx: &AnalysisContext) -> String {
     match ty {
         Type::Unknown => String::new(),
-        other => other.render(ctx),
+        other => other.render(ctx.db),
     }
 }
 

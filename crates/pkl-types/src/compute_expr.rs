@@ -19,19 +19,14 @@ pub(crate) fn compute_expr_type(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Type {
-    let file = node.file;
-    let node = node.value;
-    thread_local! { static ACTIVE: std::cell::RefCell<std::collections::HashSet<NodeRef>> = std::cell::RefCell::new(std::collections::HashSet::new()); }
-    let key = NodeRef::new(file, node);
-    if !ACTIVE.with(|a| a.borrow_mut().insert(key)) {
-        return Type::Unknown;
-    }
-    let result = compute_expr_inner(NodeRef::new(file, node), bindings, ctx);
-    ACTIVE.with(|a| a.borrow_mut().remove(&key));
-    result
+    crate::inference::expression_type(ctx.db, node, ctx.root, bindings)
 }
 
-fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+pub(crate) fn compute_expr_inner(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
     let file = node.file;
     let Some(tree) = ctx.tree(file) else {
         return Type::Unknown;
@@ -93,7 +88,7 @@ fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
                     compute_expr_type(NodeRef::new(file, then_branch), bindings, ctx),
                     compute_expr_type(NodeRef::new(file, else_branch), bindings, ctx),
                 ],
-                ctx,
+                ctx.db,
             )
         }
         NodeKind::AdditiveExpr => additive_expr_type(NodeRef::new(file, node), bindings, ctx),
@@ -116,7 +111,7 @@ fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
             let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx)
                 .map_or(Type::Unknown, |r| r.ty);
             if is_null_safe {
-                member_ty.nullable(ctx)
+                member_ty.nullable(ctx.db)
             } else {
                 member_ty
             }
@@ -148,7 +143,7 @@ fn compute_expr_inner(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisCont
             .and_then(|t| crate::resolver::container_value_type(&t, ctx))
             .unwrap_or(Type::Unknown),
         NodeKind::ModuleExpr => Type::Module {
-            module_node: NodeRef::new(file, tree.root()),
+            module_id: crate::module_id(ctx.db, file, ctx.root),
         },
         NodeKind::NewExpr => nodes::NewExpr::cast(tree, node)
             .and_then(|n| n.ty(tree))
@@ -164,6 +159,14 @@ pub(crate) fn compute_this_type(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Type {
+    crate::inference::this_type_with_bindings(node, bindings, ctx)
+}
+
+pub(crate) fn compute_this_type_inner(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
     let file = node.file;
     let Some(tree) = ctx.tree(file) else {
         return Type::Unknown;
@@ -175,10 +178,14 @@ pub(crate) fn compute_this_type(
         match tree.kind(id) {
             NodeKind::Module => {
                 return Type::Module {
-                    module_node: NodeRef::new(file, id),
+                    module_id: crate::module_id(ctx.db, file, ctx.root),
                 };
             }
-            NodeKind::Class => return Type::class(NodeRef::new(file, id)),
+            NodeKind::Class => {
+                return crate::class_id(ctx.db, NodeRef::new(file, id), ctx.root)
+                    .map(Type::class)
+                    .unwrap_or(Type::Unknown);
+            }
             NodeKind::ConstrainedType => {
                 let Some(inner) =
                     nodes::ConstrainedType::cast(tree, id).and_then(|n| n.inner(tree))
@@ -300,7 +307,7 @@ fn union_single_arg(left: &Type, right: &Type, target: &Type, ctx: &AnalysisCont
     let (Some(l_arg), Some(r_arg)) = (type_arg(left, 0), type_arg(right, 0)) else {
         return Type::Unknown;
     };
-    let unioned = Type::union([l_arg.clone(), r_arg.clone()], ctx);
+    let unioned = Type::union([l_arg.clone(), r_arg.clone()], ctx.db);
     target.clone().with_type_args(vec![unioned])
 }
 
@@ -314,8 +321,8 @@ fn union_two_args(left: &Type, right: &Type, target: &Type, ctx: &AnalysisContex
     ) else {
         return Type::Unknown;
     };
-    let key = Type::union([lk.clone(), rk.clone()], ctx);
-    let value = Type::union([lv.clone(), rv.clone()], ctx);
+    let key = Type::union([lk.clone(), rk.clone()], ctx.db);
+    let value = Type::union([lv.clone(), rv.clone()], ctx.db);
     target.clone().with_type_args(vec![key, value])
 }
 

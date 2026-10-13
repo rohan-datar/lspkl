@@ -157,7 +157,7 @@ fn inherited_constraint_members_follow_module_declarations_and_imports() {
                 ScopeKind::Import,
                 target,
                 Some(&Type::Module {
-                    module_node: target,
+                    module_id: pkl_types::module_id(ctx.db, target.file, ctx.root),
                 }),
             );
         },

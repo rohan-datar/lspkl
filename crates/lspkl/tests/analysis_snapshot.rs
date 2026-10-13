@@ -69,7 +69,7 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
             let view = state.snapshot();
             let ctx = view.context(file);
             assert_eq!(ctx.base.file_id(), file);
-            assert_eq!(ctx.base.string_type().render(&ctx), "String");
+            assert_eq!(ctx.base.string_type().render(ctx.db), "String");
             assert_eq!(ctx.tree(file).unwrap().source(), original.source());
         }
         change(&mut state, &url, "edited = 2\n", 2);
@@ -93,8 +93,12 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
                 .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
                 .unwrap();
             assert_eq!(
-                pkl_types::resolver::definition_type(NodeRef::new(root, property), &ctx)
-                    .render(&ctx),
+                pkl_types::resolver::definition_type(
+                    ctx.db,
+                    NodeRef::new(root, property),
+                    ctx.root
+                )
+                .render(ctx.db),
                 "String"
             );
             assert_eq!(ctx.tree(builtin).unwrap().source(), original.source());
@@ -105,7 +109,7 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         assert_eq!(state.db.file(&url).unwrap(), builtin);
         let view = state.snapshot();
         let ctx = view.context(root);
-        assert_eq!(ctx.base.string_type().render(&ctx), "String");
+        assert_eq!(ctx.base.string_type().render(ctx.db), "String");
         assert_eq!(ctx.tree(builtin).unwrap().source(), original.source());
     }
 }
@@ -205,7 +209,7 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
     let root = prepare(&mut state, &dir.join("main.pkl"), main);
     let view = state.snapshot();
     let ctx = view.context(root);
-    assert_eq!(ctx.base.string_type().render(&ctx), "String");
+    assert_eq!(ctx.base.string_type().render(ctx.db), "String");
     let file_for = |path: &str| view.db.file(&uri(&dir.join(path))).unwrap();
     let expected_edges = [
         ("main.pkl", 0, "sub/b.pkl"),

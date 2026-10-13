@@ -15,8 +15,9 @@ fn int_literal_has_int_type() {
             matches!(k, NodeKind::IntLiteralExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-            ctx,
+            ctx.root,
         );
         assert_eq!(&ty, ctx.base.int_type());
     });
@@ -30,8 +31,9 @@ fn float_literal_has_float_type() {
             matches!(k, NodeKind::FloatLiteralExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-            ctx,
+            ctx.root,
         );
         assert_eq!(&ty, ctx.base.float_type());
     });
@@ -46,11 +48,12 @@ fn bool_literals_have_boolean_type() {
         });
         assert_eq!(
             &pkl_types::expr_type(
+                ctx.db,
                 harness::expr(
                     pkl_types::NodeRef::new(harness::file(ctx, 1), true_node),
                     ctx
                 ),
-                ctx
+                ctx.root
             ),
             ctx.base.boolean_type()
         );
@@ -60,11 +63,12 @@ fn bool_literals_have_boolean_type() {
         });
         assert_eq!(
             &pkl_types::expr_type(
+                ctx.db,
                 harness::expr(
                     pkl_types::NodeRef::new(harness::file(ctx, 1), false_node),
                     ctx
                 ),
-                ctx
+                ctx.root
             ),
             ctx.base.boolean_type()
         );
@@ -79,8 +83,9 @@ fn null_literal_has_null_type() {
             matches!(k, NodeKind::NullLiteralExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-            ctx,
+            ctx.root,
         );
         assert_eq!(&ty, ctx.base.null_type());
     });
@@ -94,8 +99,9 @@ fn string_literal_without_interpolation_has_literal_type() {
             matches!(k, NodeKind::SingleLineStringLiteral)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-            ctx,
+            ctx.root,
         );
         assert_eq!(ty, pkl_types::Type::string_literal("hello"));
     });
@@ -109,8 +115,9 @@ fn throw_expr_has_nothing_type() {
             matches!(k, NodeKind::ThrowExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-            ctx,
+            ctx.root,
         );
         assert_eq!(ty, pkl_types::Type::Nothing);
     });
@@ -126,11 +133,12 @@ fn unqualified_access_resolves_to_module_property_type() {
             matches!(k, NodeKind::UnqualifiedAccessExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), access), ctx),
-            ctx,
+            ctx.root,
         );
         assert!(
-            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            ctx.base.int_type().is_subtype_of(&ty, ctx.db),
             "expected Int (or super), got {ty:?}"
         );
     });
@@ -152,11 +160,12 @@ y = foo.x
             matches!(k, NodeKind::QualifiedAccessExpr)
         });
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), access), ctx),
-            ctx,
+            ctx.root,
         );
         assert!(
-            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            ctx.base.int_type().is_subtype_of(&ty, ctx.db),
             "expected Int (or super), got {ty:?}"
         );
     });
@@ -174,11 +183,12 @@ fn let_binding_resolves_through_inner_function() {
             find_unqualified_access_named(ctx.tree(harness::file(ctx, 1)).unwrap(), "myVar")
                 .expect("expected an UnqualifiedAccessExpr named `myVar`");
         let ty = pkl_types::expr_type(
+            ctx.db,
             harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), my_var), ctx),
-            ctx,
+            ctx.root,
         );
         assert!(
-            ctx.base.int_type().is_subtype_of(&ty, ctx),
+            ctx.base.int_type().is_subtype_of(&ty, ctx.db),
             "expected Int (or super) for `myVar`, got {ty:?}"
         );
     });
@@ -219,8 +229,9 @@ x = if (c) 1 else "a""#,
                 matches!(k, NodeKind::IfExpr)
             });
             let ty = pkl_types::expr_type(
+                ctx.db,
                 harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-                ctx,
+                ctx.root,
             );
 
             assert_eq!(
@@ -230,7 +241,7 @@ x = if (c) 1 else "a""#,
                         ctx.base.int_type().clone(),
                         pkl_types::Type::string_literal("a"),
                     ],
-                    ctx
+                    ctx.db
                 )
             );
         },
@@ -251,11 +262,12 @@ fn access_null_safety_ignores_comments() {
                 matches!(k, NodeKind::QualifiedAccessExpr)
             });
             let ty = pkl_types::expr_type(
+                ctx.db,
                 harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), access), ctx),
-                ctx,
+                ctx.root,
             );
             let expected = if nullable {
-                ctx.base.int_type().nullable(ctx)
+                ctx.base.int_type().nullable(ctx.db)
             } else {
                 ctx.base.int_type().clone()
             };

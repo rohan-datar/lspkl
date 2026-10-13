@@ -1,7 +1,7 @@
 //! Tests for `BaseModule::from_tree` and well-known type lookup.
 //!
 //! These pin the contract: after `from_tree`, every cached type accessor returns a
-//! `Type::Class` whose `class_node` lives in `base.file_id()`.
+//! `Type::Class` whose class identity lives in `base.file_id()`.
 
 mod harness;
 
@@ -10,10 +10,11 @@ use pkl_types::Type;
 #[test]
 fn string_type_points_into_base_module() {
     let base = harness::load_test_base();
+    let db = base.db.borrow();
     match base.string_type() {
-        Type::Class { class_node, .. } => {
+        Type::Class { class_id, .. } => {
             assert_eq!(
-                class_node.file,
+                class_id.module(&*db).file(&*db),
                 base.file_id(),
                 "well-known types must reference base.file_id()"
             );
@@ -24,7 +25,7 @@ fn string_type_points_into_base_module() {
 
 #[test]
 fn well_known_types_are_distinct() {
-    // If two accessors return the same NodeRef, the lookup logic is wrong
+    // If two accessors return the same ClassId, the lookup logic is wrong
     // (probably grabbed the first class instead of the named one).
     let base = harness::load_test_base();
     let pairs: &[(&str, &Type, &Type)] = &[
@@ -51,11 +52,11 @@ fn int_extends_number() {
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     assert!(
-        base.int_type().is_subtype_of(base.number_type(), &ctx),
+        base.int_type().is_subtype_of(base.number_type(), ctx.db),
         "Int must be a subtype of Number"
     );
     assert!(
-        !base.number_type().is_subtype_of(base.int_type(), &ctx),
+        !base.number_type().is_subtype_of(base.int_type(), ctx.db),
         "Number must NOT be a subtype of Int"
     );
 }

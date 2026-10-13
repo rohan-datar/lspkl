@@ -49,7 +49,7 @@ impl Analyzer for MemberAnalyzer {
             return true;
         }
 
-        let this_type = pkl_types::this_type(NodeRef::new(file, node), ctx);
+        let this_type = pkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);
 
         // Unknown, Dynamic, and non-Object receivers have no analyzable members.
         if matches!(this_type, Type::Unknown) {
@@ -58,12 +58,12 @@ impl Analyzer for MemberAnalyzer {
         if this_type.class_equals(ctx.base.dynamic_type()) {
             return true;
         }
-        if !this_type.is_subtype_of(ctx.base.object_type(), ctx) {
+        if !this_type.is_subtype_of(ctx.base.object_type(), ctx.db) {
             return true;
         }
 
         // Look up the property name on the this-type. If found → OK; if not → flag.
-        if find_member(&this_type, name, ctx).is_some() {
+        if find_member(ctx.db, &this_type, name).is_some() {
             return true;
         }
 

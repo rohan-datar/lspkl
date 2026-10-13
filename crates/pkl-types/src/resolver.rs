@@ -9,6 +9,7 @@ use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 use crate::to_type::to_type_with_bindings;
 use crate::ty::{Type, TypeBindings};
+pub use crate::type_resolution::resolve_alias;
 
 #[derive(Debug)]
 pub struct ResolvedType {
@@ -42,51 +43,49 @@ pub fn resolve_declared_type(ctx: &AnalysisContext, node: NodeRef) -> Option<Nod
 }
 
 pub fn resolve_type_name(ctx: &AnalysisContext, parts: &[&str], node: NodeRef) -> Option<NodeRef> {
-    let name = *parts.last()?;
-    let tree = ctx.tree(node.file)?;
-    if parts.len() == 1 {
-        if let Some(tp) = resolve_local_type_parameter(node, name, ctx) {
-            return Some(tp);
-        }
-        let mut module = Some(NodeRef::new(node.file, tree.root()));
-        let mut seen = std::collections::HashSet::new();
-        while let Some(root) = module {
-            if !seen.insert(root) {
-                break;
-            }
-            let Some(t) = ctx.tree(root.file) else {
-                break;
-            };
-            if let Some(id) = resolve_type_name_in_module(t, name) {
-                return Some(root.with_value(id));
-            }
-            module = module_super(root, ctx);
-        }
-        return resolve_type_name_in_module(ctx.tree(ctx.base.file_id())?, name)
-            .map(|id| NodeRef::new(ctx.base.file_id(), id));
+    let path: Vec<_> = parts
+        .iter()
+        .map(|part| crate::Name::new(ctx.db, (*part).to_owned()))
+        .collect();
+    if path.len() == 1
+        && let Some(&name) = path.first()
+        && let Some(owner) = crate::to_type::owner_for_node(ctx.db, node, ctx.root)
+        && let Some(parameter) = crate::type_resolution::type_parameter(ctx.db, owner, name)
+    {
+        let declaration = crate::item_node(ctx.db, parameter.declaration)?;
+        let tree = ctx.tree(declaration.file)?;
+        let list = nodes::Class::cast(tree, declaration.value)
+            .and_then(|n| n.type_parameters(tree))
+            .or_else(|| {
+                nodes::TypeAlias::cast(tree, declaration.value)
+                    .and_then(|n| n.type_parameters(tree))
+            })
+            .or_else(|| {
+                method_header(tree, declaration.value)
+                    .and_then(|n| nodes::MethodHeader::cast(tree, n)?.type_parameters(tree))
+            })?;
+        return nodes::TypeParameterList::cast(tree, list)?
+            .parameters(tree)
+            .nth(parameter.index as usize)
+            .map(|id| declaration.with_value(id));
     }
-    let import = find_import(tree, parts[0])?;
-    let mut module = ctx.import(NodeRef::new(node.file, import))?.single()?;
-    let mut seen = std::collections::HashSet::new();
-    while seen.insert(module) {
-        let t = ctx.tree(module.file)?;
-        if let Some(id) = resolve_type_name_in_module(t, name) {
-            return Some(module.with_value(id));
-        }
-        module = module_super(module, ctx)?;
-    }
-    None
+    crate::type_resolution::lookup_type(
+        ctx.db,
+        crate::module_id(ctx.db, node.file, ctx.root),
+        &path,
+        true,
+    )
+    .and_then(|decl| crate::item_node(ctx.db, decl))
 }
 
-pub fn module_type(module_node: NodeRef, _ctx: &AnalysisContext) -> Type {
-    Type::Module { module_node }
+pub fn module_type(module_node: NodeRef, ctx: &AnalysisContext) -> Type {
+    Type::Module {
+        module_id: crate::module_id(ctx.db, module_node.file, ctx.root),
+    }
 }
 
-pub fn module_super(module: NodeRef, ctx: &AnalysisContext) -> Option<NodeRef> {
-    let tree = ctx.tree(module.file)?;
-    let header = nodes::Module::cast(tree, module.value)?.header(tree)?;
-    let clause = nodes::ModuleHeader::cast(tree, header)?.extends_amends_clause(tree)?;
-    ctx.import(module.with_value(clause))?.single()
+pub fn module_super(module: crate::ModuleId, db: &dyn pkl_db::Db) -> Option<crate::ModuleId> {
+    crate::member_queries::parent_module(db, module)
 }
 
 pub fn import_name(tree: &SyntaxTree, import: NodeId) -> Option<String> {
@@ -124,7 +123,7 @@ pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
     match ctx.import(node) {
         Some(crate::ImportResolution::Single(root)) => module_type(root, ctx),
         Some(crate::ImportResolution::Glob(roots)) => {
-            let value = Type::union(roots.iter().map(|r| module_type(*r, ctx)), ctx);
+            let value = Type::union(roots.iter().map(|r| module_type(*r, ctx)), ctx.db);
             ctx.base
                 .mapping_type()
                 .clone()
@@ -134,27 +133,16 @@ pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
     }
 }
 
-pub fn is_subclass(mut a: NodeRef, b: NodeRef, ctx: &AnalysisContext) -> bool {
+pub fn is_subclass(mut a: crate::ClassId, b: crate::ClassId, db: &dyn pkl_db::Db) -> bool {
     let mut seen = std::collections::HashSet::new();
     while seen.insert(a) {
         if a == b {
             return true;
         }
-        let Some(tree) = ctx.tree(a.file) else {
+        let Some(Type::Class { class_id, .. }) = super_type(&Type::class(a), db) else {
             return false;
         };
-        let Some(target) = nodes::Class::cast(tree, a.value).and_then(|n| n.extends_target(tree))
-        else {
-            return false;
-        };
-        let Some(parent) = resolve_type_name(
-            ctx,
-            &tree.qualified_identifier_segments(target),
-            a.with_value(target),
-        ) else {
-            return false;
-        };
-        a = parent;
+        a = class_id;
     }
     false
 }
@@ -282,135 +270,179 @@ pub(crate) fn find_member_on_type(
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
     match ty.unconstrained() {
-        Type::Class {
-            class_node,
-            type_args,
-        } => {
-            let class = crate::class_id(ctx.db, *class_node, ctx.root)?;
-            let entry = crate::class_members(ctx.db, class)
+        Type::Class { class_id, .. } => {
+            let entry = crate::class_members(ctx.db, *class_id)
                 .entries
                 .iter()
-                .find(|entry| entry.name.text(ctx.db) == name)?;
-            let node = crate::item_node(ctx.db, entry.declaration)?;
-            let ty = if type_args.is_empty() {
-                definition_type_with_bindings(node, bindings, ctx)
-            } else {
-                let member_bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-                definition_type_with_bindings(node, &member_bindings, ctx)
-            };
-            Some(ResolvedType::new(node, ty))
-        }
-        Type::Module { module_node } => {
-            let module = crate::ModuleId::new(ctx.db, module_node.file, ctx.root);
-            let entry = crate::module_members(ctx.db, module)
-                .entries
-                .iter()
-                .find(|entry| entry.name.text(ctx.db) == name)?;
-            let node = crate::item_node(ctx.db, entry.declaration)?;
+                .find(|e| e.name.text(ctx.db) == name)?;
+            let bindings = class_member_bindings(ty, bindings, ctx);
             Some(ResolvedType::new(
-                node,
-                definition_type_with_bindings(node, bindings, ctx),
+                crate::item_node(ctx.db, entry.declaration)?,
+                declaration_type_with_bindings(ctx.db, entry.declaration, &bindings),
             ))
         }
-        Type::Alias { .. } => find_member_on_type(&ty.unaliased(ctx), name, bindings, ctx),
+        Type::Module { module_id } => {
+            let entry = crate::module_members(ctx.db, *module_id)
+                .entries
+                .iter()
+                .find(|e| e.name.text(ctx.db) == name)?;
+            Some(ResolvedType::new(
+                crate::item_node(ctx.db, entry.declaration)?,
+                declaration_type_with_bindings(ctx.db, entry.declaration, bindings),
+            ))
+        }
+        Type::Alias { .. } => find_member_on_type(&ty.unaliased(ctx.db), name, bindings, ctx),
         Type::Union { members } => {
             let mut node = None;
-            let mut types = Vec::new();
-            for alternative in members.iter() {
-                if let Some(resolved) = find_member_on_type(alternative, name, bindings, ctx) {
+            let types = members
+                .iter()
+                .filter_map(|ty| find_member_on_type(ty, name, bindings, ctx))
+                .map(|resolved| {
                     node.get_or_insert(resolved.node);
-                    types.push(resolved.ty);
-                }
-            }
-            node.map(|node| ResolvedType::new(node, Type::union(types, ctx)))
+                    resolved.ty
+                })
+                .collect::<Vec<_>>();
+            node.map(|node| ResolvedType::new(node, Type::union(types, ctx.db)))
         }
         _ => None,
     }
 }
-
+pub(crate) fn declaration_type_with_bindings(
+    db: &dyn pkl_db::Db,
+    decl: crate::DeclId,
+    bindings: &TypeBindings,
+) -> Type {
+    use crate::items::*;
+    let items = module_items(db, decl.file);
+    let annotation = match decl.item {
+        ItemId::Property(i) => arena_item(&items.properties, i).and_then(|decl| decl.ty.as_ref()),
+        ItemId::Method(i) => arena_item(&items.methods, i).and_then(|decl| decl.result.as_ref()),
+        _ => None,
+    };
+    if let Some(annotation) = annotation {
+        return crate::resolve_type_ref(db, decl, annotation, bindings);
+    }
+    if !bindings.is_empty() && matches!(decl.item, ItemId::Property(_) | ItemId::Method(_)) {
+        let Some(node) = crate::item_node(db, decl) else {
+            return Type::Unknown;
+        };
+        let ctx = AnalysisContext::for_root(db, decl.root);
+        let Some(tree) = ctx.tree(decl.file) else {
+            return Type::Unknown;
+        };
+        return member_value(tree, node.value)
+            .map(|expr| compute_expr_type(node.with_value(expr), bindings, &ctx))
+            .unwrap_or(Type::Unknown);
+    }
+    crate::inference::decl_type(db, decl)
+}
+pub(crate) fn compute_decl_type(db: &dyn pkl_db::Db, decl: crate::DeclId) -> Type {
+    use crate::items::*;
+    let items = module_items(db, decl.file);
+    if !matches!(decl.item, ItemId::Import(_)) && items.declaration(decl.item).is_none() {
+        return Type::Unknown;
+    }
+    match decl.item {
+        ItemId::Class(index) => {
+            return Type::class(crate::ClassId::new(
+                db,
+                crate::module_id(db, decl.file, decl.root),
+                index,
+            ));
+        }
+        ItemId::TypeAlias(_) => {
+            return Type::Alias {
+                alias_id: decl,
+                type_args: vec![],
+            };
+        }
+        ItemId::Import(_) => return crate::type_resolution::import_type(db, decl),
+        ItemId::Property(i) => {
+            if let Some(ty) = arena_item(&items.properties, i).and_then(|decl| decl.ty.as_ref()) {
+                return crate::resolve_type_ref(db, decl, ty, &TypeBindings::new());
+            }
+        }
+        ItemId::Method(i) => {
+            if let Some(ty) = arena_item(&items.methods, i).and_then(|decl| decl.result.as_ref()) {
+                return crate::resolve_type_ref(db, decl, ty, &TypeBindings::new());
+            }
+        }
+    }
+    let Some(node) = crate::item_node(db, decl) else {
+        return Type::Unknown;
+    };
+    let ctx = AnalysisContext::for_root(db, decl.root);
+    let Some(tree) = ctx.tree(decl.file) else {
+        return Type::Unknown;
+    };
+    member_value(tree, node.value)
+        .map(|expr| compute_expr_type(node.with_value(expr), &TypeBindings::new(), &ctx))
+        .unwrap_or(Type::Unknown)
+}
 pub(crate) fn definition_type_with_bindings(
     node: NodeRef,
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Type {
+    if let Some(decl) = crate::decl_for_node(ctx.db, node, ctx.root) {
+        return declaration_type_with_bindings(ctx.db, decl, bindings);
+    }
     let Some(tree) = ctx.tree(node.file) else {
         return Type::Unknown;
     };
-    match tree.kind(node.value) {
-        NodeKind::Class => return Type::class(node),
-        NodeKind::TypeAlias => {
-            return Type::Alias {
-                alias_node: node,
-                type_args: vec![],
-            };
-        }
-        _ => {}
-    }
-    if let Some(ann) = member_type_annotation(tree, node.value)
-        .and_then(|a| nodes::TypeAnnotation::cast(tree, a)?.ty(tree))
+    if let Some(annotation) = member_type_annotation(tree, node.value)
+        .and_then(|id| nodes::TypeAnnotation::cast(tree, id)?.ty(tree))
     {
-        return to_type_with_bindings(node.with_value(ann), bindings, ctx);
+        return to_type_with_bindings(node.with_value(annotation), bindings, ctx);
     }
     member_value(tree, node.value)
-        .map(|e| compute_expr_type(node.with_value(e), bindings, ctx))
+        .map(|expr| compute_expr_type(node.with_value(expr), bindings, ctx))
         .unwrap_or(Type::Unknown)
 }
-
-pub fn super_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
+pub fn super_type(ty: &Type, db: &dyn pkl_db::Db) -> Option<Type> {
+    use crate::items::*;
     match ty.unconstrained() {
-        Type::Module { module_node, .. } => {
-            module_super(*module_node, ctx).map(|m| module_type(m, ctx))
+        Type::Module { module_id } => crate::member_queries::parent_module(db, *module_id)
+            .map(|module_id| Type::Module { module_id }),
+        Type::Class {
+            class_id,
+            type_args,
+        } => {
+            let module = class_id.module(db);
+            let decl = DeclId {
+                file: module.file(db),
+                root: module.root(db),
+                item: ItemId::Class(class_id.index(db)),
+            };
+            let class = arena_item(&module_items(db, decl.file).classes, class_id.index(db))?;
+            if let Some(extends) = &class.extends {
+                let bindings = class
+                    .type_parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        (
+                            TypeParameterId {
+                                declaration: decl,
+                                index: index as u32,
+                            },
+                            type_args.get(index).cloned().unwrap_or(Type::Unknown),
+                        )
+                    })
+                    .collect();
+                Some(crate::resolve_type_ref(db, decl, extends, &bindings).unaliased(db))
+            } else if class.declaration.modifiers.contains(Modifiers::EXTERNAL)
+                && class.declaration.name.text(db) != "Any"
+            {
+                Some(crate::base_module(db).any_type().clone())
+            } else {
+                None
+            }
         }
-        Type::Class { class_node, .. } => {
-            let tree = ctx.tree(class_node.file)?;
-            let target = nodes::Class::cast(tree, class_node.value)?.extends_target(tree)?;
-            resolve_type_name(
-                ctx,
-                &tree.qualified_identifier_segments(target),
-                class_node.with_value(target),
-            )
-            .map(Type::class)
-        }
+        Type::Alias { .. } => super_type(&ty.unaliased(db), db),
         _ => None,
     }
 }
-
-fn resolve_local_type_parameter(
-    node: NodeRef,
-    name: &str,
-    ctx: &AnalysisContext,
-) -> Option<NodeRef> {
-    // Walk ancestors in the file the `node` lives in — NOT `ctx.tree`. The
-    // resolver can be invoked across files when find_member_on_type follows
-    // an extends chain into pkl:base, so the use-site tree differs from the
-    // user's tree.
-    let tree = ctx.tree(node.file)?;
-    let mut current = tree.parent(node.value);
-    while let Some(id) = current {
-        if matches!(
-            tree.kind(id),
-            NodeKind::Class | NodeKind::TypeAlias | NodeKind::ClassMethod
-        ) {
-            let param_list = nodes::Class::cast(tree, id)
-                .and_then(|n| n.type_parameters(tree))
-                .or_else(|| nodes::TypeAlias::cast(tree, id).and_then(|n| n.type_parameters(tree)))
-                .or_else(|| {
-                    method_header(tree, id)
-                        .and_then(|n| nodes::MethodHeader::cast(tree, n)?.type_parameters(tree))
-                });
-            if let Some(param_list) = param_list
-                && let Some(tp) = nodes::TypeParameterList::cast(tree, param_list)?
-                    .parameters(tree)
-                    .find(|&n| tree.name(n) == Some(name))
-            {
-                return Some(NodeRef::new(node.file, tp));
-            }
-        }
-        current = tree.parent(id);
-    }
-    None
-}
-
 pub(crate) fn resolve_unqualified_access_with_bindings(
     node: NodeRef,
     name: &str,
@@ -424,28 +456,43 @@ pub(crate) fn resolve_unqualified_access_with_bindings(
         entry.ty_with_bindings(bindings, ctx),
     ))
 }
-
 pub(crate) fn class_member_bindings(
-    class_node: NodeRef,
-    type_args: &[Type],
+    receiver: &Type,
     caller_bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> TypeBindings {
-    let Some(tree) = ctx.tree(class_node.file) else {
-        return caller_bindings.clone();
-    };
-    let mut member_bindings = caller_bindings.clone();
-    if let Some(type_param_list) =
-        nodes::Class::cast(tree, class_node.value).and_then(|n| n.type_parameters(tree))
+    let mut bindings = caller_bindings.clone();
+    let mut current = std::borrow::Cow::Borrowed(receiver);
+    let mut seen = std::collections::HashSet::new();
+    while let Type::Class {
+        class_id,
+        type_args,
+    } = current.unconstrained()
     {
-        let params = nodes::TypeParameterList::cast(tree, type_param_list)
-            .into_iter()
-            .flat_map(|n| n.parameters(tree));
-        for (param_node, arg) in params.zip(type_args.iter()) {
-            member_bindings.insert(NodeRef::new(class_node.file, param_node), arg.clone());
+        if !seen.insert(*class_id) {
+            break;
         }
-    };
-    member_bindings
+        let module = class_id.module(ctx.db);
+        let decl = crate::DeclId {
+            file: module.file(ctx.db),
+            root: module.root(ctx.db),
+            item: crate::ItemId::Class(class_id.index(ctx.db)),
+        };
+        for (index, arg) in type_args.iter().enumerate() {
+            bindings.insert(
+                crate::items::TypeParameterId {
+                    declaration: decl,
+                    index: index as u32,
+                },
+                arg.clone(),
+            );
+        }
+        let Some(parent) = super_type(&current, ctx.db) else {
+            break;
+        };
+        current = std::borrow::Cow::Owned(parent);
+    }
+    bindings
 }
 
 /// Compute the type of the receiver of an access expression.
@@ -471,7 +518,7 @@ pub(crate) fn access_receiver_type_with_bindings(
         }
         NodeKind::SuperAccessExpr => super_type(
             &compute_this_type(NodeRef::new(file, access), bindings, ctx),
-            ctx,
+            ctx.db,
         ),
         _ => None,
     }
@@ -483,15 +530,16 @@ pub(crate) fn access_receiver_type_with_bindings(
 /// - `Mapping<K,V>` / `Map<K,V>` → `K`
 /// - Anything else → `None`
 pub fn container_key_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    let ty = ty.unaliased(ctx);
+    let ty = ty.unaliased(ctx.db);
     let Type::Class { type_args, .. } = ty.unconstrained() else {
         return None;
     };
-    if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)
+    if ty.is_subtype_of(ctx.base.mapping_type(), ctx.db)
+        || ty.is_subtype_of(ctx.base.map_type(), ctx.db)
     {
         type_args.first().cloned()
-    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx)
-        || ty.is_subtype_of(ctx.base.list_type(), ctx)
+    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx.db)
+        || ty.is_subtype_of(ctx.base.list_type(), ctx.db)
     {
         Some(ctx.base.int_type().clone())
     } else {
@@ -506,16 +554,17 @@ pub fn container_key_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
 /// - `Mapping<K,V>` / `Map<K,V>` → `V`
 /// - Anything else → `None`
 pub fn container_value_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
-    let ty = ty.unaliased(ctx);
+    let ty = ty.unaliased(ctx.db);
     let Type::Class { type_args, .. } = ty.unconstrained() else {
         return None;
     };
-    if ty.is_subtype_of(ctx.base.mapping_type(), ctx) || ty.is_subtype_of(ctx.base.map_type(), ctx)
+    if ty.is_subtype_of(ctx.base.mapping_type(), ctx.db)
+        || ty.is_subtype_of(ctx.base.map_type(), ctx.db)
     {
         type_args.get(1).cloned()
-    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx)
-        || ty.is_subtype_of(ctx.base.list_type(), ctx)
-        || ty.is_subtype_of(ctx.base.set_type(), ctx)
+    } else if ty.is_subtype_of(ctx.base.listing_type(), ctx.db)
+        || ty.is_subtype_of(ctx.base.list_type(), ctx.db)
+        || ty.is_subtype_of(ctx.base.set_type(), ctx.db)
     {
         type_args.first().cloned()
     } else {
@@ -524,8 +573,12 @@ pub fn container_value_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
 }
 
 /// Resolve a declaration without exposing internal generic bindings.
-pub fn definition_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
-    definition_type_with_bindings(node, &TypeBindings::new(), ctx)
+pub fn definition_type(db: &dyn pkl_db::Db, node: NodeRef, root: pkl_db::File) -> Type {
+    definition_type_with_bindings(
+        node,
+        &TypeBindings::new(),
+        &AnalysisContext::for_root(db, root),
+    )
 }
 
 /// Resolve an unqualified access in its pinned file.

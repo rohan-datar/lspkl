@@ -1,11 +1,9 @@
 //! Enumerate members through the same declaration tables used by resolution.
 use crate::{
-    AnalysisContext, MemberTable, Modifiers, ModuleId, NodeRef, Type, class_id, class_members,
-    item_node, module_members,
+    AnalysisContext, MemberTable, Modifiers, NodeRef, Type, class_members, item_node,
+    module_members,
 };
-use crate::{
-    resolver::class_member_bindings, resolver::definition_type_with_bindings, ty::TypeBindings,
-};
+use crate::{resolver::class_member_bindings, ty::TypeBindings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemberKind {
@@ -32,8 +30,12 @@ impl MemberInfo {
     }
 }
 
-pub fn members_of_type(ty: &Type, ctx: &AnalysisContext) -> Vec<MemberInfo> {
-    collect(ty, &TypeBindings::new(), ctx)
+pub fn members_of_type(db: &dyn pkl_db::Db, ty: &Type) -> Vec<MemberInfo> {
+    collect(
+        ty,
+        &TypeBindings::new(),
+        &AnalysisContext::for_root(db, ty.context_root(db)),
+    )
 }
 fn table_members(
     table: &MemberTable,
@@ -48,7 +50,11 @@ fn table_members(
             Some(MemberInfo {
                 name: entry.name.text(ctx.db).clone(),
                 node,
-                ty: definition_type_with_bindings(node, bindings, ctx),
+                ty: crate::resolver::declaration_type_with_bindings(
+                    ctx.db,
+                    entry.declaration,
+                    bindings,
+                ),
                 kind: entry.kind,
                 modifiers: entry.modifiers,
             })
@@ -57,27 +63,16 @@ fn table_members(
 }
 fn collect(ty: &Type, bindings: &TypeBindings, ctx: &AnalysisContext) -> Vec<MemberInfo> {
     match ty.unconstrained() {
-        Type::Class {
-            class_node,
-            type_args,
-        } => {
-            let Some(class) = class_id(ctx.db, *class_node, ctx.root) else {
-                return Vec::new();
-            };
+        Type::Class { class_id, .. } => {
+            let class = *class_id;
             let table = class_members(ctx.db, class);
-            if type_args.is_empty() {
-                table_members(table, bindings, ctx)
-            } else {
-                let bindings = class_member_bindings(*class_node, type_args, bindings, ctx);
-                table_members(table, &bindings, ctx)
-            }
+            let bindings = class_member_bindings(ty, bindings, ctx);
+            table_members(table, &bindings, ctx)
         }
-        Type::Module { module_node } => table_members(
-            module_members(ctx.db, ModuleId::new(ctx.db, module_node.file, ctx.root)),
-            bindings,
-            ctx,
-        ),
-        Type::Alias { .. } => collect(&ty.unaliased(ctx), bindings, ctx),
+        Type::Module { module_id } => {
+            table_members(module_members(ctx.db, *module_id), bindings, ctx)
+        }
+        Type::Alias { .. } => collect(&ty.unaliased(ctx.db), bindings, ctx),
         Type::Union { members } => {
             let mut alternatives = members.iter();
             let Some(first) = alternatives.next() else {
@@ -96,7 +91,7 @@ fn collect(ty: &Type, bindings: &TypeBindings, ctx: &AnalysisContext) -> Vec<Mem
                     if info.ty != branch[index].ty {
                         let left = std::mem::replace(&mut info.ty, Type::Nothing);
                         let right = std::mem::replace(&mut branch[index].ty, Type::Nothing);
-                        info.ty = Type::union([left, right], ctx);
+                        info.ty = Type::union([left, right], ctx.db);
                     }
                     true
                 });

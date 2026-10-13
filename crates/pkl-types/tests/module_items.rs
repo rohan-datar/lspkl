@@ -68,6 +68,7 @@ fn value_and_body_edits_stop_at_the_declaration_firewall() {
         .0;
     let decl = DeclId {
         file: a,
+        root: a,
         item: ItemId::Property(y),
     };
     let old_node = item_node(&db, decl).unwrap();
@@ -82,7 +83,7 @@ fn value_and_body_edits_stop_at_the_declaration_firewall() {
     assert_ne!(item_source_map(&db, a), &source);
     let new_node = item_node(&db, decl).unwrap();
     assert_ne!(old_node, new_node);
-    assert_eq!(decl_for_node(&db, new_node), Some(decl));
+    assert_eq!(decl_for_node(&db, new_node, a), Some(decl));
     let executions = events.lock();
     assert!(
         executions.iter().any(|e| e.contains("item_source_map")),
@@ -315,7 +316,10 @@ class B extends `a.pkl`.A { own: Int = 2 }"#,
         .unwrap();
     assert_eq!(inherited.declaration.file, imported);
     let mapped = item_node(&db, inherited.declaration).unwrap();
-    assert_eq!(decl_for_node(&db, mapped), Some(inherited.declaration));
+    assert_eq!(
+        decl_for_node(&db, mapped, root),
+        Some(inherited.declaration)
+    );
 }
 
 #[test]

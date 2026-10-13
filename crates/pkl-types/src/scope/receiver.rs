@@ -1,8 +1,8 @@
 //! Constraint receivers use stable member tables; member types remain demand-driven.
 use super::{Entry, ScopeKind, Target};
 use crate::{
-    AnalysisContext, MemberTable, ModuleId, NodeRef, Type, class_id, class_members,
-    compute_expr::compute_this_type, module_members, ty::TypeBindings,
+    AnalysisContext, MemberTable, NodeRef, Type, class_members, compute_expr::compute_this_type,
+    module_members, ty::TypeBindings,
 };
 
 pub(super) struct ReceiverEntries<'a> {
@@ -64,20 +64,13 @@ impl Iterator for ReceiverEntries<'_> {
             };
             match ty {
                 Type::Constrained { base, .. } => self.current = Some(*base),
-                alias @ Type::Alias { .. } => self.current = Some(alias.unaliased(self.ctx)),
+                alias @ Type::Alias { .. } => self.current = Some(alias.unaliased(self.ctx.db)),
                 Type::Union { members } => self.unions.push(members.into_iter()),
-                Type::Class { class_node, .. } => {
-                    self.table = class_id(self.ctx.db, class_node, self.ctx.root)
-                        .map(|class| class_members(self.ctx.db, class).as_ref());
+                Type::Class { class_id, .. } => {
+                    self.table = Some(class_members(self.ctx.db, class_id).as_ref());
                 }
-                Type::Module { module_node } => {
-                    self.table = Some(
-                        module_members(
-                            self.ctx.db,
-                            ModuleId::new(self.ctx.db, module_node.file, self.ctx.root),
-                        )
-                        .as_ref(),
-                    );
+                Type::Module { module_id } => {
+                    self.table = Some(module_members(self.ctx.db, module_id).as_ref());
                 }
                 _ => {}
             }

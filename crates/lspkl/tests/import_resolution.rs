@@ -306,8 +306,12 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
             .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
             .unwrap();
         assert_eq!(
-            pkl_types::resolver::definition_type(pkl_types::NodeRef::new(root, property), &ctx)
-                .render(&ctx),
+            pkl_types::resolver::definition_type(
+                ctx.db,
+                pkl_types::NodeRef::new(root, property),
+                ctx.root
+            )
+            .render(ctx.db),
             expected
         );
         let imported = ctx

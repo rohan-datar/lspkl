@@ -37,7 +37,7 @@ fn aliases_module_values_and_qualified_types() {
             .unwrap();
             assert_eq!(r.node.file, harness::file(ctx, 3));
             assert!(matches!(r.ty, Type::Module { .. }));
-            let v = pkl_types::find_member(&r.ty, "value", ctx).unwrap();
+            let v = pkl_types::find_member(ctx.db, &r.ty, "value").unwrap();
             assert_eq!(v.ty, *ctx.base.int_type());
         }
         let ty = resolve_type_name(
@@ -52,8 +52,9 @@ fn aliases_module_values_and_qualified_types() {
         });
         assert_eq!(
             pkl_types::expr_type(
+                ctx.db,
                 harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), node), ctx),
-                ctx
+                ctx.root
             ),
             *ctx.base.int_type()
         );
@@ -66,16 +67,16 @@ fn inherited_members_overrides_and_cycles() {
             NodeRef::new(harness::file(ctx, 1), pkl_syntax::ast::NodeId::ROOT),
             ctx,
         );
-        let inherited = pkl_types::find_member(&ty, "inherited", ctx).unwrap();
+        let inherited = pkl_types::find_member(ctx.db, &ty, "inherited").unwrap();
         assert_eq!(inherited.node.file, harness::file(ctx, 2));
         assert_eq!(inherited.ty, *ctx.base.int_type());
-        let overridden = pkl_types::find_member(&ty, "overrideValue", ctx).unwrap();
+        let overridden = pkl_types::find_member(ctx.db, &ty, "overrideValue").unwrap();
         assert_eq!(overridden.node.file, harness::file(ctx, 1));
         assert_eq!(overridden.ty, *ctx.base.string_type());
-        assert!(pkl_types::find_member(&ty, "missing", ctx).is_none());
-        let parent = pkl_types::resolver::super_type(&ty, ctx).unwrap();
+        assert!(pkl_types::find_member(ctx.db, &ty, "missing").is_none());
+        let parent = pkl_types::resolver::super_type(&ty, ctx.db).unwrap();
         assert_eq!(
-            pkl_types::find_member(&parent, "overrideValue", ctx)
+            pkl_types::find_member(ctx.db, &parent, "overrideValue")
                 .unwrap()
                 .node
                 .file,
@@ -99,7 +100,7 @@ fn glob_import_is_mapping_of_modules() {
         assert!(ty.class_equals(ctx.base.mapping_type()));
         let value = pkl_types::resolver::container_value_type(&ty, ctx).unwrap();
         assert!(
-            matches!(value,Type::Module{module_node,..} if module_node.file==harness::file(ctx, 3))
+            matches!(value,Type::Module{module_id,..} if module_id.file(ctx.db)==harness::file(ctx, 3))
         );
     });
 }
@@ -116,7 +117,14 @@ fn cyclic_classes_and_initializers_terminate() {
                 NodeRef::new(harness::file(ctx, 1), pkl_syntax::ast::NodeId::ROOT),
             )
             .unwrap();
-            assert!(pkl_types::find_member(&Type::class(a), "missing", ctx).is_none());
+            assert!(
+                pkl_types::find_member(
+                    ctx.db,
+                    &Type::class(pkl_types::class_id(ctx.db, a, ctx.root).unwrap()),
+                    "missing"
+                )
+                .is_none()
+            );
             assert_eq!(
                 resolve_unqualified_access(
                     pkl_types::NodeRef::new(
@@ -189,8 +197,9 @@ fn imported_alias_is_shadowed_by_parameters_and_let_bindings() {
             });
             assert_eq!(
                 pkl_types::expr_type(
+                    ctx.db,
                     harness::expr(pkl_types::NodeRef::new(harness::file(ctx, 1), expr), ctx),
-                    ctx
+                    ctx.root
                 ),
                 *base.int_type()
             );

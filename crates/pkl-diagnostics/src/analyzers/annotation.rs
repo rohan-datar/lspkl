@@ -3,7 +3,7 @@
 use pkl_types::NodeRef;
 
 use pkl_syntax::ast::{NodeKind, nodes};
-use pkl_types::{AnalysisContext, Type, resolver};
+use pkl_types::{AnalysisContext, resolver};
 
 use crate::analyzer::Analyzer;
 use crate::holder::DiagnosticsHolder;
@@ -42,9 +42,9 @@ impl Analyzer for AnnotationAnalyzer {
             return false;
         };
 
-        let class_type = Type::class(class_node_ref);
+        let class_type = resolver::definition_type(ctx.db, class_node_ref, ctx.root);
 
-        if !class_type.is_subtype_of(ctx.base.annotation_type(), ctx) {
+        if !class_type.is_subtype_of(ctx.base.annotation_type(), ctx.db) {
             holder.add_error(source_tree.span(node), "invalid annotation");
         }
         false

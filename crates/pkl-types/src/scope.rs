@@ -3,8 +3,8 @@ mod receiver;
 use receiver::ReceiverEntries;
 
 use crate::{
-    AnalysisContext, DeclId, MemberKind, MemberTable, ModuleId, Name, NodeRef, Type, class_id,
-    class_members, import_declarations, item_node, module_members,
+    AnalysisContext, DeclId, MemberKind, MemberTable, Name, NodeRef, Type, class_id, class_members,
+    import_declarations, item_node, module_members,
 };
 use crate::{compute_expr::compute_expr_type, resolver, ty::TypeBindings};
 use pkl_db::{Db, File, FileStatus};
@@ -92,7 +92,7 @@ impl Layer {
                 target: Target::Declaration(member.declaration),
             }))
             .chain(imports.into_iter().flat_map(move |file| {
-                import_declarations(db, file).map(|(name, declaration)| Entry {
+                import_declarations(db, file, ctx.root).map(|(name, declaration)| Entry {
                     name,
                     kind: ScopeKind::Import,
                     target: Target::Import(declaration),
@@ -160,8 +160,10 @@ impl ScopeEntry {
     }
     pub(crate) fn ty_with_bindings(&self, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
         match self.target {
-            Target::Import(declaration) => item_node(ctx.db, declaration)
-                .map_or(Type::Unknown, |node| resolver::import_type(node, ctx)),
+            Target::Import(declaration) => crate::type_resolution::import_type(ctx.db, declaration),
+            Target::Declaration(declaration) => {
+                resolver::declaration_type_with_bindings(ctx.db, declaration, bindings)
+            }
             Target::Receiver { owner, .. } => {
                 let receiver = crate::compute_expr::compute_this_type(owner, bindings, ctx);
                 resolver::find_member_on_type(&receiver, self.name.text(ctx.db), bindings, ctx)
@@ -442,7 +444,7 @@ fn scope_data(db: &dyn Db, root: File, node: NodeRef) -> Arc<ScopeData> {
             }
             NodeKind::Module => {
                 members(
-                    module_members(db, ModuleId::new(db, node.file, root)),
+                    module_members(db, crate::module_id(db, node.file, root)),
                     &mut result.own,
                     &mut result.inherited,
                 );

@@ -57,7 +57,7 @@ pub(crate) fn completions(
         return Vec::new();
     };
 
-    members_of_type(&receiver_ty, ctx)
+    members_of_type(ctx.db, &receiver_ty)
         .into_iter()
         .filter(|member| {
             !type_position || matches!(member.kind, MemberKind::Class | MemberKind::TypeAlias)
@@ -70,7 +70,7 @@ pub(crate) fn completions(
                 MemberKind::TypeAlias => CompletionItemKind::STRUCT,
             };
             let detail = if member.ty != Type::Unknown {
-                member.ty.render(ctx)
+                member.ty.render(ctx.db)
             } else {
                 Default::default()
             };

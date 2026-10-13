@@ -91,7 +91,8 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
         })
         .unwrap();
     assert_eq!(
-        pkl_types::resolver::definition_type(NodeRef::new(file, property), &ctx).render(&ctx),
+        pkl_types::resolver::definition_type(ctx.db, NodeRef::new(file, property), ctx.root)
+            .render(ctx.db),
         "String"
     );
     assert_eq!(

@@ -8,8 +8,8 @@ use pkl_types::Type;
 fn class_renders_to_its_simple_name() {
     let base = harness::load_test_base();
     harness::with_ctx(&base, |ctx| {
-        assert_eq!(base.string_type().render(ctx), "String");
-        assert_eq!(base.int_type().render(ctx), "Int");
+        assert_eq!(base.string_type().render(ctx.db), "String");
+        assert_eq!(base.int_type().render(ctx.db), "Int");
     });
 }
 
@@ -17,7 +17,7 @@ fn class_renders_to_its_simple_name() {
 fn string_literal_renders_with_quotes() {
     let base = harness::load_test_base();
     harness::with_ctx(&base, |ctx| {
-        assert_eq!(Type::string_literal("hello").render(ctx), "\"hello\"");
+        assert_eq!(Type::string_literal("hello").render(ctx.db), "\"hello\"");
     });
 }
 
@@ -25,8 +25,11 @@ fn string_literal_renders_with_quotes() {
 fn union_renders_with_pipe() {
     let base = harness::load_test_base();
     harness::with_ctx(&base, |ctx| {
-        let union = Type::union([base.int_type().clone(), base.string_type().clone()], ctx);
-        assert_eq!(union.render(ctx), "Int|String");
+        let union = Type::union(
+            [base.int_type().clone(), base.string_type().clone()],
+            ctx.db,
+        );
+        assert_eq!(union.render(ctx.db), "Int|String");
     });
 }
 
@@ -36,12 +39,16 @@ fn nullable_renders_with_question_mark() {
     // that: render `Union(Null, T)` and `Union(T, Null)` as `T?`.
     let base = harness::load_test_base();
     harness::with_ctx(&base, |ctx| {
-        let nullable_string =
-            Type::union([base.null_type().clone(), base.string_type().clone()], ctx);
-        assert_eq!(nullable_string.render(ctx), "String?");
+        let nullable_string = Type::union(
+            [base.null_type().clone(), base.string_type().clone()],
+            ctx.db,
+        );
+        assert_eq!(nullable_string.render(ctx.db), "String?");
 
-        let string_or_null =
-            Type::union([base.string_type().clone(), base.null_type().clone()], ctx);
-        assert_eq!(string_or_null.render(ctx), "String?");
+        let string_or_null = Type::union(
+            [base.string_type().clone(), base.null_type().clone()],
+            ctx.db,
+        );
+        assert_eq!(string_or_null.render(ctx.db), "String?");
     });
 }

@@ -23,6 +23,14 @@ pub(crate) fn infer_expr_type_from_context(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Type {
+    crate::inference::expected_type_with_bindings(node, bindings, ctx)
+}
+
+pub(crate) fn infer_expr_type_inner(
+    node: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
     let file = node.file;
     let Some(tree) = ctx.tree(file) else {
         return Type::Unknown;
@@ -131,13 +139,13 @@ pub(crate) fn infer_expr_type_from_context(
             if subscript.index(tree) != Some(node) {
                 return Type::Unknown;
             }
-            if receiver_type.is_subtype_of(ctx.base.list_type(), ctx)
-                || receiver_type.is_subtype_of(ctx.base.listing_type(), ctx)
-                || receiver_type.is_subtype_of(ctx.base.string_type(), ctx)
+            if receiver_type.is_subtype_of(ctx.base.list_type(), ctx.db)
+                || receiver_type.is_subtype_of(ctx.base.listing_type(), ctx.db)
+                || receiver_type.is_subtype_of(ctx.base.string_type(), ctx.db)
             {
                 ctx.base.int_type().clone()
-            } else if receiver_type.is_subtype_of(ctx.base.map_type(), ctx)
-                || receiver_type.is_subtype_of(ctx.base.mapping_type(), ctx)
+            } else if receiver_type.is_subtype_of(ctx.base.map_type(), ctx.db)
+                || receiver_type.is_subtype_of(ctx.base.mapping_type(), ctx.db)
             {
                 let Type::Class { type_args, .. } = receiver_type.unconstrained() else {
                     return Type::Unknown;
@@ -161,21 +169,21 @@ pub(crate) fn infer_expr_type_from_context(
                 return Type::Unknown;
             };
             let other_type = compute_expr_type(NodeRef::new(file, other), bindings, ctx);
-            if other_type.is_subtype_of(ctx.base.duration_type(), ctx) {
+            if other_type.is_subtype_of(ctx.base.duration_type(), ctx.db) {
                 Type::union(
                     [
                         ctx.base.number_type().clone(),
                         ctx.base.duration_type().clone(),
                     ],
-                    ctx,
+                    ctx.db,
                 )
-            } else if other_type.is_subtype_of(ctx.base.data_size_type(), ctx) {
+            } else if other_type.is_subtype_of(ctx.base.data_size_type(), ctx.db) {
                 Type::union(
                     [
                         ctx.base.number_type().clone(),
                         ctx.base.data_size_type().clone(),
                     ],
-                    ctx,
+                    ctx.db,
                 )
             } else {
                 // TODO: make this more exhaustive (support union types and return a pseudo type alias of multiplicative operands)
@@ -350,16 +358,10 @@ fn infer_type_from_arg_list(
         access_receiver_type_with_bindings(NodeRef::new(file, access), bindings, ctx)?;
     let name = tree.name(access).unwrap_or("");
     let method = find_member_on_type(&receiver_type, name, bindings, ctx)?;
-    let receiver_type = receiver_type.unaliased(ctx);
+    let receiver_type = receiver_type.unaliased(ctx.db);
     let member_bindings;
-    let bindings = if let Type::Class {
-        class_node,
-        type_args,
-        ..
-    } = receiver_type.unconstrained()
-    {
-        member_bindings =
-            crate::resolver::class_member_bindings(*class_node, type_args, bindings, ctx);
+    let bindings = if matches!(receiver_type.unconstrained(), Type::Class { .. }) {
+        member_bindings = crate::resolver::class_member_bindings(&receiver_type, bindings, ctx);
         &member_bindings
     } else {
         bindings

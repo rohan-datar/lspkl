@@ -186,7 +186,7 @@ fn imported_alias_members_have_types_and_completions() {
             ctx,
         )
         .unwrap();
-        let alias = pkl_types::find_member(&library.ty, "Alias", ctx).unwrap();
+        let alias = pkl_types::find_member(ctx.db, &library.ty, "Alias").unwrap();
         assert!(matches!(alias.ty, pkl_types::Type::Alias { .. }));
         assert_eq!(alias.node.file, harness::file(ctx, 2));
         assert!(labels(ctx, 4, 7).contains(&"field".to_owned()));
@@ -226,7 +226,9 @@ fn imported_argument_context_and_let_initializer_use_outer_scope() {
             NodeRef::new(harness::file(ctx, 1), arg)
                 .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
                 .map_or(pkl_types::Type::Unknown, |expr| pkl_types::expected_type(
-                    expr, ctx
+                    ctx.db,
+                    expr.map(|expr| expr.id()),
+                    ctx.root
                 )),
             *ctx.base.string_type()
         );

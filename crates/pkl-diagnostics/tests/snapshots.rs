@@ -41,6 +41,7 @@ fn diagnostic_snapshots() {
             .file(&fluent_uri::Uri::parse("pkl:base".to_owned()).unwrap())
             .unwrap();
         let base = pkl_types::BaseModule::from_tree(
+            &db,
             base_file,
             pkl_db::parse(&db, base_file).as_ref().unwrap().clone(),
         )

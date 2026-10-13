@@ -10,8 +10,8 @@ fn unknown_has_no_common_subtype_with_anything() {
     let db = base.db.borrow();
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
-    assert!(!Type::Unknown.has_common_subtype_with(base.string_type(), &ctx));
-    assert!(!Type::Unknown.has_common_subtype_with(base.int_type(), &ctx));
+    assert!(!Type::Unknown.has_common_subtype_with(base.string_type(), ctx.db));
+    assert!(!Type::Unknown.has_common_subtype_with(base.int_type(), ctx.db));
 }
 
 #[test]
@@ -23,12 +23,12 @@ fn anything_has_no_common_subtype_with_unknown() {
     assert!(
         !base
             .string_type()
-            .has_common_subtype_with(&Type::Unknown, &ctx)
+            .has_common_subtype_with(&Type::Unknown, ctx.db)
     );
     assert!(
         !base
             .int_type()
-            .has_common_subtype_with(&Type::Unknown, &ctx)
+            .has_common_subtype_with(&Type::Unknown, ctx.db)
     );
 }
 
@@ -38,11 +38,11 @@ fn nothing_has_no_common_subtype_with_anything() {
     let db = base.db.borrow();
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
-    assert!(!Type::Nothing.has_common_subtype_with(base.int_type(), &ctx));
+    assert!(!Type::Nothing.has_common_subtype_with(base.int_type(), ctx.db));
     assert!(
         !base
             .int_type()
-            .has_common_subtype_with(&Type::Nothing, &ctx)
+            .has_common_subtype_with(&Type::Nothing, ctx.db)
     );
 }
 
@@ -55,12 +55,12 @@ fn int_and_string_are_disjoint() {
     assert!(
         !base
             .int_type()
-            .has_common_subtype_with(base.string_type(), &ctx)
+            .has_common_subtype_with(base.string_type(), ctx.db)
     );
     assert!(
         !base
             .string_type()
-            .has_common_subtype_with(base.int_type(), &ctx)
+            .has_common_subtype_with(base.int_type(), ctx.db)
     );
 }
 
@@ -73,7 +73,7 @@ fn int_and_boolean_are_disjoint() {
     assert!(
         !base
             .int_type()
-            .has_common_subtype_with(base.boolean_type(), &ctx)
+            .has_common_subtype_with(base.boolean_type(), ctx.db)
     );
 }
 
@@ -88,7 +88,7 @@ fn int_and_float_are_disjoint() {
     assert!(
         !base
             .int_type()
-            .has_common_subtype_with(base.float_type(), &ctx)
+            .has_common_subtype_with(base.float_type(), ctx.db)
     );
 }
 
@@ -100,11 +100,11 @@ fn int_and_number_overlap() {
 
     assert!(
         base.int_type()
-            .has_common_subtype_with(base.number_type(), &ctx)
+            .has_common_subtype_with(base.number_type(), ctx.db)
     );
     assert!(
         base.number_type()
-            .has_common_subtype_with(base.int_type(), &ctx)
+            .has_common_subtype_with(base.int_type(), ctx.db)
     );
 }
 
@@ -114,14 +114,17 @@ fn union_overlaps_if_one_branch_does() {
     let db = base.db.borrow();
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
-    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
+    let int_or_string = Type::union(
+        [base.int_type().clone(), base.string_type().clone()],
+        ctx.db,
+    );
 
     // String branch overlaps with String.
-    assert!(int_or_string.has_common_subtype_with(base.string_type(), &ctx));
+    assert!(int_or_string.has_common_subtype_with(base.string_type(), ctx.db));
     // ...and symmetrically.
     assert!(
         base.string_type()
-            .has_common_subtype_with(&int_or_string, &ctx)
+            .has_common_subtype_with(&int_or_string, ctx.db)
     );
 }
 
@@ -131,14 +134,17 @@ fn union_is_disjoint_when_no_branch_overlaps() {
     let db = base.db.borrow();
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
-    let int_or_string = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
+    let int_or_string = Type::union(
+        [base.int_type().clone(), base.string_type().clone()],
+        ctx.db,
+    );
 
     // Boolean overlaps with neither Int nor String.
-    assert!(!int_or_string.has_common_subtype_with(base.boolean_type(), &ctx));
+    assert!(!int_or_string.has_common_subtype_with(base.boolean_type(), ctx.db));
     assert!(
         !base
             .boolean_type()
-            .has_common_subtype_with(&int_or_string, &ctx)
+            .has_common_subtype_with(&int_or_string, ctx.db)
     );
 }
 
@@ -149,10 +155,13 @@ fn union_of_unions_propagates_correctly() {
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     // (Int | String) | Boolean  vs  Boolean  → true, via the right branch.
-    let inner = Type::union([base.int_type().clone(), base.string_type().clone()], &ctx);
-    let outer = Type::union([inner, base.boolean_type().clone()], &ctx);
+    let inner = Type::union(
+        [base.int_type().clone(), base.string_type().clone()],
+        ctx.db,
+    );
+    let outer = Type::union([inner, base.boolean_type().clone()], ctx.db);
 
-    assert!(outer.has_common_subtype_with(base.boolean_type(), &ctx));
+    assert!(outer.has_common_subtype_with(base.boolean_type(), ctx.db));
 }
 
 #[test]
@@ -164,7 +173,7 @@ fn distinct_string_literals_are_disjoint() {
     let a = Type::string_literal("a");
     let b = Type::string_literal("b");
 
-    assert!(!a.has_common_subtype_with(&b, &ctx));
+    assert!(!a.has_common_subtype_with(&b, ctx.db));
 }
 
 #[test]
@@ -174,8 +183,8 @@ fn string_literal_is_disjoint_from_int() {
     let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
 
     let hello = Type::string_literal("hello");
-    assert!(!hello.has_common_subtype_with(base.int_type(), &ctx));
-    assert!(!base.int_type().has_common_subtype_with(&hello, &ctx));
+    assert!(!hello.has_common_subtype_with(base.int_type(), ctx.db));
+    assert!(!base.int_type().has_common_subtype_with(&hello, ctx.db));
 }
 
 #[test]
@@ -192,11 +201,11 @@ fn symmetric_on_disjoint_pairs() {
 
     for (a, b) in pairs {
         assert_eq!(
-            a.has_common_subtype_with(b, &ctx),
-            b.has_common_subtype_with(a, &ctx),
+            a.has_common_subtype_with(b, ctx.db),
+            b.has_common_subtype_with(a, ctx.db),
             "asymmetric result for {:?} vs {:?}",
-            a.render(&ctx),
-            b.render(&ctx),
+            a.render(ctx.db),
+            b.render(ctx.db),
         );
     }
 }
@@ -209,6 +218,6 @@ fn non_null_alias_overlaps_with_int() {
 
     assert!(
         base.non_null_type()
-            .has_common_subtype_with(base.int_type(), &ctx)
+            .has_common_subtype_with(base.int_type(), ctx.db)
     );
 }

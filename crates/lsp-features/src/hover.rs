@@ -71,7 +71,7 @@ pub fn render_markdown(
         NodeKind::ImportGlob => format!(
             "{}: {}",
             pkl_types::resolver::import_name(tree, node_id)?,
-            pkl_types::resolver::import_type(resolved, ctx).render(ctx)
+            pkl_types::resolver::import_type(resolved, ctx).render(ctx.db)
         ),
         NodeKind::ClassProperty => {
             let name = tree.name(node_id)?;
@@ -121,17 +121,19 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
     if let Some(type_node) = annotated {
         let ty = NodeRef::new(property.file, type_node)
             .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
-            .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
-        return Some(ty.render(ctx));
+            .map_or(Type::Unknown, |ty| pkl_types::to_type(ctx.db, ty, ctx.root));
+        return Some(ty.render(ctx.db));
     }
 
     // No annotation: infer from the initializer.
     let expr = declaration.value(tree)?;
     let ty = NodeRef::new(property.file, expr)
         .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-        .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+        .map_or(Type::Unknown, |expr| {
+            pkl_types::expr_type(ctx.db, expr, ctx.root)
+        });
     if ty != Type::Unknown {
-        return Some(ty.render(ctx));
+        return Some(ty.render(ctx.db));
     }
     None
 }
@@ -225,9 +227,11 @@ fn return_type_text(
     if let Some(expr) = body {
         let ty = NodeRef::new(file_id, expr)
             .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-            .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+            .map_or(Type::Unknown, |expr| {
+                pkl_types::expr_type(ctx.db, expr, ctx.root)
+            });
         if ty != Type::Unknown {
-            return ty.render(ctx);
+            return ty.render(ctx.db);
         }
     }
     "unknown".to_string()
@@ -241,9 +245,9 @@ fn annotation_text(tree: &SyntaxTree, ann: NodeId, file_id: File, ctx: &Analysis
         Some(ty_node) => {
             let ty = NodeRef::new(file_id, ty_node)
                 .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
-                .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
+                .map_or(Type::Unknown, |ty| pkl_types::to_type(ctx.db, ty, ctx.root));
             if ty != Type::Unknown {
-                ty.render(ctx)
+                ty.render(ctx.db)
             } else {
                 tree.text(ty_node).to_string()
             }

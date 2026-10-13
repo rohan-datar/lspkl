@@ -8,7 +8,24 @@ use thiserror::Error;
 
 use crate::file_id::NodeRef;
 use crate::ty::Type;
-use pkl_db::File;
+use pkl_db::{Db, File};
+
+/// SDK types share one database-local memo, populated before transport startup.
+#[salsa::tracked(returns(ref), no_eq)]
+fn sdk_data(db: &dyn Db) -> Arc<BaseModule> {
+    static URI: std::sync::LazyLock<fluent_uri::Uri<String>> =
+        std::sync::LazyLock::new(|| fluent_uri::Uri::parse("pkl:base".to_owned()).unwrap());
+    let file = db.file(&URI).expect("embedded base input");
+    let tree = pkl_db::parse(db, file)
+        .as_ref()
+        .expect("embedded base syntax")
+        .clone();
+    Arc::new(BaseModule::from_tree(db, file, tree).expect("embedded base declarations"))
+}
+
+pub fn base_module(db: &dyn Db) -> &Arc<BaseModule> {
+    sdk_data(db)
+}
 
 #[derive(Debug, Error)]
 pub enum BaseModuleError {
@@ -55,6 +72,7 @@ pub struct BaseModule {
     bytes_type: Type,
     function_type: Type,
     varargs_type: Type,
+    function_types: [Option<Type>; 6],
 
     // typealiases
     non_null_type: Type,
@@ -82,7 +100,11 @@ pub struct BaseModule {
 
 impl BaseModule {
     /// Load well-known metadata from an already parsed base module.
-    pub fn from_tree(file: File, tree: Arc<SyntaxTree>) -> Result<Self, BaseModuleError> {
+    pub fn from_tree(
+        db: &dyn Db,
+        file: File,
+        tree: Arc<SyntaxTree>,
+    ) -> Result<Self, BaseModuleError> {
         let classes: Vec<_> = nodes::Module::cast(&tree, tree.root())
             .into_iter()
             .flat_map(|n| n.members(&tree))
@@ -95,33 +117,50 @@ impl BaseModule {
             .collect();
 
         Ok(Self {
+            function_types: std::array::from_fn(|index| {
+                find_class(
+                    db,
+                    file,
+                    &tree,
+                    &classes,
+                    [
+                        "Function0",
+                        "Function1",
+                        "Function2",
+                        "Function3",
+                        "Function4",
+                        "Function5",
+                    ][index],
+                )
+                .ok()
+            }),
             file_id: file,
 
             // well-known types
-            any_type: find_class(file, &tree, &classes, "Any")?,
-            annotation_type: find_class(file, &tree, &classes, "Annotation")?,
-            dynamic_type: find_class(file, &tree, &classes, "Dynamic")?,
-            null_type: find_class(file, &tree, &classes, "Null")?,
-            boolean_type: find_class(file, &tree, &classes, "Boolean")?,
-            int_type: find_class(file, &tree, &classes, "Int")?,
-            float_type: find_class(file, &tree, &classes, "Float")?,
-            duration_type: find_class(file, &tree, &classes, "Duration")?,
-            data_size_type: find_class(file, &tree, &classes, "DataSize")?,
-            number_type: find_class(file, &tree, &classes, "Number")?,
-            string_type: find_class(file, &tree, &classes, "String")?,
-            bytes_type: find_class(file, &tree, &classes, "Bytes")?,
-            collection_type: find_class(file, &tree, &classes, "Collection")?,
-            listing_type: find_class(file, &tree, &classes, "Listing")?,
-            list_type: find_class(file, &tree, &classes, "List")?,
-            set_type: find_class(file, &tree, &classes, "Set")?,
-            mapping_type: find_class(file, &tree, &classes, "Mapping")?,
-            map_type: find_class(file, &tree, &classes, "Map")?,
-            object_type: find_class(file, &tree, &classes, "Object")?,
-            module_type: find_class(file, &tree, &classes, "Module")?,
-            function_type: find_class(file, &tree, &classes, "Function")?,
-            non_null_type: find_alias(file, &tree, &aliases, "NonNull")?,
-            comparable_type: find_alias(file, &tree, &aliases, "Comparable")?,
-            varargs_type: find_class(file, &tree, &classes, "VarArgs")?,
+            any_type: find_class(db, file, &tree, &classes, "Any")?,
+            annotation_type: find_class(db, file, &tree, &classes, "Annotation")?,
+            dynamic_type: find_class(db, file, &tree, &classes, "Dynamic")?,
+            null_type: find_class(db, file, &tree, &classes, "Null")?,
+            boolean_type: find_class(db, file, &tree, &classes, "Boolean")?,
+            int_type: find_class(db, file, &tree, &classes, "Int")?,
+            float_type: find_class(db, file, &tree, &classes, "Float")?,
+            duration_type: find_class(db, file, &tree, &classes, "Duration")?,
+            data_size_type: find_class(db, file, &tree, &classes, "DataSize")?,
+            number_type: find_class(db, file, &tree, &classes, "Number")?,
+            string_type: find_class(db, file, &tree, &classes, "String")?,
+            bytes_type: find_class(db, file, &tree, &classes, "Bytes")?,
+            collection_type: find_class(db, file, &tree, &classes, "Collection")?,
+            listing_type: find_class(db, file, &tree, &classes, "Listing")?,
+            list_type: find_class(db, file, &tree, &classes, "List")?,
+            set_type: find_class(db, file, &tree, &classes, "Set")?,
+            mapping_type: find_class(db, file, &tree, &classes, "Mapping")?,
+            map_type: find_class(db, file, &tree, &classes, "Map")?,
+            object_type: find_class(db, file, &tree, &classes, "Object")?,
+            module_type: find_class(db, file, &tree, &classes, "Module")?,
+            function_type: find_class(db, file, &tree, &classes, "Function")?,
+            non_null_type: find_alias(db, file, &tree, &aliases, "NonNull")?,
+            comparable_type: find_alias(db, file, &tree, &aliases, "Comparable")?,
+            varargs_type: find_class(db, file, &tree, &classes, "VarArgs")?,
 
             // conversion methods
             listing_to_list_method: find_class_member(file, &tree, &classes, "Listing", "toList")?,
@@ -186,28 +225,7 @@ impl BaseModule {
 
     // ---- Well-known type accessors ----
     pub fn function_n_type(&self, n: usize) -> Option<Type> {
-        if n > 5 {
-            return None;
-        }
-        let fn_class_name = [
-            "Function0",
-            "Function1",
-            "Function2",
-            "Function3",
-            "Function4",
-            "Function5",
-        ][n];
-        let tree = self.tree.as_ref();
-        let id = nodes::Module::cast(tree, tree.root())?
-            .members(tree)
-            .find(|&id| {
-                nodes::Class::cast(tree, id).is_some() && tree.name(id) == Some(fn_class_name)
-            })?;
-        let classes = [id];
-        let Ok(fn_class) = find_class(self.file_id, tree, &classes, fn_class_name) else {
-            return None;
-        };
-        Some(fn_class)
+        self.function_types.get(n).and_then(Clone::clone)
     }
 
     pub fn function_type(&self) -> &Type {
@@ -339,6 +357,7 @@ impl BaseModule {
 }
 
 fn find_class(
+    db: &dyn Db,
     file: File,
     tree: &SyntaxTree,
     classes: &[NodeId],
@@ -348,10 +367,13 @@ fn find_class(
     let Some(id) = classes.iter().find(|c| tree.name(**c) == Some(name)) else {
         return Err(BaseModuleError::MissingClass(name.to_string()));
     };
-    Ok(Type::class(NodeRef { file, value: *id }))
+    let class = crate::class_id(db, NodeRef::new(file, *id), file)
+        .ok_or_else(|| BaseModuleError::MissingClass(name.to_owned()))?;
+    Ok(Type::class(class))
 }
 
 fn find_alias(
+    db: &dyn Db,
     file: File,
     tree: &SyntaxTree,
     aliases: &[NodeId],
@@ -363,7 +385,8 @@ fn find_alias(
     };
 
     Ok(Type::Alias {
-        alias_node: NodeRef { file, value: *id },
+        alias_id: crate::decl_for_node(db, NodeRef::new(file, *id), file)
+            .ok_or_else(|| BaseModuleError::MissingAlias(name.to_owned()))?,
         type_args: vec![],
     })
 }

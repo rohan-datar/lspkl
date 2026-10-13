@@ -75,7 +75,7 @@ pub fn load_test_base() -> TestBase {
         .file(&Uri::parse("pkl:base".to_owned()).unwrap())
         .unwrap();
     let tree = pkl_db::parse(&db, file).as_ref().unwrap().clone();
-    let base = BaseModule::from_tree(file, tree).unwrap();
+    let base = BaseModule::from_tree(&db, file, tree).unwrap();
     TestBase {
         db: RefCell::new(db),
         base,

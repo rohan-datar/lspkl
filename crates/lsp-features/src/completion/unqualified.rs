@@ -5,7 +5,7 @@ use pkl_types::NodeRef;
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use pkl_syntax::ast::nodes::{Expr, Module, ModuleMember, ObjectMember};
+use pkl_syntax::ast::nodes::{Expr, ModuleMember, ObjectMember};
 use pkl_syntax::ast::{NodeId, NodeKind};
 
 use pkl_types::{AnalysisContext, ScopeKind, Type, scope_at};
@@ -22,7 +22,7 @@ pub(crate) fn completions(
 ) -> Vec<CompletionItem> {
     let mut collector: Vec<CompletionItem> = Vec::new();
 
-    let this_type = pkl_types::this_type(NodeRef::new(file, node), ctx);
+    let this_type = pkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);
     if this_type == Type::Unknown {
         return collector;
     }
@@ -145,7 +145,7 @@ fn add_typed_completions(
     ctx: &AnalysisContext,
     out: &mut Vec<CompletionItem>,
 ) {
-    for member in members_of_type(this_type, ctx) {
+    for member in members_of_type(ctx.db, this_type) {
         if !member.is_property() {
             continue;
         }
@@ -160,7 +160,7 @@ fn add_typed_completions(
 
         let modifiers = property_modifier_prefix(&member.node, ctx);
         let detail = if member.ty != Type::Unknown {
-            member.ty.render(ctx)
+            member.ty.render(ctx.db)
         } else {
             Default::default()
         };
@@ -240,7 +240,7 @@ fn add_mapping_completions(
 
     let key_display = default_key(key_type, ctx, false);
     let key_snippet = default_key(key_type, ctx, true);
-    let value_detail = value_type.render(ctx);
+    let value_detail = value_type.render(ctx.db);
 
     let mut entry_amend = super::simple_item(
         &format!("[{key_display}] {{…}}"),
@@ -290,34 +290,34 @@ fn add_listing_completions(
         ));
     }
 
-    let mut new_amend = super::simple_item("new {…}", "", &element_type.render(ctx), None);
+    let mut new_amend = super::simple_item("new {…}", "", &element_type.render(ctx.db), None);
     new_amend.insert_text = Some("new {\n  $1\n}".to_string());
     new_amend.insert_text_format = Some(lsp_types::InsertTextFormat::SNIPPET);
     out.push(new_amend);
 }
 
 fn base_member_detail(container: &Type, member: &str, ctx: &AnalysisContext) -> String {
-    pkl_types::find_member(container, member, ctx)
+    pkl_types::find_member(ctx.db, container, member)
         .filter(|resolved| resolved.ty != Type::Unknown)
-        .map(|resolved| resolved.ty.render(ctx))
+        .map(|resolved| resolved.ty.render(ctx.db))
         .unwrap_or_default()
 }
 
 /// Default literal for an entry key .
 fn default_key(key_type: &Type, ctx: &AnalysisContext, is_snippet: bool) -> String {
-    if key_type.is_subtype_of(ctx.base.string_type(), ctx) {
+    if key_type.is_subtype_of(ctx.base.string_type(), ctx.db) {
         if is_snippet {
             "\"$1\"".into()
         } else {
             "\"key\"".into()
         }
-    } else if key_type.is_subtype_of(ctx.base.int_type(), ctx) {
+    } else if key_type.is_subtype_of(ctx.base.int_type(), ctx.db) {
         if is_snippet {
             "$1".into()
         } else {
             "123".into()
         }
-    } else if key_type.is_subtype_of(ctx.base.boolean_type(), ctx) {
+    } else if key_type.is_subtype_of(ctx.base.boolean_type(), ctx.db) {
         if is_snippet {
             "$1".into()
         } else {
@@ -334,7 +334,7 @@ fn to_class_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
     match ty.unconstrained() {
         t @ Type::Class { .. } => Some(t.clone()),
         _ => {
-            let unaliased = ty.unaliased(ctx);
+            let unaliased = ty.unaliased(ctx.db);
             match unaliased.unconstrained() {
                 t @ Type::Class { .. } => Some(t.clone()),
                 _ => None,
@@ -386,12 +386,14 @@ fn add_inferred_expr_type_completions(
 ) {
     let expected = NodeRef::new(file, node)
         .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-        .map_or(Type::Unknown, |expr| pkl_types::expected_type(expr, ctx));
+        .map_or(Type::Unknown, |expr| {
+            pkl_types::expected_type(ctx.db, expr.map(|expr| expr.id()), ctx.root)
+        });
     add_lambda_completions(&expected, ctx, out);
 }
 
 fn add_lambda_completions(expected: &Type, ctx: &AnalysisContext, out: &mut Vec<CompletionItem>) {
-    let unaliased = expected.unaliased(ctx);
+    let unaliased = expected.unaliased(ctx.db);
     match unaliased.unconstrained() {
         Type::Union { members } => {
             for member in members.iter() {
@@ -420,7 +422,7 @@ fn add_lambda_completions(expected: &Type, ctx: &AnalysisContext, out: &mut Vec<
                     placeholders.join(", "),
                     param_names.len() + 1
                 );
-                let detail = expected.render(ctx);
+                let detail = expected.render(ctx.db);
                 out.push(super::simple_item(
                     &display,
                     &insert,
@@ -443,32 +445,31 @@ fn lambda_parameter_names(param_types: &[Type], ctx: &AnalysisContext) -> Vec<St
 
     for ty in param_types {
         let name = match ty.unconstrained() {
-            Type::Class { class_node, .. }
-                if class_node.file == ctx.base.file_id()
-                    && ctx
-                        .tree(class_node.file)
-                        .and_then(|t| t.name(class_node.value))
-                        == Some("Int") =>
+            Type::Class { class_id, .. }
+                if class_id.module(ctx.db).file(ctx.db) == ctx.base.file_id()
+                    && pkl_types::module_items(ctx.db, class_id.module(ctx.db).file(ctx.db))
+                        .classes[class_id.index(ctx.db)]
+                    .declaration
+                    .name
+                    .text(ctx.db)
+                        == "Int" =>
             {
                 let c = INT_NAMES[next_int % INT_NAMES.len()];
                 next_int += 1;
                 c.to_string()
             }
-            Type::Class { class_node, .. } => ctx
-                .tree(class_node.file)
-                .and_then(|t| t.name(class_node.value))
-                .map(decapitalize)
+            Type::Class { class_id, .. } => decapitalize(
+                pkl_types::module_items(ctx.db, class_id.module(ctx.db).file(ctx.db)).classes
+                    [class_id.index(ctx.db)]
+                .declaration
+                .name
+                .text(ctx.db),
+            ),
+            Type::Module { module_id } => pkl_types::module_items(ctx.db, module_id.file(ctx.db))
+                .name
+                .map(|name| decapitalize(name.text(ctx.db)))
                 .unwrap_or_else(|| "param".to_string()),
-            Type::Module { module_node } => ctx
-                .tree(module_node.file)
-                .and_then(|tree| Module::cast(tree, module_node.value)?.name(tree))
-                .map(decapitalize)
-                .unwrap_or_else(|| "param".to_string()),
-            Type::Variable { type_param, .. } => ctx
-                .tree(type_param.file)
-                .and_then(|t| t.name(type_param.value))
-                .map(decapitalize)
-                .unwrap_or_else(|| "param".to_string()),
+            Type::Variable { .. } => decapitalize(&ty.render(ctx.db)),
             _ => "param".to_string(),
         };
         let count = counts.entry(name.clone()).or_insert(0);
@@ -505,7 +506,7 @@ fn add_scope_completions(node: NodeRef, ctx: &AnalysisContext, out: &mut Vec<Com
         let detail = if ty == Type::Unknown {
             String::new()
         } else {
-            ty.render(ctx)
+            ty.render(ctx.db)
         };
         out.push(super::simple_item(name, name, &detail, Some(kind)));
     }

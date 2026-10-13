@@ -31,28 +31,34 @@ impl Analyzer for TypeCheckAnalyzer {
 
         let expected = NodeRef::new(file, node)
             .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-            .map_or(Type::Unknown, |expr| pkl_types::expected_type(expr, ctx));
+            .map_or(Type::Unknown, |expr| {
+                pkl_types::expected_type(ctx.db, expr.map(|expr| expr.id()), ctx.root)
+            });
         if matches!(expected, Type::Unknown) {
             return true;
         }
 
         let actual = NodeRef::new(file, node)
             .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-            .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
-        if actual.is_subtype_of(&expected, ctx) {
+            .map_or(Type::Unknown, |expr| {
+                pkl_types::expr_type(ctx.db, expr, ctx.root)
+            });
+        if actual.is_subtype_of(&expected, ctx.db) {
             return true;
         }
 
         let span = source_tree.span(node);
-        let render_actual = actual.render(ctx);
-        let render_expected = expected.render(ctx);
+        let render_actual = actual.render(ctx.db);
+        let render_expected = expected.render(ctx.db);
 
-        if !actual.has_common_subtype_with(&expected, ctx) {
+        if !actual.has_common_subtype_with(&expected, ctx.db) {
             holder.add_error(
                 span,
                 format!("Type mismatch. Expected: {render_expected}. Actual: {render_actual}"),
             );
-        } else if actual.is_nullable(ctx) && actual.non_null(ctx).is_subtype_of(&expected, ctx) {
+        } else if actual.is_nullable(ctx.db)
+            && actual.non_null(ctx.db).is_subtype_of(&expected, ctx.db)
+        {
             holder.add_warning(
                 span,
                 format!(

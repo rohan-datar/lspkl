@@ -38,26 +38,28 @@ impl Analyzer for ExprAnalyzer {
                 };
                 let expr_type = NodeRef::new(file, expr_node)
                     .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+                    .map_or(Type::Unknown, |expr| {
+                        pkl_types::expr_type(ctx.db, expr, ctx.root)
+                    });
                 let tested_type = NodeRef::new(file, type_node)
                     .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
-                    .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
+                    .map_or(Type::Unknown, |ty| pkl_types::to_type(ctx.db, ty, ctx.root));
                 if tested_type.is_non_null(ctx.base) {
                     if !tested_type.constraints().is_empty() {
                         return false;
                     }
-                    if !expr_type.is_nullable(ctx) || expr_type.is_non_null(ctx.base) {
+                    if !expr_type.is_nullable(ctx.db) || expr_type.is_non_null(ctx.base) {
                         holder.add_warning(source_tree.span(node), "expression is always true");
                     }
                 } else {
-                    if tested_type.has_constraints(ctx) {
+                    if tested_type.has_constraints(ctx.db) {
                         return false;
                     }
                     if !matches!(expr_type, Type::Unknown)
-                        && expr_type.is_subtype_of(&tested_type, ctx)
+                        && expr_type.is_subtype_of(&tested_type, ctx.db)
                     {
                         holder.add_warning(source_tree.span(node), "expression is always true");
-                    } else if !tested_type.is_subtype_of(&expr_type, ctx) {
+                    } else if !tested_type.is_subtype_of(&expr_type, ctx.db) {
                         holder.add_warning(source_tree.span(node), "expression is always false");
                     }
                 }
@@ -76,22 +78,24 @@ impl Analyzer for ExprAnalyzer {
                 };
                 let expr_type = NodeRef::new(file, expr_node)
                     .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
+                    .map_or(Type::Unknown, |expr| {
+                        pkl_types::expr_type(ctx.db, expr, ctx.root)
+                    });
                 let tested_type = NodeRef::new(file, type_node)
                     .cast(ctx, pkl_syntax::ast::nodes::TypeNode::cast)
-                    .map_or(Type::Unknown, |ty| pkl_types::to_type(ty, ctx));
+                    .map_or(Type::Unknown, |ty| pkl_types::to_type(ctx.db, ty, ctx.root));
 
                 let known_non_null = tested_type.is_non_null(ctx.base)
                     && tested_type.constraints().is_empty()
-                    && (!expr_type.is_nullable(ctx) || expr_type.is_non_null(ctx.base));
-                if (!tested_type.has_constraints(ctx) || known_non_null)
+                    && (!expr_type.is_nullable(ctx.db) || expr_type.is_non_null(ctx.base));
+                if (!tested_type.has_constraints(ctx.db) || known_non_null)
                     && !matches!(expr_type, Type::Unknown)
-                    && expr_type.is_subtype_of(&tested_type, ctx)
+                    && expr_type.is_subtype_of(&tested_type, ctx.db)
                 {
                     holder.add_error(source_tree.span(node), "type cast is redundant");
                     // TODO: add quickfix
-                } else if !tested_type.is_subtype_of(&expr_type, ctx)
-                    && !tested_type.has_common_subtype_with(&expr_type, ctx)
+                } else if !tested_type.is_subtype_of(&expr_type, ctx.db)
+                    && !tested_type.has_common_subtype_with(&expr_type, ctx.db)
                 {
                     holder.add_error(source_tree.span(node), "type cast cannot succeed");
                 }
@@ -106,8 +110,10 @@ impl Analyzer for ExprAnalyzer {
                 };
                 let expr_type = NodeRef::new(file, expr_node)
                     .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
-                if !expr_type.is_nullable(ctx) {
+                    .map_or(Type::Unknown, |expr| {
+                        pkl_types::expr_type(ctx.db, expr, ctx.root)
+                    });
+                if !expr_type.is_nullable(ctx.db) {
                     holder.add_error(source_tree.span(node), "null coalescing is redundant");
                     // TODO: add quickfix
                 }
@@ -121,8 +127,10 @@ impl Analyzer for ExprAnalyzer {
                 };
                 let expr_type = NodeRef::new(file, expr_node)
                     .cast(ctx, pkl_syntax::ast::nodes::Expr::cast)
-                    .map_or(Type::Unknown, |expr| pkl_types::expr_type(expr, ctx));
-                if !expr_type.is_nullable(ctx) {
+                    .map_or(Type::Unknown, |expr| {
+                        pkl_types::expr_type(ctx.db, expr, ctx.root)
+                    });
+                if !expr_type.is_nullable(ctx.db) {
                     holder.add_error(source_tree.span(node), "non null is redundant");
                     // TODO: add quickfix
                 }

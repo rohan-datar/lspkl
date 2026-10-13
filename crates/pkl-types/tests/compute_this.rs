@@ -13,7 +13,11 @@ fn this_type_at_module_top_is_module() {
         let lit = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::IntLiteralExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx);
+        let ty = pkl_types::this_type(
+            ctx.db,
+            pkl_types::NodeRef::new(harness::file(ctx, 1), lit),
+            ctx.root,
+        );
 
         match ty {
             Type::Module { .. } => {} // good — `this` is the module
@@ -29,16 +33,26 @@ fn this_type_inside_class_is_that_class() {
         let lit = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::IntLiteralExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), lit), ctx);
+        let ty = pkl_types::this_type(
+            ctx.db,
+            pkl_types::NodeRef::new(harness::file(ctx, 1), lit),
+            ctx.root,
+        );
 
         // Should be Type::Class pointing at Foo.
-        let Type::Class { class_node, .. } = &ty else {
+        let Type::Class { class_id, .. } = &ty else {
             panic!("expected Type::Class, got {ty:?}");
         };
 
         // Verify it's actually pointing at `Foo` by checking the name.
-        let tree = ctx.tree(class_node.file).expect("class lives in ctx");
-        assert_eq!(tree.name(class_node.value), Some("Foo"));
+        let items = pkl_types::module_items(ctx.db, class_id.module(ctx.db).file(ctx.db));
+        assert_eq!(
+            items.classes[class_id.index(ctx.db)]
+                .declaration
+                .name
+                .text(ctx.db),
+            "Foo"
+        );
     });
 }
 
@@ -52,7 +66,11 @@ fn this_type_inside_constrained_type_is_inner_type() {
         let inner = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::ThisExpr)
         });
-        let ty = pkl_types::this_type(pkl_types::NodeRef::new(harness::file(ctx, 1), inner), ctx);
+        let ty = pkl_types::this_type(
+            ctx.db,
+            pkl_types::NodeRef::new(harness::file(ctx, 1), inner),
+            ctx.root,
+        );
 
         // Should be Type::Class pointing at Int (which lives in pkl:base).
         assert!(

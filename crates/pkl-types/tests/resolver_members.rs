@@ -24,13 +24,20 @@ class MyPerson extends Person {
     harness::with_snippet(&base, src, |ctx| {
         let my_person = find_class_named(ctx.tree(harness::file(ctx, 1)).unwrap(), "MyPerson")
             .expect("expected class MyPerson");
-        let my_person_ty = Type::class(NodeRef::new(harness::file(ctx, 1), my_person));
+        let my_person_ty = Type::class(
+            pkl_types::class_id(
+                ctx.db,
+                NodeRef::new(harness::file(ctx, 1), my_person),
+                ctx.root,
+            )
+            .expect("class declaration"),
+        );
 
-        let resolved = pkl_types::find_member(&my_person_ty, "age", ctx)
+        let resolved = pkl_types::find_member(ctx.db, &my_person_ty, "age")
             .expect("expected to resolve inherited property `age`");
 
         assert!(
-            ctx.base.int_type().is_subtype_of(&resolved.ty, ctx),
+            ctx.base.int_type().is_subtype_of(&resolved.ty, ctx.db),
             "expected inherited property type Int (or super), got {:?}",
             resolved.ty
         );
@@ -63,7 +70,7 @@ class MyPerson extends Person {
         .expect("expected unqualified `age` to resolve via inherited member lookup");
 
         assert!(
-            ctx.base.int_type().is_subtype_of(&resolved.ty, ctx),
+            ctx.base.int_type().is_subtype_of(&resolved.ty, ctx.db),
             "expected unqualified `age` type Int (or super), got {:?}",
             resolved.ty
         );
