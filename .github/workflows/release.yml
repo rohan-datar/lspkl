@@ -101,10 +101,30 @@ jobs:
           # Creating a ref is atomic and fails if the version tag already exists.
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
             -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
-      - name: Publish workspace packages to crates.io
+      - name: Publish unpublished workspace packages to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REPOSITORY_TOKEN }}
-        run: cargo publish --workspace --locked
+        run: |
+          set -euo pipefail
+          # Versions already on crates.io (a manual publish or an earlier attempt) are skipped.
+          exclude=()
+          remaining=0
+          while read -r name version; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A "lspkl-release ($GITHUB_REPOSITORY)" \
+              "https://crates.io/api/v1/crates/$name/$version")
+            case "$status" in
+              200) echo "$name@$version is already published"; exclude+=(--exclude "$name") ;;
+              404) remaining=$((remaining + 1)) ;;
+              *) echo "::error::crates.io returned $status for $name@$version"; exit 1 ;;
+            esac
+          done < <(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"')
+          if (( remaining == 0 )); then
+            echo "All workspace packages are already published."
+            exit 0
+          fi
+          cargo publish --workspace --locked "${exclude[@]}"
       - name: Publish archives and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
