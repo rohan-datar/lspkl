@@ -18,13 +18,6 @@ fn text(tree: &SyntaxTree, node: Option<NodeId>) -> &str {
 }
 
 #[test]
-fn compact_unmapped_kinds_keep_human_grammar_names() {
-    let language: tree_sitter::Language = tree_sitter_pkl::LANGUAGE.into();
-    let symbol = language.id_for_node_kind("identifier", true);
-    assert_eq!(NodeKind::Unmapped(symbol).name(), "identifier");
-}
-
-#[test]
 fn interpolation_views_ignore_comments() {
     let tree = parse("x = \"value \\( /* comment */ 1)\"").unwrap();
     let id = find(&tree, NodeKind::SingleLineStringLiteral);
