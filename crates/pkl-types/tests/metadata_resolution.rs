@@ -247,7 +247,9 @@ fn inferred_members_retain_receiver_substitutions_transitively() {
 }
 
 #[test]
-fn unqualified_types_and_qualified_imports_use_distinct_namespaces() {
+fn own_imports_name_module_types_before_local_and_base_types() {
+    // Mirrors pkl-core `ResolveSimpleDeclaredTypeNode`: the enclosing module's
+    // imports (local members) are searched before its classes, aliases and pkl:base.
     let mut db = database();
     let imported = put(&mut db, "namespace_target", "class Export {}\n");
     let file = put(
@@ -256,17 +258,23 @@ fn unqualified_types_and_qualified_imports_use_distinct_namespaces() {
         "import \"namespace_target.pkl\" as Shared\nimport \"namespace_target.pkl\" as Local\nimport \"pkl:json\" as String\nclass Shared {}\ntypealias Local = Int\nclass Owner {}\n",
     );
     let owner = class(&db, file, "Owner");
+    let module_type = |target: File| Type::Module {
+        module_id: module_id(&db, target, file),
+    };
+    let json = db
+        .file(&Uri::parse("pkl:json".to_owned()).unwrap())
+        .unwrap();
     assert_eq!(
         resolve_type_ref(&db, owner, &named(&db, "String")),
-        base_module(&db).string_type().clone()
+        module_type(json)
     );
     assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "Local")).unaliased(&db),
-        base_module(&db).int_type().clone()
+        resolve_type_ref(&db, owner, &named(&db, "Local")),
+        module_type(imported)
     );
     assert_eq!(
         resolve_type_ref(&db, owner, &named(&db, "Shared")),
-        decl_type(&db, class(&db, file, "Shared"))
+        module_type(imported)
     );
     let path = TypeRef::Named {
         path: vec![Name::new(&db, "Shared"), Name::new(&db, "Export")],

@@ -56,13 +56,23 @@ pub fn resolve_type_name(ctx: &AnalysisContext, parts: &[&str], node: NodeRef) -
             .nth(parameter.index as usize)
             .map(|id| declaration.with_value(id));
     }
-    crate::type_resolution::lookup_type(
+    let decl = crate::type_resolution::lookup_type(
         ctx.db,
         crate::module_id(ctx.db, node.file, ctx.root),
         &path,
         true,
-    )
-    .and_then(|decl| crate::item_node(ctx.db, decl))
+    )?;
+    let declaration = crate::item_node(ctx.db, decl)?;
+    if matches!(decl.item, crate::items::ItemId::Import(_)) {
+        // An imported module's type navigates into that module; an unresolved
+        // import stays at its declaration, which already reports the failure.
+        return Some(
+            ctx.import(declaration)
+                .and_then(|resolution| resolution.single())
+                .unwrap_or(declaration),
+        );
+    }
+    Some(declaration)
 }
 
 pub fn module_type(module_node: NodeRef, ctx: &AnalysisContext) -> Type {

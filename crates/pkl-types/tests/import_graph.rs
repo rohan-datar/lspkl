@@ -215,3 +215,50 @@ fn unresolved_import_remains_unknown_not_an_empty_glob() {
         Type::Unknown
     );
 }
+
+#[test]
+fn own_non_glob_imports_name_module_types() {
+    let base = harness::load_test_base();
+    base.add(2, "value: Int = 1\n");
+    base.add(3, "import \"2.pkl\" as Inherited\nopen class Unused\n");
+    base.add(
+        1,
+        "extends \"3.pkl\"\nimport \"2.pkl\" as Library\nimport* \"*.pkl\" as all\n\
+         typed: Library?\nglobbed: all?\ninherited: Inherited?\n",
+    );
+    let db = base.db.borrow();
+    let file = pkl_db::Db::file(&*db, &harness::uri(1)).unwrap();
+    let ctx = AnalysisContext::for_root(&*db, file);
+    let at = NodeRef::new(file, pkl_syntax::ast::NodeId::ROOT);
+    let library = harness::file(&ctx, 2);
+
+    let target = resolve_type_name(&ctx, &["Library"], at).unwrap();
+    assert_eq!(target.file, library, "type names navigate into the module");
+    let property = |name: &str| {
+        let items = pkl_types::module_items(ctx.db, file);
+        let (index, _) = items
+            .properties
+            .iter()
+            .find(|(_, property)| property.declaration.name.text(ctx.db) == name)
+            .unwrap();
+        pkl_types::decl_type(
+            ctx.db,
+            pkl_types::DeclId {
+                file,
+                root: file,
+                item: pkl_types::ItemId::Property(index),
+            },
+        )
+    };
+    assert_eq!(
+        property("typed"),
+        Type::Module {
+            module_id: pkl_types::module_id(ctx.db, library, file),
+        }
+        .nullable(ctx.db)
+    );
+    // Glob imports are mappings, not types; imports are not inherited.
+    assert!(resolve_type_name(&ctx, &["all"], at).is_none());
+    assert!(resolve_type_name(&ctx, &["Inherited"], at).is_none());
+    assert_eq!(property("globbed"), Type::Unknown.nullable(ctx.db));
+}

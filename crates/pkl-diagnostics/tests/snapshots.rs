@@ -238,3 +238,25 @@ fn let_binding_is_unresolved_in_its_initializer_but_visible_in_its_body() {
         ),
     );
 }
+
+#[test]
+fn imported_modules_are_types_but_glob_imports_are_not() {
+    let base = harness::load_test_base();
+    base.add_path("k8s/api/v1/Probe.pkl", "port: Int = 80\n");
+    base.add_path("k8s/api/v1/Port.pkl", "number: Int = 80\n");
+    // The pkl-k8s layout: modules import siblings with upward `.../` searches.
+    let source = "import \".../api/v1/Probe.pkl\" as ProbeModule\n\
+                  import \".../api/v1/Port.pkl\"\n\
+                  import* \"*.pkl\" as all\n\
+                  probe: ProbeModule?\nports: Listing<Port>\nglobbed: all?\n";
+    let file = base.add_path("k8s/api/v1/PodSpec.pkl", source);
+    let db = base.db.borrow();
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, file);
+    let diagnostics = DiagnosticsEngine::with_default_analyzers().analyze(&ctx, file);
+    let unresolved: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.starts_with("unresolved reference"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect();
+    assert_eq!(unresolved, ["unresolved reference: all"], "{diagnostics:?}");
+}

@@ -112,6 +112,24 @@ pub(crate) fn lookup_type(
             break;
         }
         let items = module_items(db, m.file(db));
+        // A non-glob import names its module's type (`import "x.pkl" as X; p: X`).
+        // Imports are lexical: only the referencing module's own imports apply,
+        // never a parent's or a qualified target's. Like Pkl, they are searched
+        // before the module's own classes and aliases.
+        if tail.is_empty()
+            && lexical
+            && m == module
+            && let Some((index, _)) = items
+                .imports
+                .iter()
+                .find(|(_, import)| import.name == name && !import.glob)
+        {
+            return Some(DeclId {
+                file: m.file(db),
+                root: m.root(db),
+                item: ItemId::Import(index),
+            });
+        }
         if tail.is_empty()
             && let Some(&item) = items.declarations.iter().find(|&&item| {
                 matches!(item, ItemId::Class(_) | ItemId::TypeAlias(_))
