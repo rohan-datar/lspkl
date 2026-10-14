@@ -49,7 +49,7 @@ fn int_extends_number() {
     // Requires Type::is_subtype_of to be implemented.
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         base.int_type().is_subtype_of(base.number_type(), ctx.db),

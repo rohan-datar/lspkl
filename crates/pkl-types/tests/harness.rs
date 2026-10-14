@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#[path = "../../pkl-db/tests/support/mod.rs"]
+pub mod input_support;
 use fluent_uri::Uri;
 use pkl_db::{Db, File, FileStatus, RootDatabase};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
@@ -54,10 +56,12 @@ impl TestBase {
                 text: text.clone(),
             }),
         );
-        self.db
-            .borrow_mut()
+        let mut db = self.db.borrow_mut();
+        let file = db
             .upsert_file(&url, text, None, FileStatus::Present)
-            .unwrap()
+            .unwrap();
+        input_support::preload(&mut db);
+        file
     }
 }
 pub fn uri(name: u32) -> Uri<String> {
@@ -84,7 +88,7 @@ pub fn load_test_base() -> TestBase {
 pub fn with_snippet<R>(base: &TestBase, source: &str, f: impl FnOnce(&AnalysisContext) -> R) -> R {
     base.add(1, source);
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(base, &*db, db.file(&uri(1)).unwrap());
+    let ctx = AnalysisContext::for_root(&*db, db.file(&uri(1)).unwrap());
     f(&ctx)
 }
 pub fn with_ctx<R>(base: &TestBase, f: impl FnOnce(&AnalysisContext) -> R) -> R {

@@ -14,11 +14,7 @@ fn with_graph(f: impl FnOnce(&AnalysisContext)) {
     base.add(2, lib.source());
     base.add(3, parent.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     f(&ctx);
 }
 fn find(
@@ -117,8 +113,7 @@ fn with_consumer_regressions(f: impl FnOnce(&AnalysisContext)) {
     base.add(2, lib.source());
     base.add(3, parent.source());
     let db = base.db.borrow();
-    f(&AnalysisContext::new(
-        &base,
+    f(&AnalysisContext::for_root(
         &*db,
         pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
     ));
@@ -252,11 +247,7 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
     base.add(2, first.source());
     base.add(3, second.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let targets = vec![
         NodeRef::new(harness::file(&ctx, 2), first.root()),
         NodeRef::new(harness::file(&ctx, 3), second.root()),
@@ -321,11 +312,7 @@ fn editor_requests_select_the_qualified_file_and_do_not_fall_back() {
     base.add(6, integer.source());
     let file = base.add(7, string.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let offset = pkl_types::InFile::new(file, harness::offset(&string, 1, 4));
     let hover = lsp_features::hover::hover(ctx.db, ctx.root, offset).unwrap();
     let HoverContents::Markup(markdown) = hover.contents else {

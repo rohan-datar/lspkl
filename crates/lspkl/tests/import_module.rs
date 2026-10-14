@@ -1,5 +1,7 @@
 //! Imported-module parsing and owned tree observations across editor updates.
 
+mod support;
+
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -20,7 +22,7 @@ fn importing_source(state: &mut Workspace, dir: &Path) -> (File, Arc<SyntaxTree>
         "import \"./library.pkl\"\n".into(),
         Some(1),
     );
-    let tree = parse(&state.db, file).as_ref().unwrap().clone();
+    let tree = parse(state.database(), file).as_ref().unwrap().clone();
     let import = tree
         .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
         .unwrap();
@@ -42,12 +44,13 @@ fn resolves_and_parses_the_target_not_the_importing_tree() {
     let mut state = Workspace::new();
     let (source, _tree, import) = importing_source(&mut state, temp.path());
 
-    let ImportResolution::Single(target) = resolve_import(&state.db, source, import, None) else {
+    let ImportResolution::Single(target) = resolve_import(state.database(), source, import, None)
+    else {
         panic!("target must resolve")
     };
-    let target_tree = parse(&state.db, target).as_ref().unwrap();
+    let target_tree = parse(state.database(), target).as_ref().unwrap();
 
-    assert_eq!(*target.uri(&state.db), file_uri(&target_path));
+    assert_eq!(*target.uri(state.database()), file_uri(&target_path));
     assert_eq!(property_name(target_tree), "answer");
     assert_eq!(target_tree.source(), "answer = 42\n");
 }
@@ -65,22 +68,27 @@ fn editor_changes_refresh_imported_tree_without_mutating_owned_observations() {
         Some(1),
     );
     let (source, _tree, import) = importing_source(&mut state, temp.path());
-    let ImportResolution::Single(before_file) = resolve_import(&state.db, source, import, None)
+    let ImportResolution::Single(before_file) =
+        resolve_import(state.database(), source, import, None)
     else {
         panic!("target must resolve")
     };
-    let before = parse(&state.db, before_file).as_ref().unwrap().clone();
+    let before = parse(state.database(), before_file)
+        .as_ref()
+        .unwrap()
+        .clone();
     assert_eq!(before_file, opened);
     assert_eq!(property_name(&before), "oldValue");
 
     change(&mut state, &file_uri(&target_path), "newValue = 2\n", 2);
-    let ImportResolution::Single(after_file) = resolve_import(&state.db, source, import, None)
+    let ImportResolution::Single(after_file) =
+        resolve_import(state.database(), source, import, None)
     else {
         panic!("target must resolve")
     };
-    let after = parse(&state.db, after_file).as_ref().unwrap();
+    let after = parse(state.database(), after_file).as_ref().unwrap();
 
-    assert_eq!(after_file.version(&state.db), Some(2));
+    assert_eq!(after_file.version(state.database()), Some(2));
     assert_eq!(property_name(after), "newValue");
     assert_eq!(after.source(), "newValue = 2\n");
     assert_eq!(property_name(&before), "oldValue");
@@ -93,9 +101,9 @@ fn missing_target_is_unresolved_rather_than_a_parse_error() {
     let mut state = Workspace::new();
     let (source, _tree, import) = importing_source(&mut state, temp.path());
 
-    assert!(parse(&state.db, source).is_ok());
+    assert!(parse(state.database(), source).is_ok());
     assert!(matches!(
-        resolve_import(&state.db, source, import, None),
+        resolve_import(state.database(), source, import, None),
         ImportResolution::Unresolved {
             package_to_download: None
         }
@@ -118,6 +126,7 @@ fn open(
             },
         })
         .unwrap();
+    support::preload(state);
     state.document(url.as_str()).unwrap()
 }
 
@@ -135,4 +144,5 @@ fn change(state: &mut Workspace, url: &Uri<String>, text: &str, version: i32) {
             }],
         })
         .unwrap();
+    support::preload(state);
 }

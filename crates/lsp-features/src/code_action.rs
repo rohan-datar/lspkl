@@ -22,8 +22,8 @@ pub fn code_action(
     let mut actions = Vec::new();
 
     for echoed in &params.context.diagnostics {
-        // Match on (range, message) — the two fields the client echoes
-        // verbatim from our publish (see doc above for why there is no id).
+        // Match on (range, message): LSP diagnostics carry no stable id, and the
+        // client echoes both verbatim from `diagnostics::to_lsp`.
         let Some(matched) = diagnostics
             .iter()
             .find(|d| d.message == echoed.message && range_for(d.span) == echoed.range)

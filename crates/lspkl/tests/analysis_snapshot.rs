@@ -1,5 +1,7 @@
 //! Database-backed import graphs and completed request observations.
 use fluent_uri::Uri;
+mod support;
+
 use lspkl::Workspace;
 use pkl_db::{Db, File, FileStatus, ImportResolution, parse, resolve_import};
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
@@ -30,11 +32,11 @@ fn property_name(tree: &SyntaxTree) -> &str {
     tree.name(property).unwrap()
 }
 fn single(state: &Workspace, file: File) -> File {
-    let tree = parse(&state.db, file).as_ref().unwrap();
+    let tree = parse(state.database(), file).as_ref().unwrap();
     let node = tree
         .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
         .unwrap();
-    match resolve_import(&state.db, file, node, None) {
+    match resolve_import(state.database(), file, node, None) {
         ImportResolution::Single(target) => target,
         other => panic!("expected single import: {other:?}"),
     }
@@ -56,15 +58,15 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
     for warm in [false, true] {
         let mut state = Workspace::new();
         let url = Uri::parse("pkl:base".to_owned()).unwrap();
-        let builtin = state.db.file(&url).unwrap();
-        let original = parse(&state.db, builtin).as_ref().unwrap().clone();
+        let builtin = state.database().file(&url).unwrap();
+        let original = parse(state.database(), builtin).as_ref().unwrap().clone();
         if warm {
             let view = state.snapshot();
             assert_eq!(pkl_types::base_module(&view.db).file_id(), builtin);
         }
         let file = open(&mut state, url.clone(), "edited = 1\n".into(), Some(1));
         assert_eq!(file, builtin);
-        assert_eq!(file.version(&state.db), Some(1));
+        assert_eq!(file.version(state.database()), Some(1));
         {
             let view = state.snapshot();
             let ctx = pkl_types::AnalysisContext::for_root(&view.db, file);
@@ -73,10 +75,10 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
             assert_eq!(ctx.tree(file).unwrap().source(), original.source());
         }
         change(&mut state, &url, "edited = 2\n", 2);
-        assert_eq!(file.version(&state.db), Some(2));
+        assert_eq!(file.version(state.database()), Some(2));
         assert!(Arc::ptr_eq(
             &original,
-            parse(&state.db, file).as_ref().unwrap()
+            parse(state.database(), file).as_ref().unwrap()
         ));
         let temp = tempfile::tempdir().unwrap();
         let root = prepare(
@@ -104,9 +106,9 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
             assert_eq!(ctx.tree(builtin).unwrap().source(), original.source());
         }
         close(&mut state, &url);
-        assert_eq!(file.status(&state.db), FileStatus::Present);
-        assert_eq!(file.version(&state.db), None);
-        assert_eq!(state.db.file(&url).unwrap(), builtin);
+        assert_eq!(file.status(state.database()), FileStatus::Present);
+        assert_eq!(file.version(state.database()), None);
+        assert_eq!(state.database().file(&url).unwrap(), builtin);
         let view = state.snapshot();
         let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
         assert_eq!(ctx.base.string_type().render(ctx.db), "String");
@@ -410,9 +412,9 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     close(&mut state, &target_uri);
     assert!(matches!(
         resolve_import(
-            &state.db,
+            state.database(),
             root,
-            owners(parse(&state.db, root).as_ref().unwrap())[0],
+            owners(parse(state.database(), root).as_ref().unwrap())[0],
             None
         ),
         ImportResolution::Unresolved { .. }
@@ -458,7 +460,7 @@ fn closing_a_saved_import_reloads_disk_instead_of_a_pre_open_source() {
         "import \"./library.pkl\"\nroot = 1\n",
     );
     let target = single(&state, root);
-    let before = parse(&state.db, target).as_ref().unwrap().clone();
+    let before = parse(state.database(), target).as_ref().unwrap().clone();
     assert_eq!(property_name(&before), "diskBefore");
     assert_eq!(
         open(
@@ -475,20 +477,12 @@ fn closing_a_saved_import_reloads_disk_instead_of_a_pre_open_source() {
         parse(&view.db, target).as_ref().unwrap().clone()
     };
     fs::write(&path, "savedAfter = 2\n").unwrap();
-    state
-        .apply_save(lsp_types::DidSaveTextDocumentParams {
-            text_document: lsp_types::TextDocumentIdentifier {
-                uri: target_uri.as_str().parse().unwrap(),
-            },
-            text: None,
-        })
-        .unwrap();
     close(&mut state, &target_uri);
     assert_eq!(single(&state, root), target);
-    assert_eq!(target.status(&state.db), FileStatus::Present);
-    assert_eq!(target.version(&state.db), None);
+    assert_eq!(target.status(state.database()), FileStatus::Present);
+    assert_eq!(target.version(state.database()), None);
     assert_eq!(
-        property_name(parse(&state.db, target).as_ref().unwrap()),
+        property_name(parse(state.database(), target).as_ref().unwrap()),
         "savedAfter"
     );
     assert_eq!(property_name(&editor), "savedAfter");
@@ -511,6 +505,7 @@ fn open(
             },
         })
         .unwrap();
+    support::preload(state);
     state.document(url.as_str()).unwrap()
 }
 
@@ -528,6 +523,7 @@ fn change(state: &mut Workspace, url: &Uri<String>, text: &str, version: i32) {
             }],
         })
         .unwrap();
+    support::preload(state);
 }
 
 fn canonical_uri(text: &str) -> Uri<String> {
@@ -539,16 +535,19 @@ fn distinct_uris_with_the_same_basename_have_distinct_non_base_files() {
     let state = Workspace::new();
     let first_uri = canonical_uri("file:///workspace/first/library.pkl");
     let second_uri = canonical_uri("file:///workspace/second/library.pkl");
-    let first = state.db.file(&first_uri).unwrap();
-    let second = state.db.file(&second_uri).unwrap();
-    let base = state.db.file(&canonical_uri("pkl:base")).unwrap();
+    let first = state.database().file(&first_uri).unwrap();
+    let second = state.database().file(&second_uri).unwrap();
+    let base = state.database().file(&canonical_uri("pkl:base")).unwrap();
     assert_ne!(first, base);
     assert_ne!(second, base);
     assert_ne!(first, second);
-    assert_eq!(first.uri(&state.db), &first_uri);
-    assert_eq!(second.uri(&state.db), &second_uri);
+    assert_eq!(first.uri(state.database()), &first_uri);
+    assert_eq!(second.uri(state.database()), &second_uri);
     assert_eq!(
-        state.db.file(&canonical_uri(first_uri.as_str())).unwrap(),
+        state
+            .database()
+            .file(&canonical_uri(first_uri.as_str()))
+            .unwrap(),
         first
     );
 }
@@ -561,10 +560,10 @@ fn editor_changes_do_not_change_the_file_identity() {
     change(&mut state, &url, "newValue = 2\n", 2);
     let after = state.document(url.as_str()).unwrap();
     assert_eq!(after, before);
-    assert_eq!(after.uri(&state.db), &url);
-    assert_eq!(after.version(&state.db), Some(2));
+    assert_eq!(after.uri(state.database()), &url);
+    assert_eq!(after.version(state.database()), Some(2));
     assert_eq!(
-        parse(&state.db, after).as_ref().unwrap().source(),
+        parse(state.database(), after).as_ref().unwrap().source(),
         "newValue = 2\n"
     );
 }
@@ -583,26 +582,26 @@ fn closing_and_reopening_preserves_identity_without_reusing_it_for_another_canon
         })
         .unwrap();
     assert!(state.document(url.as_str()).is_none());
-    assert_eq!(original.version(&state.db), None);
-    assert_eq!(original.status(&state.db), FileStatus::Missing);
+    assert_eq!(original.version(state.database()), None);
+    assert_eq!(original.status(state.database()), FileStatus::Missing);
     state.apply_reload(work.load());
-    assert_eq!(original.uri(&state.db), &url);
-    let other = state.db.file(&other_url).unwrap();
+    assert_eq!(original.uri(state.database()), &url);
+    let other = state.database().file(&other_url).unwrap();
     assert_ne!(other, original);
-    assert_eq!(other.uri(&state.db), &other_url);
+    assert_eq!(other.uri(state.database()), &other_url);
     let reopened = open(&mut state, url.clone(), "value = 2\n".into(), Some(2));
     assert_eq!(reopened, original);
-    assert_eq!(reopened.text(&state.db).as_ref(), "value = 2\n");
+    assert_eq!(reopened.text(state.database()).as_ref(), "value = 2\n");
 }
 
 #[test]
 fn base_is_addressable_like_every_other_file() {
     let state = Workspace::new();
     let base_uri = canonical_uri("pkl:base");
-    let base = state.db.file(&base_uri).unwrap();
-    assert_eq!(base.uri(&state.db), &base_uri);
-    assert_eq!(base.status(&state.db), FileStatus::Present);
-    assert!(parse(&state.db, base).is_ok());
+    let base = state.database().file(&base_uri).unwrap();
+    assert_eq!(base.uri(state.database()), &base_uri);
+    assert_eq!(base.status(state.database()), FileStatus::Present);
+    assert!(parse(state.database(), base).is_ok());
     let view = state.snapshot();
     assert_eq!(
         pkl_types::AnalysisContext::for_root(&view.db, base)
@@ -612,7 +611,7 @@ fn base_is_addressable_like_every_other_file() {
     );
     assert_ne!(
         state
-            .db
+            .database()
             .file(&canonical_uri("file:///workspace/main.pkl"))
             .unwrap(),
         base

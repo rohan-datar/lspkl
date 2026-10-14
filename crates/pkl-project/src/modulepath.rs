@@ -12,6 +12,7 @@ pub struct ModulepathResolver<'a> {
     loader: &'a dyn SourceLoader,
     configured: &'a [PathBuf],
     cache_dir: &'a Path,
+    pub(crate) facts: &'a dyn crate::routing::RoutingFacts,
 }
 
 impl<'a> ModulepathResolver<'a> {
@@ -26,6 +27,7 @@ impl<'a> ModulepathResolver<'a> {
         Self {
             loader,
             configured,
+            facts: &crate::routing::DiskRoutingFacts,
             cache_dir,
         }
     }
@@ -39,19 +41,16 @@ impl<'a> ModulepathResolver<'a> {
         {
             paths.extend(roots.iter().map(|root| normalize_path(&dir.join(root))));
         }
-        paths.extend(self.configured.iter().map(|root| {
-            normalize_path(&if root.is_absolute() {
-                root.clone()
-            } else {
-                std::env::current_dir().unwrap_or_default().join(root)
-            })
-        }));
+        paths.extend(self.configured.iter().map(|root| normalize_path(root)));
         paths
     }
     pub fn roots(&self, context: Option<&PklProject>) -> Vec<Uri<String>> {
         self.module_paths(context)
             .iter()
-            .filter_map(|path| root_uri(path))
+            .filter_map(|path| {
+                self.facts
+                    .root(crate::routing::RoutingRequest::ModuleRoot(path.clone()))
+            })
             .collect()
     }
     pub fn relative_path(&self, file: &Source, context: Option<&PklProject>) -> Option<String> {
@@ -93,11 +92,6 @@ impl<'a> ModulepathResolver<'a> {
             ),
             context,
         )
-    }
-    pub fn is_on_module_path(&self, file: &Path, context: Option<&PklProject>) -> bool {
-        self.module_paths(context)
-            .iter()
-            .any(|root| root.is_dir() && file.starts_with(root))
     }
     /// Merge by logical path, retaining the first root's file for shadowed entries.
     pub fn files(&self, context: Option<&PklProject>) -> BTreeMap<String, Uri<String>> {

@@ -197,9 +197,6 @@ impl ProjectManager {
             }
         }
         self.projects = synced;
-        for workspace in &self.workspace_folders {
-            self.persist_state(&workspace.join(".lspkl/projects.json"))?;
-        }
         Ok(())
     }
 
@@ -241,12 +238,6 @@ impl ProjectManager {
     /// All discovered projects.
     pub fn projects(&self) -> impl Iterator<Item = &PklProject> {
         self.projects.values().map(Arc::as_ref)
-    }
-
-    /// Pin project context before releasing the manager lock for file I/O.
-    pub fn get_pkl_project_shared(&self, file: &Path) -> Option<Arc<PklProject>> {
-        file.ancestors()
-            .find_map(|parent| self.projects.get(&parent.join("PklProject")).cloned())
     }
 
     /// Persist current state to `state_file` so restarts skip re-resolution.

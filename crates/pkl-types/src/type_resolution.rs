@@ -37,7 +37,17 @@ fn resolve_request(db: &dyn Db, request: ResolutionRequest) -> Type {
         bindings,
     )
 }
-pub fn resolve_type_ref(db: &dyn Db, owner: DeclId, ty: &TypeRef, bindings: &TypeBindings) -> Type {
+/// Resolve a lowered type reference without caller-owned substitutions.
+pub fn resolve_type_ref(db: &dyn Db, owner: DeclId, ty: &TypeRef) -> Type {
+    resolve_type_ref_with_bindings(db, owner, ty, &TypeBindings::new())
+}
+
+pub(crate) fn resolve_type_ref_with_bindings(
+    db: &dyn Db,
+    owner: DeclId,
+    ty: &TypeRef,
+    bindings: &TypeBindings,
+) -> Type {
     resolve_in_file(db, owner.file, owner.root, Some(owner), ty, bindings)
 }
 pub(crate) fn resolve_in_file(
@@ -252,7 +262,7 @@ fn alias_template(db: &dyn Db, request: AliasTemplateRequest) -> Type {
             )
         })
         .collect();
-    resolve_type_ref(db, alias, &declaration.ty, &bindings).unaliased(db)
+    resolve_type_ref_with_bindings(db, alias, &declaration.ty, &bindings).unaliased(db)
 }
 fn substitute(db: &dyn Db, ty: Type, bindings: &TypeBindings) -> Type {
     match ty {

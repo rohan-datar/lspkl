@@ -487,11 +487,8 @@ fn source_shift_refreshes_scope_targets_without_cross_file_confusion() {
     ] {
         base.add(1, source);
         let db = base.db.borrow();
-        let ctx = AnalysisContext::new(
-            &base,
-            &*db,
-            pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-        );
+        let ctx =
+            AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
         let scope = access_scope(&ctx, "value", 0);
         assert_target(
             &scope,

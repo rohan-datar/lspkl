@@ -1,3 +1,5 @@
+mod support;
+
 use std::{fs, path::Path};
 
 use fluent_uri::Uri;
@@ -24,6 +26,7 @@ fn open(state: &mut Workspace, path: &Path, text: &str) -> File {
             },
         })
         .unwrap();
+    support::preload(state);
     state.document(url.as_str()).unwrap()
 }
 
@@ -68,16 +71,15 @@ fn fixture(root: &Path) -> Workspace {
         }]),
         ..Default::default()
     });
+    let mut manager = state.project_manager();
+    manager.load_state(&state_file).unwrap();
+    state.apply_project_manager(manager);
     state
-        .snapshot()
-        .project_manager
-        .lock()
-        .load_state(&state_file)
+        .database()
+        .file(&uri(&root.join("PklProject")))
         .unwrap();
-    state.refresh_projects();
-    state.db.file(&uri(&root.join("PklProject"))).unwrap();
     state
-        .db
+        .database()
         .file(&uri(&root.join("PklProject.deps.json")))
         .unwrap();
     state
@@ -89,14 +91,15 @@ fn assert_route(state: &mut Workspace, root: &Path, reference: &str, target: &st
         &root.join("main.pkl"),
         &format!("import \"{reference}\"\n"),
     );
-    let tree = parse(&state.db, source).as_ref().unwrap().clone();
+    let tree = parse(state.database(), source).as_ref().unwrap().clone();
     let import = tree
         .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
         .unwrap();
-    let ImportResolution::Single(file) = resolve_import(&state.db, source, import, None) else {
+    let ImportResolution::Single(file) = resolve_import(state.database(), source, import, None)
+    else {
         panic!("project import {reference} must resolve");
     };
-    assert_eq!(file.uri(&state.db), &uri(&root.join(target)));
+    assert_eq!(file.uri(state.database()), &uri(&root.join(target)));
 }
 
 fn assert_original_routes(state: &mut Workspace, root: &Path) {
@@ -163,21 +166,19 @@ fn watched_project_edit_invalidates_metadata() {
     watched(&mut state, &root.join("PklProject"));
     assert!(
         state
-            .snapshot()
-            .project_manager
-            .lock()
+            .project_manager()
             .get_pkl_project(&root.join("main.pkl"))
             .is_none()
     );
     let source = state
         .document(uri(&root.join("main.pkl")).as_str())
         .unwrap();
-    let tree = parse(&state.db, source).as_ref().unwrap().clone();
+    let tree = parse(state.database(), source).as_ref().unwrap().clone();
     let import = tree
         .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
         .unwrap();
     assert!(matches!(
-        resolve_import(&state.db, source, import, None),
+        resolve_import(state.database(), source, import, None),
         ImportResolution::Unresolved { .. }
     ));
 }
@@ -302,7 +303,7 @@ fn later_notifications_preserve_watched_project_intent() {
             if matches!(notification, "open" | "change") {
                 let file = state.document(uri(&path).as_str()).unwrap();
                 assert_eq!(
-                    file.text(&state.db).as_ref(),
+                    file.text(state.database()).as_ref(),
                     "editorOnly = 42",
                     "watched metadata must not replace editor text"
                 );
@@ -313,13 +314,13 @@ fn later_notifications_preserve_watched_project_intent() {
                     &root.join("main.pkl"),
                     "import \"modulepath:/library.pkl\"",
                 );
-                let tree = parse(&state.db, file).as_ref().unwrap();
+                let tree = parse(state.database(), file).as_ref().unwrap();
                 let owner = tree
                     .child(tree.root(), |kind| matches!(kind, NodeKind::Import))
                     .unwrap();
                 assert!(
                     matches!(
-                        resolve_import(&state.db, file, owner, None),
+                        resolve_import(state.database(), file, owner, None),
                         ImportResolution::Unresolved { .. }
                     ),
                     "watched project invalidation must survive a superseding ordinary reload"

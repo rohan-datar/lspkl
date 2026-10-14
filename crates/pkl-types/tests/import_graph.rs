@@ -15,11 +15,7 @@ fn graph(f: impl FnOnce(&AnalysisContext)) {
     base.add(2, b.source());
     base.add(3, lib.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     f(&ctx);
 }
 #[test]
@@ -150,11 +146,7 @@ fn import_expressions_and_super_use_pinned_edges() {
     base.add(1, tree.source());
     base.add(2, target.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     for name in ["x", "y", "z"] {
         assert_eq!(
             resolve_unqualified_access(
@@ -215,11 +207,7 @@ fn unresolved_import_remains_unknown_not_an_empty_glob() {
     let node = harness::find_first(&tree, |kind| matches!(kind, NodeKind::Import));
     base.add(1, tree.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let reference = NodeRef::new(harness::file(&ctx, 1), node);
     assert!(ctx.import(reference).unwrap().single().is_none());
     assert_eq!(

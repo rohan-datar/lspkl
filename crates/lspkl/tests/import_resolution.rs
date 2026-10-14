@@ -1,5 +1,7 @@
 //! AST-to-file import resolution using real syntax trees and temporary workspaces.
 
+mod support;
+
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +17,7 @@ fn file_uri(path: &Path) -> Uri<String> {
 
 fn source(state: &mut Workspace, path: &Path, text: &str) -> (File, Arc<SyntaxTree>) {
     let file = open(state, file_uri(path), text.into(), Some(1));
-    let tree = parse(&state.db, file).as_ref().unwrap().clone();
+    let tree = parse(state.database(), file).as_ref().unwrap().clone();
     (file, tree)
 }
 
@@ -55,12 +57,9 @@ fn load_projects(state: &mut Workspace, workspace: &Path, projects: &[(&str, &[&
         }]),
         ..Default::default()
     });
-    let view = state.snapshot();
-    let mut manager = view.project_manager.lock();
+    let mut manager = state.project_manager();
     manager.load_state(&state_file).unwrap();
-    drop(manager);
-    drop(view);
-    state.refresh_projects();
+    state.apply_project_manager(manager);
 }
 
 #[test]
@@ -76,13 +75,16 @@ fn relative_import_uses_ast_literal_and_source_directory_without_a_project() {
         "// import \"./not-the-target.pkl\"\nimport \"./library.pkl\"\n",
     );
 
-    let target = match resolve_import(&state.db, source, import_node(&tree), None) {
+    let target = match resolve_import(state.database(), source, import_node(&tree), None) {
         ImportResolution::Single(file) => file,
         other => panic!("expected single import: {other:?}"),
     };
 
-    assert_eq!(*target.uri(&state.db), file_uri(&dir.join("library.pkl")));
-    assert_eq!(target.text(&state.db).as_ref(), "answer = 42\n");
+    assert_eq!(
+        *target.uri(state.database()),
+        file_uri(&dir.join("library.pkl"))
+    );
+    assert_eq!(target.text(state.database()).as_ref(), "answer = 42\n");
 }
 
 #[test]
@@ -121,25 +123,33 @@ fn modulepath_import_selects_the_nearest_project_for_each_source() {
         "import \"modulepath:/library.pkl\"\n",
     );
 
-    let outer_target = match resolve_import(&state.db, outer, import_node(&outer_tree), None) {
+    let outer_target = match resolve_import(state.database(), outer, import_node(&outer_tree), None)
+    {
         ImportResolution::Single(file) => file,
         other => panic!("expected single import: {other:?}"),
     };
-    let inner_target = match resolve_import(&state.db, inner, import_node(&inner_tree), None) {
+    let inner_target = match resolve_import(state.database(), inner, import_node(&inner_tree), None)
+    {
         ImportResolution::Single(file) => file,
         other => panic!("expected single import: {other:?}"),
     };
 
     assert_eq!(
-        *outer_target.uri(&state.db),
+        *outer_target.uri(state.database()),
         file_uri(&workspace.join("outer-lib/library.pkl"))
     );
     assert_eq!(
-        *inner_target.uri(&state.db),
+        *inner_target.uri(state.database()),
         file_uri(&workspace.join("app/inner-lib/library.pkl"))
     );
-    assert_eq!(outer_target.text(&state.db).as_ref(), "owner = \"outer\"\n");
-    assert_eq!(inner_target.text(&state.db).as_ref(), "owner = \"inner\"\n");
+    assert_eq!(
+        outer_target.text(state.database()).as_ref(),
+        "owner = \"outer\"\n"
+    );
+    assert_eq!(
+        inner_target.text(state.database()).as_ref(),
+        "owner = \"inner\"\n"
+    );
 }
 
 #[test]
@@ -160,14 +170,14 @@ fn imported_file_reuses_unsaved_editor_contents() {
         "import \"./library.pkl\"\n",
     );
 
-    let target = match resolve_import(&state.db, source, import_node(&tree), None) {
+    let target = match resolve_import(state.database(), source, import_node(&tree), None) {
         ImportResolution::Single(file) => file,
         other => panic!("expected single import: {other:?}"),
     };
 
     assert_eq!(target, opened);
-    assert_eq!(target.text(&state.db).as_ref(), "answer = 42\n");
-    assert_eq!(target.version(&state.db), Some(2));
+    assert_eq!(target.text(state.database()).as_ref(), "answer = 42\n");
+    assert_eq!(target.version(state.database()), Some(2));
 }
 
 #[test]
@@ -186,7 +196,7 @@ fn missing_or_unsupported_import_targets_return_none() {
         );
         assert!(
             matches!(
-                resolve_import(&state.db, source, import_node(&tree), None),
+                resolve_import(state.database(), source, import_node(&tree), None),
                 ImportResolution::Unresolved { .. }
             ),
             "unsupported or unresolved import: {uri}"
@@ -212,10 +222,10 @@ fn glob_imports_resolve_and_non_import_nodes_are_unresolved() {
         .unwrap();
 
     assert!(
-        matches!(resolve_import(&state.db, source, glob, None), ImportResolution::Glob(targets) if targets.len() == 1)
+        matches!(resolve_import(state.database(), source, glob, None), ImportResolution::Glob(targets) if targets.len() == 1)
     );
     assert!(matches!(
-        resolve_import(&state.db, source, property, None),
+        resolve_import(state.database(), source, property, None),
         ImportResolution::Unresolved { .. }
     ));
 }
@@ -236,6 +246,7 @@ fn open(
             },
         })
         .unwrap();
+    support::preload(state);
     state.document(url.as_str()).unwrap()
 }
 
@@ -280,7 +291,8 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
         modulepath: vec![archive],
         ..Default::default()
     });
-    let shared = state.db.file(&remote).unwrap();
+    let shared = state.database().file(&remote).unwrap();
+    support::preload(&mut state);
     // A contextless warmup must not freeze the remote's project routing.
     {
         let view = state.snapshot();

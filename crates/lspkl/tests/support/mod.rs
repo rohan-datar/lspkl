@@ -17,6 +17,47 @@ use tokio::time::{Instant, timeout, timeout_at};
 
 const WAIT: Duration = Duration::from_secs(15);
 const STDERR_LIMIT: usize = 64 * 1024;
+/// Prepare synchronous semantic fixtures without fetching synthetic network URLs.
+pub fn preload(workspace: &mut lspkl::Workspace) {
+    let loader = workspace.database().source_loader_handle();
+    let https = pkl_vfs::StandardSourceLoader::new();
+    let roots = workspace.database().directory_roots();
+    for root in roots {
+        workspace
+            .apply_io(pkl_db::IoUpdate::Directory(pkl_db::DirectoryUpdate::load(
+                &*loader, &root,
+            )))
+            .expect("fixture directory input should apply");
+    }
+    loop {
+        for file in workspace.database().all_files() {
+            let _ = pkl_db::import_graph(workspace.database(), file);
+        }
+        let jobs = workspace.database().pending_io();
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            let update = match job {
+                pkl_db::PendingIo::Source { uri, cache_dir }
+                    if uri.scheme().as_str() == "https" =>
+                {
+                    pkl_db::IoUpdate::Source {
+                        text: loader
+                            .load(&uri, &cache_dir)
+                            .ok()
+                            .map(|source| source.text.clone()),
+                        uri,
+                    }
+                }
+                job => job.load(&*loader, &https),
+            };
+            workspace
+                .apply_io(update)
+                .expect("fixture input should apply");
+        }
+    }
+}
 
 /// A real stdio peer. Spawning deliberately does not initialize the server.
 /// The background reader answers configuration requests even while the caller
@@ -97,12 +138,31 @@ impl LspClient {
         workspace: &Path,
         stderr_limit: usize,
     ) -> Self {
+        Self::spawn_mode(binary, workspace, stderr_limit, true, &[]).await
+    }
+
+    pub async fn spawn_manual_configuration(binary: &Path, workspace: &Path) -> Self {
+        Self::spawn_mode(binary, workspace, STDERR_LIMIT, false, &[]).await
+    }
+
+    pub async fn spawn_with_env(binary: &Path, workspace: &Path, env: &[(&str, &Path)]) -> Self {
+        Self::spawn_mode(binary, workspace, STDERR_LIMIT, true, env).await
+    }
+
+    async fn spawn_mode(
+        binary: &Path,
+        workspace: &Path,
+        stderr_limit: usize,
+        auto_configuration: bool,
+        env: &[(&str, &Path)],
+    ) -> Self {
         let mut child = Command::new(binary)
             .current_dir(workspace)
             // Never discover a locally installed Pkl or the user's package cache.
             .env("PATH", "")
             .env("HOME", workspace)
             .env("USERPROFILE", workspace)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -128,6 +188,8 @@ impl LspClient {
         });
         let (tx, incoming) = mpsc::unbounded_channel();
         let output = Arc::clone(&stdin);
+        // Like editors without `pkl.*` user settings, answer every requested
+        // section with null; the server must keep its explicit settings.
         let reader = tokio::spawn(async move {
             loop {
                 let result = async {
@@ -165,16 +227,20 @@ impl LspClient {
                 .await;
                 match result {
                     Ok(message)
+                        if !auto_configuration
+                            && message["method"] == "workspace/configuration" =>
+                    {
+                        let _ = tx.send(Ok(ObservedMessage {
+                            message,
+                            received_at: Instant::now(),
+                        }));
+                    }
+                    Ok(message)
                         if message.get("method").is_some() && message.get("id").is_some() =>
                     {
                         let response = if message["method"] == "workspace/configuration" {
-                            let values: Vec<_> = message["params"]["items"]
-                                .as_array()
-                                .unwrap()
-                                .iter()
-                                .map(|_| Value::Null)
-                                .collect();
-                            json!({"jsonrpc":"2.0", "id":message["id"], "result":values})
+                            let items = message["params"]["items"].as_array().unwrap().len();
+                            json!({"jsonrpc":"2.0", "id":message["id"], "result":vec![Value::Null; items]})
                         } else if message["method"] == "client/registerCapability" {
                             json!({"jsonrpc":"2.0", "id":message["id"], "result":null})
                         } else {
@@ -218,6 +284,18 @@ impl LspClient {
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
+    pub async fn respond(&self, id: Value, result: Value) {
+        self.write(json!({"jsonrpc":"2.0","id":id,"result":result}))
+            .await;
+    }
+
+    pub async fn response(&mut self, id: u64) -> Value {
+        self.matching("request response", |v| {
+            v["id"] == id && v.get("method").is_none()
+        })
+        .await
+    }
+
     pub fn stderr(&self) -> String {
         String::from_utf8_lossy(&self.stderr.lock()).into_owned()
     }

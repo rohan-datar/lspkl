@@ -1,15 +1,16 @@
 //! Consumer-visible project/import behavior through the real backend handlers.
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use lsp_types::*;
-use lspkl::PklBackend;
+use lspkl::{Workspace, handlers};
 use pkl_project::dto::{PackageMetadata, PackageUri, RemoteDependency};
 use serde_json::{Value, json};
-use tower_lsp_server::LanguageServer;
 
 fn uri(path: &Path) -> Uri {
     url::Url::from_file_path(path)
@@ -19,25 +20,28 @@ fn uri(path: &Path) -> Uri {
         .unwrap()
 }
 
-async fn initialize(backend: &PklBackend, folders: &[Uri], settings: Value) {
-    backend.initialize(serde_json::from_value(json!({
+fn initialize(backend: &mut Workspace, folders: &[Uri], settings: Value) {
+    initialize_workspace(backend, serde_json::from_value(json!({
         "capabilities": {},
         "workspaceFolders": folders.iter().map(|uri| json!({"uri": uri, "name": "workspace"})).collect::<Vec<_>>(),
         "initializationOptions": {"pkl": settings},
-    })).unwrap()).await.unwrap();
+    })).unwrap()).unwrap();
 }
 
-async fn open(backend: &PklBackend, uri: &Uri, source: &str) {
-    backend
-        .did_open(DidOpenTextDocumentParams {
+fn open(backend: &mut Workspace, uri: &Uri, source: &str) {
+    handlers::lifecycle::did_open(
+        backend,
+        DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: uri.clone(),
                 language_id: "pkl".into(),
                 version: 1,
                 text: source.into(),
             },
-        })
-        .await;
+        },
+    )
+    .unwrap();
+    support::preload(backend);
 }
 
 fn position(source: &str, token: &str) -> Position {
@@ -49,19 +53,21 @@ fn position(source: &str, token: &str) -> Position {
     )
 }
 
-async fn definition(backend: &PklBackend, uri: &Uri, position: Position) -> GotoDefinitionResponse {
-    backend
-        .goto_definition(GotoDefinitionParams {
+fn definition(backend: &mut Workspace, uri: &Uri, position: Position) -> GotoDefinitionResponse {
+    support::preload(backend);
+    handlers::documents::definition(
+        &backend.snapshot(),
+        GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
                 position,
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .expect("definition must resolve")
+        },
+    )
+    .unwrap()
+    .expect("definition must resolve")
 }
 
 fn scalar(response: GotoDefinitionResponse) -> Location {
@@ -71,36 +77,36 @@ fn scalar(response: GotoDefinitionResponse) -> Location {
     location
 }
 
-#[tokio::test]
-async fn imported_member_navigation_and_hover_use_the_unsaved_target_tree() {
+#[test]
+fn imported_member_navigation_and_hover_use_the_unsaved_target_tree() {
     let temp = tempfile::tempdir().unwrap();
     let library = uri(&temp.path().join("library.pkl"));
     fs::write(temp.path().join("library.pkl"), "value: Int = 1\n").unwrap();
     let main = uri(&temp.path().join("main.pkl"));
-    let backend = PklBackend::for_testing();
+    let mut backend = Workspace::new();
     open(
-        &backend,
+        &mut backend,
         &library,
         "// unsaved target\n\nvalue: String = \"edited\"\n",
-    )
-    .await;
+    );
     let source = "import \"./library.pkl\" as library\nanswer = library.value\n";
-    open(&backend, &main, source).await;
+    open(&mut backend, &main, source);
     let cursor = position(source, "value");
-    let location = scalar(definition(&backend, &main, cursor).await);
+    let location = scalar(definition(&mut backend, &main, cursor));
     assert_eq!(location.uri, library);
     assert_eq!(location.range.start, Position::new(2, 0));
-    let hover = backend
-        .hover(HoverParams {
+    let hover = handlers::documents::hover(
+        &backend.snapshot(),
+        HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: main },
                 position: cursor,
             },
             work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        },
+    )
+    .unwrap()
+    .unwrap();
     let HoverContents::Markup(contents) = hover.contents else {
         panic!("expected Markdown hover")
     };
@@ -111,8 +117,8 @@ async fn imported_member_navigation_and_hover_use_the_unsaved_target_tree() {
     );
 }
 
-#[tokio::test]
-async fn inherited_members_import_expressions_and_glob_uri_navigation_share_the_graph() {
+#[test]
+fn inherited_members_import_expressions_and_glob_uri_navigation_share_the_graph() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join("libs")).unwrap();
     fs::write(temp.path().join("parent.pkl"), "inherited: Int = 7\n").unwrap();
@@ -120,13 +126,17 @@ async fn inherited_members_import_expressions_and_glob_uri_navigation_share_the_
     fs::write(temp.path().join("libs/b.pkl"), "value: Int = 2\n").unwrap();
     let source = "amends \"./parent.pkl\"\nimport* \"./libs/*.pkl\" as libraries\nanswer = inherited\nlibrary = import(\"./libs/a.pkl\")\nother = library.value\n";
     let main = uri(&temp.path().join("main.pkl"));
-    let backend = PklBackend::for_testing();
-    open(&backend, &main, source).await;
-    let inherited = scalar(definition(&backend, &main, position(source, "inherited")).await);
+    let mut backend = Workspace::new();
+    open(&mut backend, &main, source);
+    let inherited = scalar(definition(
+        &mut backend,
+        &main,
+        position(source, "inherited"),
+    ));
     assert_eq!(inherited.uri, uri(&temp.path().join("parent.pkl")));
-    let expression = scalar(definition(&backend, &main, position(source, "value")).await);
+    let expression = scalar(definition(&mut backend, &main, position(source, "value")));
     assert_eq!(expression.uri, uri(&temp.path().join("libs/a.pkl")));
-    let response = definition(&backend, &main, position(source, "./libs/*.pkl")).await;
+    let response = definition(&mut backend, &main, position(source, "./libs/*.pkl"));
     let GotoDefinitionResponse::Array(locations) = response else {
         panic!("glob URI must return all matched modules")
     };
@@ -141,8 +151,8 @@ async fn inherited_members_import_expressions_and_glob_uri_navigation_share_the_
     );
 }
 
-#[tokio::test]
-async fn declared_global_paths_rebind_on_folder_changes_and_configuration_updates() {
+#[test]
+fn declared_global_paths_rebind_on_folder_changes_and_configuration_updates() {
     let temp = tempfile::tempdir().unwrap();
     let one = temp.path().join("one");
     let two = temp.path().join("two");
@@ -150,18 +160,19 @@ async fn declared_global_paths_rebind_on_folder_changes_and_configuration_update
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join("library.pkl"), "value = 1\n").unwrap();
     }
-    let backend = PklBackend::for_testing();
-    initialize(&backend, &[uri(&one)], json!({"modulepath": ["lib"]})).await;
+    let mut backend = Workspace::new();
+    initialize(&mut backend, &[uri(&one)], json!({"modulepath": ["lib"]}));
     let main = uri(&temp.path().join("main.pkl"));
     let source = "import \"modulepath:/library.pkl\" as library\nanswer = library.value\n";
-    open(&backend, &main, source).await;
+    open(&mut backend, &main, source);
     let cursor = position(source, "value");
     assert_eq!(
-        scalar(definition(&backend, &main, cursor).await).uri,
+        scalar(definition(&mut backend, &main, cursor)).uri,
         uri(&one.join("lib/library.pkl"))
     );
-    backend
-        .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+    handlers::lifecycle::did_change_workspace_folders(
+        &mut backend,
+        DidChangeWorkspaceFoldersParams {
             event: WorkspaceFoldersChangeEvent {
                 removed: vec![WorkspaceFolder {
                     uri: uri(&one),
@@ -172,25 +183,27 @@ async fn declared_global_paths_rebind_on_folder_changes_and_configuration_update
                     name: "two".into(),
                 }],
             },
-        })
-        .await;
+        },
+    );
     assert_eq!(
-        scalar(definition(&backend, &main, cursor).await).uri,
+        scalar(definition(&mut backend, &main, cursor)).uri,
         uri(&two.join("lib/library.pkl"))
     );
-    backend
-        .did_change_configuration(DidChangeConfigurationParams {
+    handlers::lifecycle::did_change_configuration(
+        &mut backend,
+        DidChangeConfigurationParams {
             settings: json!({"pkl": {"modulepath": ["override"]}}),
-        })
-        .await;
+        },
+    )
+    .unwrap();
     assert_eq!(
-        scalar(definition(&backend, &main, cursor).await).uri,
+        scalar(definition(&mut backend, &main, cursor)).uri,
         uri(&two.join("override/library.pkl"))
     );
 }
 
-#[tokio::test]
-async fn initialization_restores_project_modulepaths_without_invoking_the_cli() {
+#[test]
+fn initialization_restores_project_modulepaths_without_invoking_the_cli() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join(".lspkl")).unwrap();
     fs::create_dir(temp.path().join("lib")).unwrap();
@@ -207,18 +220,17 @@ async fn initialization_restores_project_modulepaths_without_invoking_the_cli() 
         .unwrap(),
     )
     .unwrap();
-    let backend = PklBackend::for_testing();
+    let mut backend = Workspace::new();
     initialize(
-        &backend,
+        &mut backend,
         &[uri(temp.path())],
         json!({"cli": {"path": "/no/such/pkl"}}),
-    )
-    .await;
+    );
     let source = "import \"modulepath:/library.pkl\" as library\nanswer = library.value\n";
     let main = uri(&temp.path().join("main.pkl"));
-    open(&backend, &main, source).await;
+    open(&mut backend, &main, source);
     assert_eq!(
-        scalar(definition(&backend, &main, position(source, "value")).await).uri,
+        scalar(definition(&mut backend, &main, position(source, "value"))).uri,
         uri(&temp.path().join("lib/library.pkl"))
     );
     fs::write(
@@ -226,40 +238,32 @@ async fn initialization_restores_project_modulepaths_without_invoking_the_cli() 
         "amends \"pkl:Project\"\n// changed on disk\n",
     )
     .unwrap();
-    backend
-        .did_change_watched_files(DidChangeWatchedFilesParams {
+    {
+        let work = backend.prepare_watched_files(DidChangeWatchedFilesParams {
             changes: vec![FileEvent {
                 uri: uri(&temp.path().join("PklProject")),
                 typ: FileChangeType::CHANGED,
             }],
-        })
-        .await;
-    let result = backend
-        .goto_definition(GotoDefinitionParams {
+        });
+        backend.apply_reload(work.load());
+    };
+    let result = handlers::documents::definition(
+        &backend.snapshot(),
+        GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: main },
                 position: position(source, "value"),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!(
         result.is_none(),
         "changed PklProject must invalidate stale cached modulepaths: {result:?}"
     );
-    assert_eq!(
-        backend
-            .workspace
-            .lock()
-            .snapshot()
-            .project_manager
-            .lock()
-            .projects()
-            .count(),
-        0
-    );
+    assert_eq!(backend.project_manager().projects().count(), 0);
 }
 
 fn package(
@@ -289,8 +293,8 @@ fn package(
     package
 }
 
-#[tokio::test]
-async fn cached_transitive_packages_and_stdlib_return_editor_openable_definitions() {
+#[test]
+fn cached_transitive_packages_and_stdlib_return_editor_openable_definitions() {
     let temp = tempfile::tempdir().unwrap();
     let cache = temp.path().join("cache");
     let b = package(&cache, "b", BTreeMap::new(), "value: Int = 42\n");
@@ -310,29 +314,34 @@ async fn cached_transitive_packages_and_stdlib_return_editor_openable_definition
         "import \"{}#/lib.pkl\" as library\nanswer = library.value\ntyped: String = \"hello\"\n",
         a.to_display_string()
     );
-    let backend = PklBackend::for_testing();
-    initialize(&backend, &[uri(temp.path())], json!({"cacheDir": cache})).await;
+    let mut backend = Workspace::new();
+    initialize(
+        &mut backend,
+        &[uri(temp.path())],
+        json!({"cacheDir": cache}),
+    );
     let main = uri(&temp.path().join("main.pkl"));
-    open(&backend, &main, &source).await;
-    let imported = scalar(definition(&backend, &main, position(&source, "value")).await);
+    open(&mut backend, &main, &source);
+    let imported = scalar(definition(&mut backend, &main, position(&source, "value")));
     assert!(imported.uri.as_str().starts_with("lspkl://jar/"));
     assert_eq!(imported.range.start, Position::new(1, 0));
-    let hover = backend
-        .hover(HoverParams {
+    let hover = handlers::documents::hover(
+        &backend.snapshot(),
+        HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: main.clone() },
                 position: position(&source, "value"),
             },
             work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        },
+    )
+    .unwrap()
+    .unwrap();
     let HoverContents::Markup(contents) = hover.contents else {
         panic!("expected Markdown hover")
     };
     assert!(contents.value.contains("value: Int"), "{}", contents.value);
-    let stdlib = scalar(definition(&backend, &main, position(&source, "String")).await);
+    let stdlib = scalar(definition(&mut backend, &main, position(&source, "String")));
     assert_eq!(stdlib.uri.as_str(), "lspkl://stdlib/base.pkl");
 }
 
@@ -375,4 +384,19 @@ fn source_rpc_install_does_not_cancel_a_newer_watched_read() {
             .contents(),
         "value: String = \"new\"\n"
     );
+}
+
+fn initialize_workspace(
+    workspace: &mut Workspace,
+    params: InitializeParams,
+) -> handlers::Result<InitializeResult> {
+    let result = handlers::lifecycle::initialize(workspace, &params);
+    let mut settings = workspace.settings().clone();
+    settings.resolve_paths(workspace.project_manager().workspace_folders());
+    if params.initialization_options.is_some() {
+        workspace.apply_settings(settings);
+    }
+    let manager = handlers::lifecycle::restore_workspaces(workspace.project_manager())?;
+    workspace.apply_project_manager(manager);
+    Ok(result)
 }

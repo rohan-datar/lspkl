@@ -228,3 +228,32 @@ fn recovered_binary_operands_keep_their_identity() {
     assert_eq!(text(&tree, binary.right(&tree)), "two");
     assert_eq!(binary.operator(&tree), Some(TokenType::LogicalOr));
 }
+
+#[test]
+fn variance_tokens_survive_comments_and_identifier_prefixes() {
+    let tree = parse(
+        "class Box<out /* comment */ T, in U, output, input> {}
+",
+    )
+    .unwrap();
+    let list = TypeParameterList::cast(&tree, find(&tree, NodeKind::TypeParameterList)).unwrap();
+    let parameters: Vec<_> = list.parameters(&tree).collect();
+    let variances: Vec<_> = parameters
+        .iter()
+        .map(|&id| TypeParameter::cast(&tree, id).unwrap().variance(&tree))
+        .collect();
+    assert_eq!(
+        variances,
+        [
+            Variance::Covariant,
+            Variance::Contravariant,
+            Variance::Invariant,
+            Variance::Invariant
+        ]
+    );
+    assert!(
+        tree.children(parameters[0])
+            .iter()
+            .any(|&id| tree.text(id) == "out")
+    );
+}

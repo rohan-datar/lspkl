@@ -288,11 +288,7 @@ fn module_identity_and_rendering_ignore_import_paths_and_aliases() {
     base.add(1, source.source());
     base.add(2, target.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let position = NodeRef::new(harness::file(&ctx, 1), source.root());
     let direct = pkl_types::resolver::resolve_unqualified_access(position, "direct", &ctx)
         .unwrap()

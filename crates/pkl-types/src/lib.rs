@@ -16,7 +16,7 @@ pub mod ty;
 mod type_resolution;
 
 pub use base_module::{BaseModule, BaseModuleError, base_module};
-pub use constraint::{CompareOp, ConstraintExpr, ConstraintValue};
+pub use constraint::ConstraintExpr;
 pub use context::{AnalysisContext, ImportResolution};
 pub use file_id::{InFile, NodeRef};
 pub use inference::{InferenceResult, decl_type, expected_type, expr_type, infer, this_type};

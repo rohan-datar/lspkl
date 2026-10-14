@@ -1,5 +1,7 @@
 //! Run environment-sensitive cache regressions in a fresh test process.
 #![cfg(unix)]
+mod support;
+
 use lsp_types::*;
 use lspkl::{Workspace, handlers};
 use pkl_db::settings::WorkspaceSettings;
@@ -118,6 +120,7 @@ fn child() {
         .parse()
         .unwrap();
     handlers::lifecycle::did_open(&mut workspace, DidOpenTextDocumentParams { text_document: TextDocumentItem { uri: uri.clone(), language_id: "pkl".into(), version: 1, text: "import \"package://cache-regression.test/library@1.0.0#/lib.pkl\" as library\nanswer = library.value\n".into() } }).unwrap();
+    support::preload(&mut workspace);
     let snapshot = workspace.snapshot();
     let result = handlers::documents::definition(
         &snapshot,

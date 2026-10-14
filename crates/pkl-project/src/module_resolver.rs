@@ -149,32 +149,7 @@ fn file_uri(path: &Path, directory: bool) -> Option<Uri<String>> {
         Some(uri)
     }
 }
-fn encode_path(path: &str) -> String {
-    use std::fmt::Write;
-    let mut result = String::new();
-    for byte in path.bytes() {
-        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
-            result.push(byte as char);
-        } else {
-            write!(result, "%{byte:02X}").unwrap();
-        }
-    }
-    result
-}
-fn decode_uri_path(path: &str) -> Option<String> {
-    let mut result = Vec::new();
-    let mut bytes = path.bytes();
-    while let Some(byte) = bytes.next() {
-        if byte == b'%' {
-            let hi = (bytes.next()? as char).to_digit(16)?;
-            let lo = (bytes.next()? as char).to_digit(16)?;
-            result.push((hi * 16 + lo) as u8);
-        } else {
-            result.push(byte);
-        }
-    }
-    String::from_utf8(result).ok()
-}
+use pkl_vfs::{decode_uri_path, encode_path};
 fn cached_packages(cache: &Path) -> BTreeSet<String> {
     let mut packages = BTreeSet::new();
     for layout in ["package-1", "package-2"] {

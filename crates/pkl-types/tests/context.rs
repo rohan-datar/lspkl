@@ -13,11 +13,7 @@ fn pinned_files_preserve_identity_and_isolate_resolution() {
     base.add(1, first.source());
     base.add(2, second.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     for (file, tree, expected) in [
         (harness::file(&ctx, 1), &first, base.int_type().clone()),
         (harness::file(&ctx, 2), &second, Type::string_literal("two")),
@@ -64,11 +60,7 @@ fn missing_files_never_fall_back_to_another_pinned_tree() {
     let tree = Arc::new(pkl_syntax::parse("x = 1").unwrap());
     base.add(1, tree.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let node = harness::find_first(&tree, |kind| matches!(kind, NodeKind::IntLiteralExpr));
     let missing = NodeRef::new(harness::file(&ctx, 3), node);
     assert!(ctx.tree(missing.file).is_none());
@@ -98,11 +90,7 @@ fn imported_generic_members_and_expected_arguments_keep_bindings_internal() {
     base.add(1, user.source());
     base.add(2, imported.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let box_type = harness::find_first(&user, |kind| matches!(kind, NodeKind::DeclaredType));
     let ty = pkl_types::to_type(
         ctx.db,
@@ -142,11 +130,7 @@ fn enumeration_preserves_imported_inheritance_shadowing_and_union_intersection()
     base.add(1, child.source());
     base.add(2, parent.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let child_type =
         pkl_types::resolver::module_type(NodeRef::new(harness::file(&ctx, 1), child.root()), &ctx);
     let parent_type =

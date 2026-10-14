@@ -40,16 +40,9 @@ pub enum Variance {
 
 impl TypeParameter {
     pub fn variance(self, tree: &SyntaxTree) -> Variance {
-        let Some(identifier) = tree.identifier(self.0) else {
-            return Variance::Invariant;
-        };
-        // Anonymous in/out tokens are not projected into the indexed AST. The
-        // parameter range starts at the modifier, and ends after its identifier.
-        let prefix_len = usize::from(tree.span(identifier).start() - tree.span(self.0).start());
-        let prefix = &tree.text(self.0)[..prefix_len];
-        if prefix.starts_with("out") {
+        if token(tree, self.0, TokenType::Out) {
             Variance::Covariant
-        } else if prefix.starts_with("in") {
+        } else if token(tree, self.0, TokenType::In) {
             Variance::Contravariant
         } else {
             Variance::Invariant

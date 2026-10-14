@@ -18,7 +18,8 @@ fluent-uri = "0.4.1"
 thiserror = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
-tower-lsp-server = "0.22"
+lsp-server = "0.10"
+crossbeam-channel = "0.5"
 lsp-types = "0.97"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -26,7 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = "1"
 globset = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "rustls-tls-native-roots"] }
 sha2 = "0.10"
 percent-encoding = "2"
 

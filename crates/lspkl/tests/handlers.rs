@@ -196,25 +196,15 @@ fn command_errors_have_one_protocol_mapping() {
             work_done_progress_params: Default::default(),
         },
     ] {
-        let error: tower_lsp_server::jsonrpc::Error =
-            handlers::commands::prepare_execute_command(&snapshot, params)
-                .err()
-                .expect("invalid command must fail validation")
-                .into();
-        assert_eq!(
-            error.code,
-            tower_lsp_server::jsonrpc::ErrorCode::InvalidParams
-        );
-    }
-    let error: tower_lsp_server::jsonrpc::Error =
-        handlers::commands::prepare_download_package(&snapshot, "not-a-package".into())
+        let error = handlers::commands::prepare_execute_command(&snapshot, params)
             .err()
-            .expect("invalid package must fail validation")
-            .into();
-    assert_eq!(
-        error.code,
-        tower_lsp_server::jsonrpc::ErrorCode::InvalidParams
-    );
+            .expect("invalid command must fail validation");
+        assert!(matches!(error, handlers::HandlerError::InvalidParams(_)));
+    }
+    let error = handlers::commands::prepare_download_package(&snapshot, "not-a-package".into())
+        .err()
+        .expect("invalid package must fail validation");
+    assert!(matches!(error, handlers::HandlerError::InvalidParams(_)));
 }
 
 #[cfg(unix)]

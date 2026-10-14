@@ -45,10 +45,6 @@ impl DiagnosticsEngine {
         self
     }
 
-    pub fn register(&mut self, analyzer: Box<dyn Analyzer>) {
-        self.analyzers.push(analyzer);
-    }
-
     /// The production pipeline, in stable registration order: all 11 analyzers.
     pub fn with_default_analyzers() -> Self {
         Self::new()
@@ -85,10 +81,6 @@ impl DiagnosticsEngine {
             all.extend(holder.into_diagnostics());
         }
         all
-    }
-
-    pub fn analyzers(&self) -> &[Box<dyn Analyzer>] {
-        &self.analyzers
     }
 }
 

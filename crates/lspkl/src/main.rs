@@ -1,9 +1,5 @@
-//! lspkl binary entry point.
-use std::sync::Arc;
-
+//! lspkl binary entry point; stdout is reserved for protocol traffic.
 use clap::Parser;
-use lspkl::{PklBackend, Workspace};
-use tower_lsp_server::{LspService, Server};
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Debug, Parser)]
@@ -13,35 +9,30 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 }
-
-fn init_tracing(verbose: bool) {
-    let default_level = if verbose { "debug" } else { "info" };
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
-
+fn main() {
+    let cli = Cli::parse();
+    let default_level = if cli.verbose { "debug" } else { "info" };
     fmt()
-        .with_env_filter(filter)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
+        )
         .with_writer(std::io::stderr)
         .with_target(true)
         .init();
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let cli = Cli::parse();
-    init_tracing(cli.verbose);
-
-    let workspace = tokio::task::spawn_blocking(Workspace::new)
-        .await
-        .expect("workspace bootstrap task");
-    let workspace = Arc::new(parking_lot::Mutex::new(workspace));
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-    // Custom `pkl/*` RPC methods
-    let (service, socket) = LspService::build(|client| PklBackend::new(workspace, Some(client)))
-        .custom_method("pkl/syncProjects", PklBackend::sync_projects)
-        .custom_method("pkl/downloadPackage", PklBackend::download_package)
-        .custom_method("pkl/fileContents", PklBackend::file_contents)
-        .finish();
-    Server::new(stdin, stdout, socket).serve(service).await;
+    let workspace = lspkl::Workspace::new();
+    let (connection, threads) = lsp_server::Connection::stdio();
+    let success = match lspkl::server::run(connection, workspace) {
+        Ok(success) => success,
+        Err(error) => {
+            tracing::error!(%error, "transport failed");
+            false
+        }
+    };
+    if let Err(error) = threads.join() {
+        tracing::error!(%error, "transport I/O failed");
+        std::process::exit(1);
+    }
+    if !success {
+        std::process::exit(1);
+    }
 }

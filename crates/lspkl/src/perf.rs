@@ -65,6 +65,10 @@ impl Compute {
         Self::begin(stage, "runtime", None)
     }
 
+    pub(super) fn queued(stage: &'static str, queued: Instant) -> Self {
+        Self::begin(stage, "blocking", Some(queued))
+    }
+
     pub(super) fn start(stage: &'static str) -> Self {
         Self::begin(stage, "blocking", None)
     }
@@ -98,36 +102,4 @@ impl Drop for Compute {
                 compute_us = start.elapsed().as_micros() as u64);
         }
     }
-}
-
-/// Measure whole synchronous handlers dispatched away from the runtime.
-pub(super) async fn blocking<F, R>(
-    stage: &'static str,
-    work: F,
-) -> Result<R, tokio::task::JoinError>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let enabled = tracing::enabled!(target: "lspkl::perf", tracing::Level::DEBUG);
-    let span = if enabled {
-        Span::current()
-    } else {
-        Span::none()
-    };
-    let queued = enabled.then(Instant::now);
-    let (result, finished) = tokio::task::spawn_blocking(move || {
-        let _entered = span.enter();
-        let compute = Compute::begin(stage, "blocking", queued);
-        let result = work();
-        drop(compute);
-        (result, enabled.then(Instant::now))
-    })
-    .await?;
-    if let Some(finished) = finished {
-        tracing::debug!(target: "lspkl::perf", event = "worker_resume", stage,
-            timestamp_us = timestamp_us(Instant::now()),
-            runtime_resume_us = finished.elapsed().as_micros() as u64);
-    }
-    Ok(result)
 }

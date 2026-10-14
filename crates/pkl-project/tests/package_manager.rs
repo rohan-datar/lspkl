@@ -6,10 +6,58 @@ use std::path::{Path, PathBuf};
 
 use pkl_project::cli::PklCli;
 use pkl_project::dto::{
-    Checksums, Dependency, DerivedProjectMetadata, LocalDependency, PackageDependency, PackageUri,
-    PklProject, ProjectDeps, ResolvedDependency,
+    Checksums, DerivedProjectMetadata, LocalDependency, PackageDependency, PackageUri, PklProject,
+    ProjectDeps, ResolvedDependency,
 };
 use pkl_project::package_manager::PackageManager;
+use pkl_project::{
+    import_resolver::ImportResolver,
+    routing::{RoutingFacts, RoutingRequest},
+};
+use pkl_vfs::{Source, StandardSourceLoader};
+use std::cell::RefCell;
+
+fn package_source(cache: &Path, package: &PackageDependency) -> Source {
+    let zip = pkl_vfs::path_to_uri(&cache.join(&package.uri.relative_zip_files()[0])).unwrap();
+    Source {
+        url: fluent_uri::Uri::parse(format!("jar:{zip}!/source.pkl")).unwrap(),
+        text: "".into(),
+    }
+}
+
+#[derive(Default)]
+struct CapturedDependency(RefCell<Option<RoutingRequest>>);
+impl RoutingFacts for CapturedDependency {
+    fn root(&self, request: RoutingRequest) -> Option<fluent_uri::Uri<String>> {
+        *self.0.borrow_mut() = Some(request);
+        None
+    }
+}
+
+// Exercise the production name lookup and dependency routing, not a second mapper.
+fn dependencies(
+    cache: &Path,
+    package: &PackageDependency,
+    context: Option<&PklProject>,
+) -> BTreeMap<String, RoutingRequest> {
+    let loader = StandardSourceLoader::new();
+    let facts = CapturedDependency::default();
+    let resolver = ImportResolver::new(&loader, cache).with_facts(&facts);
+    let source = package_source(cache, package);
+    resolver
+        .dependency_names(&source, context)
+        .into_iter()
+        .map(|name| {
+            resolver.completion_root(&format!("@{name}/"), &source, context);
+            let dependency = facts
+                .0
+                .borrow_mut()
+                .take()
+                .expect("named dependency routing request");
+            (name, dependency)
+        })
+        .collect()
+}
 
 fn dependency() -> PackageDependency {
     PackageDependency {
@@ -145,13 +193,7 @@ fn project(dir: &Path, deps: Option<ProjectDeps>) -> PklProject {
 #[test]
 fn dependencies_are_absent_when_package_cache_is_missing() {
     let cache = tempfile::tempdir().unwrap();
-    let manager = PackageManager::new(PklCli::default());
-    assert!(
-        manager
-            .get_resolved_dependencies(&dependency(), None, None, cache.path())
-            .unwrap()
-            .is_none()
-    );
+    assert!(dependencies(cache.path(), &dependency(), None).is_empty());
 }
 
 #[test]
@@ -172,17 +214,15 @@ fn metadata_dependencies_keep_names_and_use_remote_fallback_without_context() {
             }
         }),
     );
-    let manager = PackageManager::new(PklCli::default());
-    let resolved = manager
-        .get_resolved_dependencies(&package, None, None, cache.path())
-        .unwrap()
-        .expect("cached metadata");
+    let resolved = dependencies(cache.path(), &package, None);
     assert_eq!(
         resolved.keys().map(String::as_str).collect::<Vec<_>>(),
         ["lib", "tool"]
     );
     match &resolved["lib"] {
-        Dependency::Package(remote) => {
+        RoutingRequest::Package {
+            dependency: remote, ..
+        } => {
             assert_eq!(
                 remote.uri.to_display_string(),
                 "package://example.com/lib@1.0.0"
@@ -196,7 +236,7 @@ fn metadata_dependencies_keep_names_and_use_remote_fallback_without_context() {
         }
         other => panic!("expected remote dependency, got {other:?}"),
     }
-    assert!(matches!(&resolved["tool"], Dependency::Package(_)));
+    assert!(matches!(&resolved["tool"], RoutingRequest::Package { .. }));
 }
 
 #[test]
@@ -226,25 +266,21 @@ fn context_can_resolve_a_package_dependency_to_a_local_project() {
         )]),
     };
     let context = project(&owner_dir, Some(deps));
-    let manager = PackageManager::new(PklCli::default());
-    let resolved = manager
-        .get_resolved_dependencies(&package, None, Some(&context), cache.path())
-        .unwrap()
-        .expect("cached metadata");
+    let resolved = dependencies(cache.path(), &package, Some(&context));
     match &resolved["lib"] {
-        Dependency::LocalProject(local) => {
-            assert_eq!(local.project_dir, owner_dir.join("../local-lib"));
+        RoutingRequest::ModuleRoot(project_dir) => {
+            assert_eq!(*project_dir, owner_dir.join("../local-lib"));
         }
         other => panic!("expected local project, got {other:?}"),
     }
     assert!(
-        matches!(&resolved["other"], Dependency::Package(_)),
+        matches!(&resolved["other"], RoutingRequest::Package { .. }),
         "unmatched dependencies fall back to remote when package has no owner"
     );
 }
 
 #[test]
-fn owning_project_keeps_only_resolved_dependencies() {
+fn package_context_preserves_unresolved_metadata_dependencies() {
     let cache = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let package = dependency();
@@ -267,38 +303,35 @@ fn owning_project_keeps_only_resolved_dependencies() {
         )]),
     };
     let owner = project(workspace.path(), Some(deps));
-    let manager = PackageManager::new(PklCli::default());
-    let resolved = manager
-        .get_resolved_dependencies(&package, Some(&owner), None, cache.path())
-        .unwrap()
-        .expect("owner has project deps");
+    let resolved = dependencies(cache.path(), &package, Some(&owner));
     assert_eq!(
         resolved.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["lib"]
+        ["lib", "unresolved"]
     );
-    assert!(matches!(&resolved["lib"], Dependency::Package(_)));
+    assert!(matches!(&resolved["lib"], RoutingRequest::Package { .. }));
 
     let owner_without_deps = project(workspace.path(), None);
-    assert!(
-        manager
-            .get_resolved_dependencies(&package, Some(&owner_without_deps), None, cache.path())
-            .unwrap()
-            .is_none(),
-        "owner without project deps cannot resolve package metadata"
+    let without_deps = dependencies(cache.path(), &package, Some(&owner_without_deps));
+    assert_eq!(
+        without_deps.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["lib", "unresolved"]
     );
+    assert!(matches!(
+        &without_deps["lib"],
+        RoutingRequest::Package { .. }
+    ));
+    assert!(matches!(
+        &without_deps["unresolved"],
+        RoutingRequest::Package { .. }
+    ));
 }
 
 #[test]
-fn invalid_cached_metadata_is_a_parse_error() {
+fn invalid_cached_metadata_has_no_dependency_names() {
     let cache = tempfile::tempdir().unwrap();
     let package = dependency();
     write_candidate(cache.path(), &package.uri.relative_zip_files()[0]);
     let metadata_file = write_candidate(cache.path(), &package.uri.relative_metadata_files()[0]);
     fs::write(metadata_file, b"not json").unwrap();
-    let manager = PackageManager::new(PklCli::default());
-    assert!(
-        manager
-            .get_resolved_dependencies(&package, None, None, cache.path())
-            .is_err()
-    );
+    assert!(dependencies(cache.path(), &package, None).is_empty());
 }

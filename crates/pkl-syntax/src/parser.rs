@@ -227,7 +227,7 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
 
         "+" | "-" | "*" | "/" | "~/" | "%" | "<" | "<=" | ">" | ">=" | "==" | "!=" | "&&"
         | "||" | "??" | "**" | "|>" | "is" | "as" | "!" | "!!" | "?." | "import" | "import*"
-        | "read" | "read*" | "read?" | "amends" | "extends" | "->" => {
+        | "read" | "read*" | "read?" | "amends" | "extends" | "->" | "in" | "out" => {
             NodeKind::Terminal(operator_token(raw))
         }
         _ if !ts_node.is_named() => NodeKind::Terminal(TokenType::Other),
@@ -291,6 +291,8 @@ fn operator_token(raw: &str) -> TokenType {
         "amends" => TokenType::Amends,
         "extends" => TokenType::Extends,
         "->" => TokenType::Arrow,
+        "in" => TokenType::In,
+        "out" => TokenType::Out,
         _ => TokenType::Other,
     }
 }

@@ -5,10 +5,6 @@ use lsp_types::{
     Documentation, MarkupContent, MarkupKind, Range, TextEdit,
 };
 
-use pkl_syntax::ast::nodes::{
-    ClassMethod, ClassProperty, MethodHeader, ObjectMethod, ObjectProperty, TypeAlias,
-    TypeAnnotation, TypeNode,
-};
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_syntax::{TextRange, TextSize};
 
@@ -47,16 +43,31 @@ pub(crate) fn completions(
         return out;
     }
 
-    // Routed-around path: expand the enclosing member's own type annotation,
-    // handling `StringLiteralType` explicitly.
-    let Some(annotation) = enclosing_type_annotation(literal, tree) else {
-        return out;
-    };
-    let detail_text = tree.text(annotation).to_string();
-    let mut values = Vec::new();
-    annotation_literal_values(NodeRef::new(file, annotation), ctx, &mut values, 0);
-    for value in values {
-        out.push(literal_item(&value, &detail_text, literal, tree, range_for));
+    // Recover the nearest declaration through the shared scope rather than
+    // recursively expanding annotation syntax and alias bodies.
+    let scope = pkl_types::scope_at(NodeRef::new(file, literal), ctx);
+    if let Some(member) = super::ancestor_or_self(literal, tree, |kind| {
+        matches!(
+            kind,
+            NodeKind::ClassProperty
+                | NodeKind::ObjectProperty
+                | NodeKind::ClassMethod
+                | NodeKind::ObjectMethod
+        )
+    }) && let Some(name) = tree.name(member)
+        && let Some(entry) = scope.lookup(name)
+    {
+        let ty = entry.ty(ctx);
+        let detail = render_detail(&ty, ctx);
+        expand(
+            &ty,
+            None,
+            &detail,
+            NodeRef::new(file, literal),
+            ctx,
+            range_for,
+            &mut out,
+        );
     }
     out
 }
@@ -134,99 +145,6 @@ fn render_detail(ty: &Type, ctx: &AnalysisContext) -> String {
         Type::Unknown => String::new(),
         other => other.render(ctx.db),
     }
-}
-
-/// The declared type of the nearest enclosing member (property/method),
-/// i.e. the type node inside its `TypeAnnotation`.
-fn enclosing_type_annotation(start: NodeId, tree: &pkl_syntax::ast::SyntaxTree) -> Option<NodeId> {
-    super::ancestor_or_self(start, tree, |k| {
-        matches!(
-            k,
-            NodeKind::ClassProperty
-                | NodeKind::ObjectProperty
-                | NodeKind::ClassMethod
-                | NodeKind::ObjectMethod
-        )
-    })
-    .and_then(|member| {
-        let annotation = match tree.kind(member) {
-            NodeKind::ClassProperty => ClassProperty::cast(tree, member)?.type_annotation(tree),
-            NodeKind::ObjectProperty => ObjectProperty::cast(tree, member)?.type_annotation(tree),
-            NodeKind::ClassMethod => ClassMethod::cast(tree, member)?
-                .header(tree)
-                .and_then(|header| MethodHeader::cast(tree, header)?.type_annotation(tree)),
-            NodeKind::ObjectMethod => ObjectMethod::cast(tree, member)?
-                .header(tree)
-                .and_then(|header| MethodHeader::cast(tree, header)?.type_annotation(tree)),
-            _ => None,
-        }?;
-        TypeAnnotation::cast(tree, annotation)?.ty(tree)
-    })
-}
-
-/// Collect the string-literal values mentioned in a type annotation.
-fn annotation_literal_values(
-    type_node: NodeRef,
-    ctx: &AnalysisContext,
-    out: &mut Vec<String>,
-    depth: u8,
-) {
-    if depth > 16 {
-        return;
-    }
-    let Some(tree) = ctx.tree(type_node.file) else {
-        return;
-    };
-    match TypeNode::cast(tree, type_node.value) {
-        Some(TypeNode::StringLiteralType(literal)) => {
-            if let Some(value) = tree.escaped_string_literal(literal.id()) {
-                out.push(value);
-            }
-        }
-        Some(TypeNode::UnionType(union)) => {
-            for child in [union.left(tree), union.right(tree)].into_iter().flatten() {
-                annotation_literal_values(NodeRef::new(type_node.file, child), ctx, out, depth + 1);
-            }
-        }
-        Some(
-            ty @ (TypeNode::DefaultUnionType(_)
-            | TypeNode::NullableType(_)
-            | TypeNode::ParenthesizedType(_)
-            | TypeNode::ConstrainedType(_)),
-        ) => {
-            let inner = match ty {
-                TypeNode::DefaultUnionType(ty) => ty.inner(tree),
-                TypeNode::NullableType(ty) => ty.inner(tree),
-                TypeNode::ParenthesizedType(ty) => ty.inner(tree),
-                TypeNode::ConstrainedType(ty) => ty.inner(tree),
-                _ => unreachable!(),
-            };
-            if let Some(inner) = inner {
-                annotation_literal_values(NodeRef::new(type_node.file, inner), ctx, out, depth + 1);
-            }
-        }
-        Some(TypeNode::DeclaredType(_)) => {
-            // Alias: preserve its file identity while expanding the type body.
-            if let Some(alias) = pkl_types::resolver::resolve_declared_type(ctx, type_node)
-                && let Some(body) = ctx
-                    .tree(alias.file)
-                    .and_then(|tree| TypeAlias::cast(tree, alias.value)?.ty(tree))
-            {
-                annotation_literal_values(NodeRef::new(alias.file, body), ctx, out, depth + 1);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn literal_item(
-    value: &str,
-    detailed: &str,
-    literal: NodeId,
-    tree: &pkl_syntax::ast::SyntaxTree,
-    range_for: &impl Fn(TextRange) -> Range,
-) -> CompletionItem {
-    literal_item_with_alias(value, detailed, None, literal, tree, range_for)
 }
 
 fn literal_item_with_alias(

@@ -73,3 +73,32 @@ pub fn url_to_path(url: &Uri<String>) -> Result<std::path::PathBuf, FileError> {
         .to_file_path()
         .map_err(|_| FileError::InvalidPath(url.clone()))
 }
+
+/// Encode a logical path once, retaining path separators.
+pub fn encode_path(path: &str) -> String {
+    use std::fmt::Write;
+    let mut result = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+            result.push(byte as char);
+        } else {
+            write!(result, "%{byte:02X}").unwrap();
+        }
+    }
+    result
+}
+/// Decode a URI path once, rejecting malformed escapes and invalid UTF-8.
+pub fn decode_uri_path(path: &str) -> Option<String> {
+    let mut result = Vec::with_capacity(path.len());
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let hi = (bytes.next()? as char).to_digit(16)?;
+            let lo = (bytes.next()? as char).to_digit(16)?;
+            result.push((hi * 16 + lo) as u8);
+        } else {
+            result.push(byte);
+        }
+    }
+    String::from_utf8(result).ok()
+}

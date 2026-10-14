@@ -230,6 +230,8 @@ pub enum TokenType {
     Pipe,
     Not,
     Arrow,
+    In,
+    Out,
 
     /// Anything not classified yet. Carries no data; the actual token text
     /// can be retrieved via `SyntaxTree::text(node)`.
@@ -450,6 +452,25 @@ impl SyntaxTree {
         .iter()
         .map(|&c| self.text(c))
         .collect()
+    }
+
+    /// Documentation contents shared by hover and lazy completion resolution.
+    pub fn doc_comment_text(&self, id: NodeId) -> Option<String> {
+        let comments = self.doc_comments(id);
+        if comments.is_empty() {
+            return None;
+        }
+        Some(
+            comments
+                .iter()
+                .flat_map(|doc| doc.trim().lines())
+                .map(|line| {
+                    let line = line.trim_start().strip_prefix("///").unwrap_or(line);
+                    line.strip_prefix(' ').unwrap_or(line)
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 
     pub fn is_amend(&self) -> bool {

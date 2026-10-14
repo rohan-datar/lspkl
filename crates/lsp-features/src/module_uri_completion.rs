@@ -274,22 +274,9 @@ pub fn resolve(db: &dyn Db, mut item: CompletionItem) -> CompletionItem {
         .map(|clause| tree.text(clause).trim().to_owned())
         .unwrap_or_else(|| format!("module {}", target.as_str()));
     let mut markdown = format!("```pkl\n{signature}\n```");
-    let comments = header
-        .map(|header| tree.doc_comments(header))
-        .unwrap_or_default();
-    if !comments.is_empty() {
+    if let Some(comments) = header.and_then(|header| tree.doc_comment_text(header)) {
         markdown.push_str("\n\n---\n\n");
-        markdown.push_str(
-            &comments
-                .iter()
-                .flat_map(|comment| comment.lines())
-                .map(|line| {
-                    let line = line.trim_start().strip_prefix("///").unwrap_or(line);
-                    line.strip_prefix(' ').unwrap_or(line)
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
+        markdown.push_str(&comments);
     }
     item.detail = Some(signature);
     item.documentation = Some(Documentation::MarkupContent(MarkupContent {
@@ -314,37 +301,12 @@ fn visible(name: &str, folder: bool) -> bool {
     !name.starts_with('.')
         && (folder || name.ends_with(".pkl") || name.ends_with(".pcf") || name == "PklProject")
 }
-fn encode_path(path: &str) -> String {
-    use std::fmt::Write;
-    let mut result = String::new();
-    for byte in path.bytes() {
-        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
-            result.push(byte as char);
-        } else {
-            write!(result, "%{byte:02X}").unwrap();
-        }
-    }
-    result
-}
+use pkl_vfs::{decode_uri_path, encode_path};
 fn encode_reference(path: &str) -> String {
     path.strip_prefix("file:///").map_or_else(
         || encode_path(path),
         |path| format!("file:///{}", encode_path(path)),
     )
-}
-fn decode_uri_path(path: &str) -> Option<String> {
-    let mut result = Vec::new();
-    let mut bytes = path.bytes();
-    while let Some(byte) = bytes.next() {
-        if byte == b'%' {
-            let hi = (bytes.next()? as char).to_digit(16)?;
-            let lo = (bytes.next()? as char).to_digit(16)?;
-            result.push((hi * 16 + lo) as u8);
-        } else {
-            result.push(byte);
-        }
-    }
-    String::from_utf8(result).ok()
 }
 fn glob_escape(name: &str, glob: bool) -> String {
     let mut result = String::new();

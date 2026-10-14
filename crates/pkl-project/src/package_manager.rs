@@ -1,16 +1,12 @@
 //! Package cache lookups and downloads.
 
-use serde_json;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use fluent_uri::Uri;
 
 use crate::cli::PklCli;
-use crate::dto::{
-    Dependency, PackageDependency, PackageMetadata, PackageUri, PklProject, resolved_to_dependency,
-};
+use crate::dto::{PackageDependency, PackageUri};
 
 #[derive(Debug, Clone)]
 pub struct PackageLibraryRoots {
@@ -23,8 +19,6 @@ pub struct PackageLibraryRoots {
 pub enum PackageError {
     #[error(transparent)]
     Cli(#[from] crate::cli::PklCliError),
-    #[error("failed to read package metadata: {0}")]
-    Parse(#[from] serde_json::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("cannot represent ZIP path as file URI: {0}")]
@@ -39,7 +33,6 @@ pub enum PackageError {
     MissingMetadata,
 }
 
-#[allow(dead_code)]
 pub struct PackageManager {
     cli: PklCli,
 }
@@ -47,9 +40,6 @@ pub struct PackageManager {
 impl PackageManager {
     pub fn new(cli: PklCli) -> Self {
         Self { cli }
-    }
-    pub fn set_cli(&mut self, cli: PklCli) {
-        self.cli = cli;
     }
 
     /// Locate the cached metadata and ZIP, and form its `jar:` root URI.
@@ -106,59 +96,6 @@ impl PackageManager {
             zip_file,
             package_root,
         }))
-    }
-
-    /// Named dependencies from a cached package's metadata.
-    pub fn get_resolved_dependencies(
-        &self,
-        dependency: &PackageDependency,
-        owner_project: Option<&PklProject>,
-        context: Option<&PklProject>,
-        cache_dir: &Path,
-    ) -> Result<Option<BTreeMap<String, Dependency>>, PackageError> {
-        let Some(roots) = self.get_library_roots(dependency, cache_dir)? else {
-            return Ok(None);
-        };
-        let metadata_file = fs::read_to_string(roots.metadata_file)?;
-        let metadata = serde_json::from_str::<PackageMetadata>(&metadata_file)?;
-
-        let mut named_map = BTreeMap::new();
-        if let Some(owner) = owner_project {
-            let Some(deps) = owner.project_deps.as_ref() else {
-                return Ok(None);
-            };
-            let Some(project_dir) = owner.project_dir() else {
-                return Ok(None);
-            };
-            // Project-owned packages only expose dependencies present in the
-            // owning project's resolved dependency graph.
-            for (name, dep) in metadata.dependencies {
-                let Some(resolved) = deps.get_resolved_dependency(&dep.uri.to_display_string())
-                else {
-                    continue;
-                };
-                named_map.insert(name, resolved_to_dependency(resolved, &project_dir));
-            }
-        } else {
-            for (name, dep) in metadata.dependencies {
-                let from_context = context.and_then(|project| {
-                    let project_dir = project.project_dir()?;
-                    let resolved = project
-                        .project_deps
-                        .as_ref()?
-                        .get_resolved_dependency(&dep.uri.to_display_string())?;
-                    Some(resolved_to_dependency(resolved, &project_dir))
-                });
-                let resolved_dep = from_context.unwrap_or_else(|| {
-                    Dependency::Package(PackageDependency {
-                        uri: dep.uri,
-                        checksums: dep.checksums,
-                    })
-                });
-                named_map.insert(name, resolved_dep);
-            }
-        }
-        Ok(Some(named_map))
     }
 
     /// Download + extract `uri` into the module cache. Blocking; shell out via

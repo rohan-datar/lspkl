@@ -1,9 +1,11 @@
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use fluent_uri::Uri;
-use lsp_features::module_uri_completion::{completion, resolve};
+use lsp_features::module_uri_completion::completion;
 use lsp_types::{
     CompletionItem, CompletionResponse, CompletionTextEdit, DidOpenTextDocumentParams,
     Documentation, Position, TextDocumentItem,
@@ -31,6 +33,7 @@ fn open_source(
             },
         })
         .unwrap();
+    support::preload(state);
     state.snapshot()
 }
 fn candidates(
@@ -42,6 +45,19 @@ fn candidates(
     let source = marked.replacen('|', "", 1);
     let workspace_snapshot = open_source(state, source_uri.clone(), source, 1);
     let file = workspace_snapshot.document(source_uri.as_str()).unwrap();
+    // Completion can discover directory/routing inputs beyond the import graph.
+    let _ = pkl_db::with_module_resolver(&workspace_snapshot.db, |resolver| {
+        completion(
+            &workspace_snapshot.db,
+            file,
+            TextSize::try_from(cursor).unwrap(),
+            workspace_snapshot.position_encoding,
+            resolver,
+        )
+    });
+    drop(workspace_snapshot);
+    support::preload(state);
+    let workspace_snapshot = state.snapshot();
     match pkl_db::with_module_resolver(&workspace_snapshot.db, |resolver| {
         completion(
             &workspace_snapshot.db,
@@ -66,6 +82,11 @@ fn docs(item: CompletionItem) -> String {
         Documentation::MarkupContent(content) => content.value,
         Documentation::String(value) => value,
     }
+}
+fn resolve(state: &mut Workspace, item: CompletionItem) -> CompletionItem {
+    let _ = lsp_features::module_uri_completion::resolve(&state.snapshot().db, item.clone());
+    support::preload(state);
+    lsp_features::module_uri_completion::resolve(&state.snapshot().db, item)
 }
 fn archive(path: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -120,7 +141,7 @@ fn all_uri_owner_forms_and_embedded_modules_have_real_lazy_docs() {
             .unwrap();
         assert!(item.documentation.is_none());
         assert_eq!(item.data.as_ref().unwrap()["targetUri"], "pkl:math");
-        let documentation = docs(resolve(&state.snapshot().db, item));
+        let documentation = docs(resolve(&mut state, item));
         assert!(documentation.contains("module pkl.math"));
         assert!(documentation.contains("mathematical"));
     }
@@ -185,9 +206,7 @@ fn local_names_directories_utf16_raw_delimiters_and_lazy_target_docs() {
     assert_eq!(edit(item).new_text, "a%20%25%20file.pkl");
     assert_eq!(edit(item).range.start, Position::new(1, 13));
     assert_eq!(edit(item).range.end, Position::new(1, 21));
-    assert!(
-        docs(resolve(&state.snapshot().db, item.clone())).contains("Unique target documentation")
-    );
+    assert!(docs(resolve(&mut state, item.clone())).contains("Unique target documentation"));
     let items = candidates(
         &mut state,
         uri(&temp.path().join("main.pkl")),
@@ -277,7 +296,7 @@ fn filesystem_completion_keeps_sources_under_non_utf8_parent_paths() {
         item.data.as_ref().unwrap()["targetUri"],
         uri(&library).as_str()
     );
-    assert!(docs(resolve(&state.snapshot().db, item)).contains("Native directory documentation."));
+    assert!(docs(resolve(&mut state, item)).contains("Native directory documentation."));
 }
 
 #[test]
@@ -322,14 +341,14 @@ fn modulepath_directories_zip_jar_precedence_and_docs_use_physical_target() {
         same.data.as_ref().unwrap()["targetUri"],
         uri(&root.join("same.pkl")).as_str()
     );
-    assert!(docs(resolve(&state.snapshot().db, same.clone())).contains("Directory wins"));
+    assert!(docs(resolve(&mut state, same.clone())).contains("Directory wins"));
     let items = candidates(
         &mut state,
         uri(&temp.path().join("main.pkl")),
         "import \"modulepath:/nested/|\"",
     )
     .unwrap();
-    assert!(docs(resolve(&state.snapshot().db, items[0].clone())).contains("module zipped"));
+    assert!(docs(resolve(&mut state, items[0].clone())).contains("module zipped"));
 }
 
 #[test]
@@ -408,7 +427,7 @@ fn cached_package_bases_versions_members_and_transitive_dependency_names() {
     assert_eq!(names[0].label, "@transitive");
     let members = candidates(&mut state, source, "import \"@transitive/|\"").unwrap();
     assert_eq!(edit(&members[0]).new_text, "@transitive/docs%20member.pkl");
-    assert!(docs(resolve(&state.snapshot().db, members[0].clone())).contains("Transitive docs"));
+    assert!(docs(resolve(&mut state, members[0].clone())).contains("Transitive docs"));
 }
 
 #[test]
@@ -442,14 +461,10 @@ fn named_local_and_remote_project_dependencies_complete_members() {
         }]
     })).unwrap()).unwrap();
     let mut state = Workspace::new();
-    let snapshot = state.snapshot();
-    {
-        let mut projects = snapshot.project_manager.lock();
-        projects.initialize(vec![temp.path().to_owned()]);
-        projects.load_state(&state_file).unwrap();
-    }
-    drop(snapshot);
-    state.refresh_projects();
+    let mut projects = state.project_manager();
+    projects.initialize(vec![temp.path().to_owned()]);
+    projects.load_state(&state_file).unwrap();
+    state.apply_project_manager(projects);
     state.apply_settings(pkl_db::settings::WorkspaceSettings {
         cache_dir: Some(cache),
         ..Default::default()
@@ -468,11 +483,9 @@ fn named_local_and_remote_project_dependencies_complete_members() {
         items[0].data.as_ref().unwrap()["targetUri"],
         uri(&temp.path().join("local/member.pkl")).as_str()
     );
-    assert!(
-        docs(resolve(&state.snapshot().db, items[0].clone())).contains("Local dependency docs")
-    );
+    assert!(docs(resolve(&mut state, items[0].clone())).contains("Local dependency docs"));
     let items = candidates(&mut state, source, "import \"@remote/|\"").unwrap();
-    assert!(docs(resolve(&state.snapshot().db, items[0].clone())).contains("module remote.member"));
+    assert!(docs(resolve(&mut state, items[0].clone())).contains("module remote.member"));
 }
 
 #[test]

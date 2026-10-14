@@ -20,6 +20,10 @@ pub struct WorkspaceSettings {
     /// Initialized once, and retained when workspace-relative paths are rebound.
     #[serde(skip)]
     pub fallback_cache_dir: PathBuf,
+    /// Absolute base for relative paths outside any workspace folder. Empty when
+    /// the process directory is unavailable, leaving such paths unresolved.
+    #[serde(skip)]
+    pub working_directory: PathBuf,
 }
 
 impl Default for WorkspaceSettings {
@@ -36,6 +40,7 @@ impl Default for WorkspaceSettings {
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".pkl/cache"))
                 .unwrap_or_else(pkl_vfs::default_cache),
+            working_directory: std::env::current_dir().unwrap_or_default(),
         }
     }
 }
@@ -100,16 +105,18 @@ impl WorkspaceSettings {
                         .unwrap_or_else(|| {
                             workspaces
                                 .first()
-                                .map_or_else(|| path.clone(), |root| root.join(path))
+                                .unwrap_or(&self.working_directory)
+                                .join(path)
                         })
                 }
             })
             .collect();
         self.resolved_cache_dir = self.cache_dir.as_ref().map(|path| {
-            if !path.is_absolute()
-                && let Some(root) = workspaces.first()
-            {
-                root.join(path)
+            if !path.is_absolute() {
+                workspaces
+                    .first()
+                    .unwrap_or(&self.working_directory)
+                    .join(path)
             } else {
                 path.clone()
             }
@@ -126,6 +133,7 @@ impl WorkspaceSettings {
             module_paths: Vec::new(),
             resolved_cache_dir: None,
             fallback_cache_dir: self.fallback_cache_dir.clone(),
+            working_directory: self.working_directory.clone(),
         };
         settings.resolve_paths(workspaces);
         settings
@@ -229,7 +237,10 @@ mod tests {
         settings.resolve_paths(&[]);
         assert_eq!(
             settings.module_paths,
-            [PathBuf::from("missing"), PathBuf::from("present")]
+            [
+                settings.working_directory.join("missing"),
+                settings.working_directory.join("present")
+            ]
         );
     }
 }

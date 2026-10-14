@@ -160,11 +160,10 @@ fn string_literal_offers_union_alternatives() {
     });
 }
 
-/// A string literal in an `amends` clause currently produces no candidates:
-/// enumerating amenable modules requires the deferred Phase 6 package
-/// machinery (`TODO(completion-module-uri)`).
+/// Semantic completion offers nothing inside an `amends` URI; module URIs are
+/// completed by `module_uri_completion`, which the server consults first.
 #[test]
-fn string_literal_in_amends_clause_yields_no_candidates_yet() {
+fn string_literal_in_amends_clause_is_left_to_module_uri_completion() {
     let base = harness::load_test_base();
     let src = "amends \"/nonexistent.pkl\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
@@ -351,5 +350,30 @@ fn parameter_completion_shadows_module_property() {
             Some(lsp_types::CompletionItemKind::VARIABLE)
         );
         assert_eq!(values[0].detail.as_deref(), Some("String"));
+    });
+}
+
+#[test]
+fn implement_method_includes_inherited_abstract_methods() {
+    let base = harness::load_test_base();
+    let src = "abstract class Animal { function speak(): String }
+abstract class Mammal extends Animal {}
+class Dog extends Mammal {
+  
+}
+";
+    harness::with_snippet(&base, src, |tree, ctx| {
+        let items = labels(completion(
+            ctx.db,
+            ctx.root,
+            pkl_types::InFile::new(harness::file(ctx, 1), harness::offset(tree, 3, 1)),
+            |range| harness::range(tree, range),
+        ));
+        assert!(
+            items
+                .iter()
+                .any(|label| label.starts_with("function speak(): String")),
+            "{items:?}"
+        );
     });
 }

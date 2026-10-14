@@ -1,9 +1,5 @@
-//! End-to-end `hover` tests.
-//!
-//! Exercises the whole pipeline: `find_at` → `resolve_reference` →
-//! `render_markdown` → `Hover` wrap. Each test will panic on `todo!()` in
-//! the helper it reaches first; expect `resolve_reference` to be the first
-//! to fall, then `render_markdown`.
+//! End-to-end `hover` tests: cursor lookup, reference resolution and
+//! markdown rendering through the public `hover` entry point.
 
 mod harness;
 

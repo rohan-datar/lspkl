@@ -1,12 +1,10 @@
 //! Module URI routing, dependency lookup, and deterministic glob expansion.
-use crate::cli::PklCli;
 use crate::dto::{
     Dependency, PackageDependency, PackageMetadata, PackageUri, PklProject, resolved_to_dependency,
 };
 use crate::modulepath::{
-    ModulepathResolver, decode_path, normalize_relative, relative_uri, resolve_member, root_uri,
+    ModulepathResolver, decode_path, normalize_relative, relative_uri, resolve_member,
 };
-use crate::package_manager::PackageManager;
 use fluent_uri::{Uri, UriRef};
 use pkl_vfs::{Source, SourceLoader, effective_uri, url_to_path};
 use std::path::{Path, PathBuf};
@@ -16,6 +14,7 @@ pub struct ImportResolver<'a> {
     loader: &'a dyn SourceLoader,
     modulepath: ModulepathResolver<'a>,
     cache_dir: &'a Path,
+    facts: &'a dyn crate::routing::RoutingFacts,
 }
 impl<'a> ImportResolver<'a> {
     pub fn new(loader: &'a dyn SourceLoader, cache_dir: &'a Path) -> Self {
@@ -23,6 +22,7 @@ impl<'a> ImportResolver<'a> {
             loader,
             modulepath: ModulepathResolver::new(loader, cache_dir),
             cache_dir,
+            facts: &crate::routing::DiskRoutingFacts,
         }
     }
     pub fn with_settings(
@@ -34,17 +34,22 @@ impl<'a> ImportResolver<'a> {
             loader,
             modulepath: ModulepathResolver::with_modulepaths(loader, modulepaths, cache_dir),
             cache_dir,
+            facts: &crate::routing::DiskRoutingFacts,
         }
+    }
+    pub fn with_facts(mut self, facts: &'a dyn crate::routing::RoutingFacts) -> Self {
+        self.facts = facts;
+        self.modulepath.facts = facts;
+        self
     }
     fn dependency_root(&self, dependency: Dependency) -> Option<Uri<String>> {
         match dependency {
-            Dependency::LocalProject(dep) => root_uri(&dep.project_dir),
-            Dependency::Package(dep) => Some(
-                PackageManager::new(PklCli::default())
-                    .get_library_roots(&dep, self.cache_dir)
-                    .ok()??
-                    .package_root,
-            ),
+            Dependency::LocalProject(dep) => self
+                .facts
+                .root(crate::routing::RoutingRequest::ModuleRoot(dep.project_dir)),
+            Dependency::Package(dep) => self
+                .facts
+                .root(crate::routing::package_request(&dep, self.cache_dir)),
         }
     }
     fn resolve_dependency(
@@ -75,13 +80,21 @@ impl<'a> ImportResolver<'a> {
             let metadata_uri = pkl_vfs::path_to_uri(&path.with_extension("json")).ok()?;
             let json = self.loader.load(&metadata_uri, self.cache_dir).ok()?;
             let metadata: PackageMetadata = serde_json::from_str(json.contents()).ok()?;
-            let dep = PackageDependency {
-                uri: metadata.package_uri,
-                checksums: None,
-            };
-            return PackageManager::new(PklCli::default())
-                .get_resolved_dependencies(&dep, None, context, self.cache_dir)
-                .ok()?;
+            return Some(
+                metadata
+                    .dependencies
+                    .into_iter()
+                    .map(|(name, dep)| {
+                        let dependency = self.resolve_dependency(&dep.uri, context).unwrap_or(
+                            Dependency::Package(PackageDependency {
+                                uri: dep.uri,
+                                checksums: dep.checksums,
+                            }),
+                        );
+                        (name, dependency)
+                    })
+                    .collect(),
+            );
         }
         let project = context?;
         Some(
@@ -144,10 +157,10 @@ impl<'a> ImportResolver<'a> {
         else {
             return None;
         };
-        let roots = PackageManager::new(PklCli::default())
-            .get_library_roots(&dep, self.cache_dir)
-            .ok()?;
-        roots.is_none().then(|| {
+        let root = self
+            .facts
+            .root(crate::routing::package_request(&dep, self.cache_dir));
+        root.is_none().then(|| {
             let mut uri = dep.uri.to_display_string();
             if let Some(checksums) = dep.checksums.as_ref().or(dep.uri.checksums.as_ref()) {
                 uri.push_str("::sha256:");

@@ -24,11 +24,7 @@ fn analyze(source: &str, targets: &[(&str, &str)]) -> Vec<Diagnostic> {
     }
     let file = base.add(1, source);
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     let tree = ctx.tree(file).unwrap();
     let mut nodes = Vec::new();
     owners(tree, tree.root(), &mut nodes);

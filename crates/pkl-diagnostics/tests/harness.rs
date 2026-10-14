@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#[path = "../../pkl-db/tests/support/mod.rs"]
+pub mod input_support;
 use fluent_uri::Uri;
 use pkl_db::{Db, File, FileStatus, RootDatabase};
 use pkl_types::{AnalysisContext, BaseModule};
@@ -56,10 +58,12 @@ impl TestBase {
                 text: text.clone(),
             }),
         );
-        self.db
-            .borrow_mut()
+        let mut db = self.db.borrow_mut();
+        let file = db
             .upsert_file(&url, text, None, FileStatus::Present)
-            .unwrap()
+            .unwrap();
+        input_support::preload(&mut db);
+        file
     }
 }
 pub fn uri(name: u32) -> Uri<String> {

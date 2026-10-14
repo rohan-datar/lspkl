@@ -9,7 +9,6 @@ use crate::context::AnalysisContext;
 use crate::file_id::NodeRef;
 use crate::to_type::to_type_with_bindings;
 use crate::ty::{Type, TypeBindings};
-pub use crate::type_resolution::resolve_alias;
 
 #[derive(Debug)]
 pub struct ResolvedType {
@@ -21,18 +20,6 @@ impl ResolvedType {
     fn new(node: NodeRef, ty: Type) -> Self {
         Self { node, ty }
     }
-}
-
-/// Look up a class by simple name in `tree`. Searches only the module's
-/// top-level `Class` declarations — no aliases, no imports, no nested scope.
-///
-/// Returns the `NodeId` of the matching `NodeKind::Class` node, or `None` if
-/// no class with that name exists at module level.
-pub fn resolve_type_name_in_module(tree: &SyntaxTree, name: &str) -> Option<NodeId> {
-    nodes::Module::cast(tree, tree.root())?
-        .members(tree)
-        .filter(|&id| kind_is_class_or_alias(tree.kind(id)))
-        .find(|&id| tree.name(id) == Some(name))
 }
 
 /// Look up the definition of a declared type
@@ -145,10 +132,6 @@ pub fn is_subclass(mut a: crate::ClassId, b: crate::ClassId, db: &dyn pkl_db::Db
         a = class_id;
     }
     false
-}
-
-fn kind_is_class_or_alias(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::Class | NodeKind::TypeAlias)
 }
 
 /// Resolve the reference under the cursor at the byte `offset`.
@@ -320,7 +303,9 @@ pub(crate) fn declaration_type_with_bindings(
         _ => None,
     };
     if let Some(annotation) = annotation {
-        return crate::resolve_type_ref(db, decl, annotation, bindings);
+        return crate::type_resolution::resolve_type_ref_with_bindings(
+            db, decl, annotation, bindings,
+        );
     }
     if !bindings.is_empty() && matches!(decl.item, ItemId::Property(_) | ItemId::Method(_)) {
         let Some(node) = crate::item_node(db, decl) else {
@@ -359,12 +344,22 @@ pub(crate) fn compute_decl_type(db: &dyn pkl_db::Db, decl: crate::DeclId) -> Typ
         ItemId::Import(_) => return crate::type_resolution::import_type(db, decl),
         ItemId::Property(i) => {
             if let Some(ty) = arena_item(&items.properties, i).and_then(|decl| decl.ty.as_ref()) {
-                return crate::resolve_type_ref(db, decl, ty, &TypeBindings::new());
+                return crate::type_resolution::resolve_type_ref_with_bindings(
+                    db,
+                    decl,
+                    ty,
+                    &TypeBindings::new(),
+                );
             }
         }
         ItemId::Method(i) => {
             if let Some(ty) = arena_item(&items.methods, i).and_then(|decl| decl.result.as_ref()) {
-                return crate::resolve_type_ref(db, decl, ty, &TypeBindings::new());
+                return crate::type_resolution::resolve_type_ref_with_bindings(
+                    db,
+                    decl,
+                    ty,
+                    &TypeBindings::new(),
+                );
             }
         }
     }
@@ -430,7 +425,12 @@ pub fn super_type(ty: &Type, db: &dyn pkl_db::Db) -> Option<Type> {
                         )
                     })
                     .collect();
-                Some(crate::resolve_type_ref(db, decl, extends, &bindings).unaliased(db))
+                Some(
+                    crate::type_resolution::resolve_type_ref_with_bindings(
+                        db, decl, extends, &bindings,
+                    )
+                    .unaliased(db),
+                )
             } else if class.declaration.modifiers.contains(Modifiers::EXTERNAL)
                 && class.declaration.name.text(db) != "Any"
             {

@@ -7,7 +7,7 @@ use lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position,
     TextDocumentIdentifier, Uri,
 };
-use pkl_diagnostics::{Diagnostic, QuickFix, Severity, TextEdit};
+use pkl_diagnostics::{Diagnostic, QuickFix, TextEdit};
 
 use lsp_features::code_action::code_action;
 use pkl_syntax::{TextRange, TextSize};
@@ -21,22 +21,9 @@ fn doc_uri() -> Uri {
     Uri::from_str("file:///snippets/test.pkl").expect("static test URI must parse")
 }
 
-/// Mirror of what the server will do when it publishes diagnostics: convert
-/// an internal `Diagnostic` into its LSP wire form. Kept local until the
-/// publish path lands (`TODO(publish-diagnostics)`); if it grows, promote it
-/// into a shared crate rather than duplicating per-handler.
+/// The published form the client echoes back.
 fn to_lsp(d: &Diagnostic) -> lsp_types::Diagnostic {
-    lsp_types::Diagnostic {
-        range: range_for(d.span),
-        severity: match d.severity {
-            Severity::Error => Some(lsp_types::DiagnosticSeverity::ERROR),
-            Severity::Warning => Some(lsp_types::DiagnosticSeverity::WARNING),
-            Severity::Info => Some(lsp_types::DiagnosticSeverity::INFORMATION),
-            Severity::Hint => Some(lsp_types::DiagnosticSeverity::HINT),
-        },
-        message: d.message.clone(),
-        ..Default::default()
-    }
+    lsp_features::diagnostics::to_lsp(d, range_for(d.span))
 }
 
 fn params_for(echoed: &[lsp_types::Diagnostic]) -> CodeActionParams {

@@ -218,11 +218,6 @@ impl BaseModule {
         self.file_id
     }
 
-    /// Build a [`NodeRef`] that points into the base module.
-    pub fn node_ref(&self, node_id: NodeId) -> NodeRef {
-        NodeRef::new(self.file_id, node_id)
-    }
-
     // ---- Well-known type accessors ----
     pub fn function_n_type(&self, n: usize) -> Option<Type> {
         self.function_types.get(n).and_then(Clone::clone)

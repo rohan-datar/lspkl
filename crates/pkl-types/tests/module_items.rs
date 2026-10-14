@@ -1,3 +1,5 @@
+#[path = "../../pkl-db/tests/support/mod.rs"]
+mod input_support;
 use fluent_uri::Uri;
 use parking_lot::Mutex;
 use pkl_db::{File, FileStatus, RootDatabase};
@@ -414,6 +416,7 @@ fn foreign_inheritance_uses_the_request_roots_nearest_local_project() {
         &root.path().join("outer.pkl"),
         "import \"https://example.test/remote.pkl\"",
     );
+    input_support::preload(&mut db);
     let child_project = pkl_db::contextual_project(&db, main, child);
     assert_eq!(pkl_db::contextual_project(&db, main, remote), child_project);
     let inner_members = module_members(&db, ModuleId::new(&db, remote, main));

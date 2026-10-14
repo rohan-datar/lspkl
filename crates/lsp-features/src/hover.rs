@@ -101,7 +101,7 @@ pub fn render_markdown(
 
     // Place documentation after the fenced declaration signature.
     let mut md = format!("```pkl\n{signature}\n```");
-    if let Some(docs) = doc_comment_text(tree, node_id) {
+    if let Some(docs) = tree.doc_comment_text(node_id) {
         md.push_str("\n\n---\n\n");
         md.push_str(&docs);
     }
@@ -167,8 +167,7 @@ fn method_signature(
 
 /// Render `<A, B>` from a `TypeParameterList`.
 ///
-/// Variance markers (`in`/`out`) are anonymous grammar tokens the parser
-/// does not keep, so only names are rendered.
+/// Render parameter names without variance markers.
 fn type_parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
     let parts: Vec<&str> = TypeParameterList::cast(tree, list)
         .into_iter()
@@ -178,9 +177,7 @@ fn type_parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
     format!("<{}>", parts.join(", "))
 }
 
-/// Render `(n: Int, other)` from a `ParameterList`, mirroring the
-/// `PklParameterList` arm (each element through the `PklTypedIdentifier`
-/// arm; blank identifiers render as `_`).
+/// Render typed parameters; blank identifiers render as `_`.
 fn parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
     let params: Vec<String> = ParameterList::cast(tree, list)
         .into_iter()
@@ -190,10 +187,8 @@ fn parameters_text(tree: &SyntaxTree, list: NodeId) -> String {
             _ => {
                 let name = tree.name(p).unwrap_or("_");
                 match TypedIdentifier::cast(tree, p).and_then(|p| p.type_annotation(tree)) {
-                    // Raw source text: `to_type` currently drops explicit
-                    // type arguments (`Function1<A, B>` renders as
-                    // `Function1`), so the slice is more faithful for
-                    // parameters.
+                    // Preserve the annotation's source spelling rather than
+                    // normalizing aliases and formatting through semantic types.
                     Some(ann) => format!(
                         "{name}: {}",
                         TypeAnnotation::cast(tree, ann)
@@ -277,27 +272,5 @@ fn modifiers_prefix(tree: &SyntaxTree, node_id: NodeId) -> String {
         String::new()
     } else {
         format!("{} ", mods.join(" "))
-    }
-}
-
-/// The declaration's doc comment with `///` prefixes stripped (one space
-/// after each marker is dropped too), mirroring `PklDocComment.contents`.
-///
-/// Member links inside comments are left as plain text — link resolution
-/// is deferred alongside DocCommentMemberLinkCompletionProvider (DESIGN.md §5).
-fn doc_comment_text(tree: &SyntaxTree, node_id: NodeId) -> Option<String> {
-    let lines: Vec<String> = tree
-        .doc_comments(node_id)
-        .iter()
-        .flat_map(|doc| doc.trim().lines())
-        .map(|line| {
-            let stripped = line.strip_prefix("///").unwrap_or(line);
-            stripped.strip_prefix(' ').unwrap_or(stripped).to_string()
-        })
-        .collect();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
     }
 }

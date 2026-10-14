@@ -7,7 +7,6 @@ use pkl_syntax::ast::NodeId;
 use pkl_syntax::ast::nodes::{
     Class, ClassBody, ClassMethod, MethodHeader, ParameterList, TypeAnnotation, TypedIdentifier,
 };
-use pkl_types::resolver::resolve_type_name;
 use pkl_types::{AnalysisContext, NodeRef};
 
 pub(crate) fn completions(
@@ -24,43 +23,26 @@ pub(crate) fn completions(
         return Vec::new();
     };
 
-    // The superclass whose abstract members we're completing.
-    let Some(extends_target) = def_class.extends_target(tree) else {
-        return Vec::new();
-    };
-    let segments = tree.qualified_identifier_segments(extends_target);
-    let Some(super_class) = resolve_type_name(ctx, &segments, NodeRef::new(file, extends_target))
+    let Some(class) = pkl_types::class_id(ctx.db, NodeRef::new(file, def_class.id()), ctx.root)
     else {
         return Vec::new();
     };
-
-    // Methods already declared in this class body.
-    let declared: std::collections::HashSet<String> = body
-        .members(tree)
-        .filter_map(|m| tree.name(m).map(str::to_string))
-        .collect();
-
-    let super_tree = match ctx.tree(super_class.file) {
-        Some(t) => t,
-        None => return Vec::new(),
-    };
-    let super_body = Class::cast(super_tree, super_class.value)
-        .and_then(|class| class.body(super_tree))
-        .unwrap_or(super_class.value);
-
+    let table = pkl_types::class_members(ctx.db, class);
     let mut out = Vec::new();
-    for method in ClassBody::cast(super_tree, super_body)
-        .into_iter()
-        .flat_map(|body| body.members(super_tree))
-        .filter(|id| ClassMethod::cast(super_tree, *id).is_some())
-    {
-        let Some(name) = super_tree.name(method) else {
-            continue;
-        };
-        if declared.contains(name) || !is_abstract(super_tree, method) {
+    for member in &table.entries[table.own_len..] {
+        if member.kind != pkl_types::MemberKind::Method {
             continue;
         }
-        let signature = render_method_signature(super_tree, method);
+        let Some(method) = pkl_types::item_node(ctx.db, member.declaration) else {
+            continue;
+        };
+        let Some(super_tree) = ctx.tree(method.file) else {
+            continue;
+        };
+        if !is_abstract(super_tree, method.value) {
+            continue;
+        }
+        let signature = render_method_signature(super_tree, method.value);
         out.push(CompletionItem {
             label: format!("{signature} = …"),
             kind: Some(CompletionItemKind::METHOD),

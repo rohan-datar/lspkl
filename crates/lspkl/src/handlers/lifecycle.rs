@@ -108,17 +108,13 @@ pub fn did_close(
 ) -> Result<ReloadWork> {
     Ok(workspace.apply_close(params)?)
 }
-pub fn did_save(workspace: &mut Workspace, params: DidSaveTextDocumentParams) -> Result<()> {
-    workspace.apply_save(params)?;
-    Ok(())
-}
 pub fn did_change_configuration(
     workspace: &mut Workspace,
     params: DidChangeConfigurationParams,
 ) -> Result<()> {
     let settings = WorkspaceSettings::parse(params.settings)
         .map_err(|err| HandlerError::InvalidParams(err.to_string()))?;
-    workspace.apply_settings(settings);
+    workspace.apply_explicit_settings(settings);
     Ok(())
 }
 pub fn did_change_workspace_folders(

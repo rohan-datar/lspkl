@@ -27,7 +27,6 @@ fn diagnostic_snapshots() {
             pkl_syntax::parse(&source)
                 .unwrap_or_else(|err| panic!("parse failed for {}: {err}", relative.display())),
         );
-        use pkl_db::Db;
         let mut db = pkl_db::RootDatabase::default();
         let file = db
             .upsert_file(
@@ -37,16 +36,8 @@ fn diagnostic_snapshots() {
                 pkl_db::FileStatus::Present,
             )
             .unwrap();
-        let base_file = db
-            .file(&fluent_uri::Uri::parse("pkl:base".to_owned()).unwrap())
-            .unwrap();
-        let base = pkl_types::BaseModule::from_tree(
-            &db,
-            base_file,
-            pkl_db::parse(&db, base_file).as_ref().unwrap().clone(),
-        )
-        .unwrap();
-        let ctx = pkl_types::AnalysisContext::new(&base, &db, file);
+        harness::input_support::preload(&mut db);
+        let ctx = pkl_types::AnalysisContext::for_root(&db, file);
         let diagnostics = engine.analyze(&ctx, file);
         let rendered = render_diagnostics(&diagnostics, tree.line_index());
 
@@ -68,8 +59,7 @@ fn modulepath_imports_do_not_use_package_uri_rules() {
 
     let db = base.db.borrow();
 
-    let ctx = pkl_types::AnalysisContext::new(
-        &base,
+    let ctx = pkl_types::AnalysisContext::for_root(
         &*db,
         pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
     );
@@ -122,8 +112,7 @@ fn malformed_source_remains_analyzable_at_eof() {
 
     let db = base.db.borrow();
 
-    let ctx = pkl_types::AnalysisContext::new(
-        &base,
+    let ctx = pkl_types::AnalysisContext::for_root(
         &*db,
         pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
     );
@@ -165,11 +154,7 @@ fn analyzer_walk_keeps_file_identity_and_honors_subtree_skips() {
     base.add(7, first.source());
     base.add(8, second.source());
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(7)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(7)).unwrap());
     let engine = DiagnosticsEngine::new().with(Box::new(SkipClassBodies));
     let first_diagnostics = engine.analyze(&ctx, harness::file(&ctx, 7));
     assert_eq!(first_diagnostics.len(), 1);
@@ -206,8 +191,7 @@ fn constrained_casts_and_type_tests_are_not_reported_as_redundant() {
 
     let db = base.db.borrow();
 
-    let ctx = pkl_types::AnalysisContext::new(
-        &base,
+    let ctx = pkl_types::AnalysisContext::for_root(
         &*db,
         pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
     );
@@ -238,7 +222,7 @@ fn let_binding_is_unresolved_in_its_initializer_but_visible_in_its_body() {
     let source = "result = let (value = value) value\n";
     let file = base.add(1, source);
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, file);
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, file);
     let diagnostics = DiagnosticsEngine::with_default_analyzers().analyze(&ctx, file);
     let unresolved: Vec<_> = diagnostics
         .iter()

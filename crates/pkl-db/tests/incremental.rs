@@ -3,7 +3,63 @@ use parking_lot::Mutex;
 use pkl_db::{Db, File, FileStatus, ImportResolution, RootDatabase, parse, resolve_import};
 use pkl_syntax::ast::{NodeId, NodeKind};
 use pkl_vfs::{StandardSourceLoader, path_to_uri};
+use salsa::Setter;
 use std::sync::Arc;
+
+fn load_source(db: &mut RootDatabase, uri: &Uri<String>) -> Result<File, pkl_vfs::FileError> {
+    let loader = db.source_loader_handle();
+    let text = loader
+        .load(uri, db.config().cache_dir(db))
+        .ok()
+        .map(|source| source.text.clone());
+    db.apply_source(uri, text)
+}
+fn close_editor(db: &mut RootDatabase, uri: &Uri<String>) -> Result<File, pkl_vfs::FileError> {
+    if let Some(file) = db.known_file(uri) {
+        file.set_status(db).to(FileStatus::Present);
+        file.set_version(db).to(None);
+    }
+    load_source(db, uri)
+}
+fn refresh_inputs(db: &mut RootDatabase) {
+    db.request_routing_refresh();
+    let loader = db.source_loader_handle();
+    let updates = db
+        .directory_roots()
+        .iter()
+        .map(|root| pkl_db::DirectoryUpdate::load(&*loader, root))
+        .collect();
+    db.apply_directory_updates(updates);
+    for file in db.all_files() {
+        let _ = pkl_db::import_graph(db, file);
+    }
+    settle_inputs(db);
+}
+fn settle_inputs(db: &mut RootDatabase) {
+    let loader = db.source_loader_handle();
+    loop {
+        let jobs = db.pending_io();
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            let update = match job {
+                pkl_db::PendingIo::Source { uri, cache_dir } => pkl_db::IoUpdate::Source {
+                    text: loader
+                        .load(&uri, &cache_dir)
+                        .ok()
+                        .map(|source| source.text.clone()),
+                    uri,
+                },
+                job => job.load(&*loader, &StandardSourceLoader::new()),
+            };
+            db.apply_io(update).unwrap();
+        }
+        for file in db.all_files() {
+            let _ = pkl_db::import_graph(db, file);
+        }
+    }
+}
 
 fn import_owner(db: &RootDatabase, file: File) -> NodeId {
     let tree = parse(db, file).as_ref().unwrap();
@@ -14,13 +70,19 @@ fn import_owner(db: &RootDatabase, file: File) -> NodeId {
         .unwrap()
 }
 fn module(db: &mut RootDatabase, path: &std::path::Path, text: &str) -> File {
-    db.upsert_file(
-        &path_to_uri(path).unwrap(),
-        Arc::from(text),
-        None,
-        FileStatus::Present,
-    )
-    .unwrap()
+    let file = db
+        .upsert_file(
+            &path_to_uri(path).unwrap(),
+            Arc::from(text),
+            None,
+            FileStatus::Present,
+        )
+        .unwrap();
+    for source in db.all_files() {
+        let _ = pkl_db::import_graph(db, source);
+    }
+    settle_inputs(db);
+    file
 }
 
 fn edge(db: &RootDatabase, root: File, file: File, owner: NodeId) -> ImportResolution {
@@ -99,13 +161,13 @@ fn missing_target_creation_and_deletion_change_the_existing_import() {
     let target = db.file(&target_uri).unwrap();
     assert_eq!(target.status(&db), FileStatus::Missing);
     std::fs::write(root.path().join("target.pkl"), "value = 1").unwrap();
-    db.refresh_file(&target_uri).unwrap();
+    load_source(&mut db, &target_uri).unwrap();
     assert_eq!(
         resolve_import(&db, file, owner, None),
         ImportResolution::Single(target)
     );
     std::fs::remove_file(root.path().join("target.pkl")).unwrap();
-    db.refresh_file(&target_uri).unwrap();
+    load_source(&mut db, &target_uri).unwrap();
     assert!(matches!(
         resolve_import(&db, file, owner, None),
         ImportResolution::Unresolved { .. }
@@ -129,15 +191,15 @@ fn watched_glob_membership_changes_without_editing_importer() {
     std::fs::create_dir(root.path().join("targets")).unwrap();
     let path = root.path().join("targets/a.pkl");
     std::fs::write(&path, "value = 1").unwrap();
-    db.reload_directories();
+    refresh_inputs(&mut db);
     let target = db.file(&path_to_uri(&path).unwrap()).unwrap();
     assert_eq!(
         resolve_import(&db, file, owner, None),
         ImportResolution::Glob(vec![target])
     );
     std::fs::remove_file(&path).unwrap();
-    db.refresh_file(&path_to_uri(&path).unwrap()).unwrap();
-    db.reload_directories();
+    load_source(&mut db, &path_to_uri(&path).unwrap()).unwrap();
+    refresh_inputs(&mut db);
     assert_eq!(
         resolve_import(&db, file, owner, None),
         ImportResolution::Glob(Vec::new())
@@ -153,10 +215,10 @@ fn backing_refresh_preserves_editor_text_until_close() {
     let mut db = RootDatabase::default();
     let file = db.open_file(&uri, Arc::from("value = 2"), Some(3)).unwrap();
     std::fs::write(&path, "value = 4").unwrap();
-    db.refresh_file(&uri).unwrap();
+    load_source(&mut db, &uri).unwrap();
     assert_eq!(&**file.text(&db), "value = 2");
     assert_eq!(file.version(&db), Some(3));
-    db.close_file(&uri).unwrap();
+    close_editor(&mut db, &uri).unwrap();
     assert_eq!(&**file.text(&db), "value = 4");
     assert_eq!(file.version(&db), None);
     assert_eq!(file.status(&db), FileStatus::Present);
@@ -184,7 +246,7 @@ fn sdk_editor_lifecycle_does_not_reparse_immutable_text() {
     assert_eq!(file.status(&db), FileStatus::Open);
     assert_eq!(file.version(&db), Some(5));
     assert!(Arc::ptr_eq(&tree, parse(&db, file).as_ref().unwrap()));
-    db.close_file(&uri).unwrap();
+    close_editor(&mut db, &uri).unwrap();
     assert_eq!(file.status(&db), FileStatus::Present);
     assert_eq!(file.version(&db), None);
     assert!(Arc::ptr_eq(&tree, parse(&db, file).as_ref().unwrap()));
@@ -265,6 +327,10 @@ fn project_metadata_refresh_reroutes_only_its_own_imports_without_reparsing() {
         ImportResolution::Single(b_target)
     );
     assert!(events.lock().is_empty());
+    for file in db.all_files() {
+        let _ = pkl_db::import_graph(&db, file);
+    }
+    settle_inputs(&mut db);
     assert_eq!(
         resolve_import(&db, a, a_owner, None),
         ImportResolution::Single(a_second)
@@ -323,6 +389,10 @@ fn remote_descendants_inherit_project_context_and_observe_its_refresh() {
         ImportResolution::Single(target_first)
     );
     db.set_projects(vec![project(root.path(), "second")]);
+    for file in db.all_files() {
+        let _ = pkl_db::import_graph(&db, file);
+    }
+    settle_inputs(&mut db);
     assert_eq!(
         edge(&db, local, second, owner),
         ImportResolution::Single(target_second)
@@ -351,9 +421,9 @@ fn missing_relative_modulepath_creation_resolves_without_settings_refresh() {
     let path = root.path().join("missing/target.pkl");
     std::fs::create_dir(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "value = 1").unwrap();
-    db.reload_directories();
+    refresh_inputs(&mut db);
     let uri = path_to_uri(&path).unwrap();
-    let target = db.refresh_file(&uri).unwrap();
+    let target = load_source(&mut db, &uri).unwrap();
     assert_eq!(
         resolve_import(&db, file, owner, None),
         ImportResolution::Single(target)
@@ -506,8 +576,8 @@ fn missing_local_dependency_member_creation_resolves_without_metadata_refresh() 
     );
     std::fs::create_dir(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "value = 1").unwrap();
-    db.reload_directories();
-    let target = db.refresh_file(&target_uri).unwrap();
+    refresh_inputs(&mut db);
+    let target = load_source(&mut db, &target_uri).unwrap();
     assert_eq!(
         edge(&db, file, file, owner),
         ImportResolution::Single(target)

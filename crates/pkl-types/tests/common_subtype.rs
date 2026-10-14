@@ -8,7 +8,7 @@ use pkl_types::Type;
 fn unknown_has_no_common_subtype_with_anything() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(!Type::Unknown.has_common_subtype_with(base.string_type(), ctx.db));
     assert!(!Type::Unknown.has_common_subtype_with(base.int_type(), ctx.db));
@@ -18,7 +18,7 @@ fn unknown_has_no_common_subtype_with_anything() {
 fn anything_has_no_common_subtype_with_unknown() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         !base
@@ -36,7 +36,7 @@ fn anything_has_no_common_subtype_with_unknown() {
 fn nothing_has_no_common_subtype_with_anything() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(!Type::Nothing.has_common_subtype_with(base.int_type(), ctx.db));
     assert!(
@@ -50,7 +50,7 @@ fn nothing_has_no_common_subtype_with_anything() {
 fn int_and_string_are_disjoint() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         !base
@@ -68,7 +68,7 @@ fn int_and_string_are_disjoint() {
 fn int_and_boolean_are_disjoint() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         !base
@@ -83,7 +83,7 @@ fn int_and_float_are_disjoint() {
     // subclass of the other and no class in base.pkl extends both.
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         !base
@@ -96,7 +96,7 @@ fn int_and_float_are_disjoint() {
 fn int_and_number_overlap() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         base.int_type()
@@ -112,7 +112,7 @@ fn int_and_number_overlap() {
 fn union_overlaps_if_one_branch_does() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     let int_or_string = Type::union(
         [base.int_type().clone(), base.string_type().clone()],
@@ -132,7 +132,7 @@ fn union_overlaps_if_one_branch_does() {
 fn union_is_disjoint_when_no_branch_overlaps() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     let int_or_string = Type::union(
         [base.int_type().clone(), base.string_type().clone()],
@@ -152,7 +152,7 @@ fn union_is_disjoint_when_no_branch_overlaps() {
 fn union_of_unions_propagates_correctly() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     // (Int | String) | Boolean  vs  Boolean  → true, via the right branch.
     let inner = Type::union(
@@ -168,7 +168,7 @@ fn union_of_unions_propagates_correctly() {
 fn distinct_string_literals_are_disjoint() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     let a = Type::string_literal("a");
     let b = Type::string_literal("b");
@@ -180,7 +180,7 @@ fn distinct_string_literals_are_disjoint() {
 fn string_literal_is_disjoint_from_int() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     let hello = Type::string_literal("hello");
     assert!(!hello.has_common_subtype_with(base.int_type(), ctx.db));
@@ -191,7 +191,7 @@ fn string_literal_is_disjoint_from_int() {
 fn symmetric_on_disjoint_pairs() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     let pairs: Vec<(&Type, &Type)> = vec![
         (base.int_type(), base.string_type()),
@@ -214,7 +214,7 @@ fn symmetric_on_disjoint_pairs() {
 fn non_null_alias_overlaps_with_int() {
     let base = harness::load_test_base();
     let db = base.db.borrow();
-    let ctx = pkl_types::AnalysisContext::new(&base, &*db, base.file_id());
+    let ctx = pkl_types::AnalysisContext::for_root(&*db, base.file_id());
 
     assert!(
         base.non_null_type()

@@ -1,6 +1,9 @@
 //! Incremental file, project, and import database. Source fetching is external to queries.
 
+mod io;
 pub mod settings;
+use io::DatabaseRoutingFacts;
+pub use io::{IoUpdate, PendingIo};
 
 use ::line_index::LineIndex;
 use fluent_uri::Uri;
@@ -70,9 +73,11 @@ pub struct Project {
 pub struct Directory {
     #[returns(ref)]
     pub members: Vec<Uri<String>>,
-    /// Content fingerprints for routing metadata/cache inspection outside SourceLoader.
+}
+#[salsa::input]
+pub struct RoutingInput {
     #[returns(ref)]
-    pub backing_state: Vec<(String, u64)>,
+    pub root: Option<Uri<String>>,
 }
 
 /// Canonical URI identities, shared by database snapshots. Never caches query results.
@@ -81,12 +86,15 @@ pub struct Files {
     entries: Mutex<BTreeMap<String, File>>,
     directories: Mutex<BTreeMap<String, Directory>>,
     projects: Mutex<BTreeMap<PathBuf, Project>>,
+    routing: Mutex<BTreeMap<String, (pkl_project::routing::RoutingRequest, RoutingInput)>>,
+    pending_sources: Mutex<BTreeMap<String, Uri<String>>>,
+    pending_directories: Mutex<BTreeMap<String, Uri<String>>>,
+    pending_routing: Mutex<BTreeMap<String, pkl_project::routing::RoutingRequest>>,
 }
 
 #[salsa::db]
 pub trait Db: salsa::Database {
     fn files(&self) -> &Files;
-    fn source_loader(&self) -> &dyn SourceLoader;
     fn config(&self) -> WorkspaceConfig;
     fn file(&self, uri: &Uri<String>) -> Result<File, FileError>;
     fn directory(&self, root: &Uri<String>) -> Result<Directory, FileError>;
@@ -107,39 +115,56 @@ impl Db for RootDatabase {
     fn files(&self) -> &Files {
         &self.files
     }
-    fn source_loader(&self) -> &dyn SourceLoader {
-        &*self.loader
-    }
     fn config(&self) -> WorkspaceConfig {
         self.config.expect("database initialized")
     }
     fn file(&self, uri: &Uri<String>) -> Result<File, FileError> {
         let uri = effective_uri(uri)?;
-        let mut entries = self.files.entries.lock();
-        if let Some(file) = entries.get(uri.as_str()) {
-            return Ok(*file);
-        }
-        let source = self.loader.load(&uri, self.config().cache_dir(self));
-        let (text, status) = match source {
-            Ok(source) => (source.text.clone(), FileStatus::Present),
-            Err(_) => (Arc::from(""), FileStatus::Missing),
+        let file = {
+            let mut entries = self.files.entries.lock();
+            match entries.get(uri.as_str()) {
+                Some(file) => *file,
+                None => {
+                    self.files
+                        .pending_sources
+                        .lock()
+                        .insert(uri.as_str().to_owned(), uri.clone());
+                    let project = self.local_project(&uri);
+                    let file = File::new(
+                        self,
+                        uri.clone(),
+                        Arc::from(""),
+                        None,
+                        FileStatus::Missing,
+                        project,
+                    );
+                    entries.insert(uri.as_str().to_owned(), file);
+                    file
+                }
+            }
         };
-        let project = self.local_project(&uri);
-        let file = File::new(self, uri.clone(), text, None, status, project);
-        entries.insert(uri.as_str().to_owned(), file);
+        io::observe_source(self, &uri);
         Ok(file)
     }
     fn directory(&self, root: &Uri<String>) -> Result<Directory, FileError> {
         let root = effective_uri(root)?;
-        let mut directories = self.files.directories.lock();
-        if let Some(directory) = directories.get(root.as_str()) {
-            return Ok(*directory);
-        }
-        // A missing directory still has an input, so watched creation invalidates globs.
-        let members = self.loader.list_files(&root).unwrap_or_default();
-        let backing_state = backing_state(&root, &members);
-        let directory = Directory::new(self, members, backing_state);
-        directories.insert(root.as_str().to_owned(), directory);
+        let directory = {
+            let mut directories = self.files.directories.lock();
+            match directories.get(root.as_str()) {
+                Some(directory) => *directory,
+                None => {
+                    // A missing directory still has an input, so watched creation invalidates globs.
+                    self.files
+                        .pending_directories
+                        .lock()
+                        .insert(root.as_str().to_owned(), root.clone());
+                    let directory = Directory::new(self, Vec::new());
+                    directories.insert(root.as_str().to_owned(), directory);
+                    directory
+                }
+            }
+        };
+        io::observe_directory(self, &root);
         Ok(directory)
     }
 }
@@ -210,13 +235,10 @@ impl RootDatabase {
                 .lock()
                 .get(update.root.as_str())
                 .copied();
-            if let Some(directory) = directory {
-                if directory.members(self) != &update.members {
-                    directory.set_members(self).to(update.members);
-                }
-                if directory.backing_state(self) != &update.backing_state {
-                    directory.set_backing_state(self).to(update.backing_state);
-                }
+            if let Some(directory) = directory
+                && directory.members(self) != &update.members
+            {
+                directory.set_members(self).to(update.members);
             }
         }
     }
@@ -226,6 +248,8 @@ impl RootDatabase {
         uri: &Uri<String>,
         text: Option<Arc<str>>,
     ) -> Result<File, FileError> {
+        let canonical = effective_uri(uri)?;
+        self.files.pending_sources.lock().remove(canonical.as_str());
         if let Some(file) = self.known_file(uri)
             && (file.status(self) == FileStatus::Open || file.uri(self).scheme().as_str() == "pkl")
         {
@@ -237,32 +261,6 @@ impl RootDatabase {
             FileStatus::Missing
         };
         self.upsert_file(uri, text.unwrap_or_else(|| Arc::from("")), None, status)
-    }
-    pub fn begin_close(&mut self, uri: &Uri<String>) {
-        if let Some(file) = self.known_file(uri) {
-            file.set_status(self).to(FileStatus::Present);
-            file.set_version(self).to(None);
-        }
-    }
-    pub fn set_directory(
-        &mut self,
-        root: &Uri<String>,
-        members: Vec<Uri<String>>,
-    ) -> Result<(), FileError> {
-        let root = effective_uri(root)?;
-        let directory = self.files.directories.lock().get(root.as_str()).copied();
-        if let Some(directory) = directory {
-            if directory.members(self) != &members {
-                directory.set_members(self).to(members);
-            }
-        } else {
-            let directory = Directory::new(self, members, Vec::new());
-            self.files
-                .directories
-                .lock()
-                .insert(root.as_str().to_owned(), directory);
-        }
-        Ok(())
     }
     fn local_project(&self, uri: &Uri<String>) -> Option<Project> {
         let path = url_to_path(uri).ok()?;
@@ -279,6 +277,21 @@ impl RootDatabase {
         let cache = settings.effective_cache_dir().to_owned();
         if config.cache_dir(self) != &cache {
             config.set_cache_dir(self).to(cache);
+            let remote: Vec<_> = self
+                .all_files()
+                .into_iter()
+                .filter(|file| {
+                    file.uri(self).scheme().as_str() == "https"
+                        && file.status(self) == FileStatus::Missing
+                })
+                .map(|file| file.uri(self).clone())
+                .collect();
+            for uri in remote {
+                self.files
+                    .pending_sources
+                    .lock()
+                    .insert(uri.as_str().to_owned(), uri);
+            }
         }
         if config.modulepath(self) != &settings.module_paths {
             config
@@ -329,6 +342,7 @@ impl RootDatabase {
         status: FileStatus,
     ) -> Result<File, FileError> {
         let uri = effective_uri(uri)?;
+        self.files.pending_sources.lock().remove(uri.as_str());
         let file = if let Some(file) = self.known_file(&uri) {
             file
         } else {
@@ -359,50 +373,8 @@ impl RootDatabase {
     ) -> Result<File, FileError> {
         self.upsert_file(uri, text, version, FileStatus::Open)
     }
-    pub fn refresh_file(&mut self, uri: &Uri<String>) -> Result<File, FileError> {
-        let file = self.file(uri)?;
-        if file.status(self) == FileStatus::Open || file.uri(self).scheme().as_str() == "pkl" {
-            return Ok(file);
-        }
-        let source = self
-            .loader
-            .load(file.uri(self), self.config().cache_dir(self));
-        let (text, status) = match source {
-            Ok(source) => (source.text.clone(), FileStatus::Present),
-            Err(_) => (Arc::from(""), FileStatus::Missing),
-        };
-        self.upsert_file(uri, text, None, status)
-    }
-    pub fn close_file(&mut self, uri: &Uri<String>) -> Result<File, FileError> {
-        self.begin_close(uri);
-        self.refresh_file(uri)
-    }
-    pub fn open_files(&self) -> Vec<File> {
-        self.files
-            .entries
-            .lock()
-            .values()
-            .copied()
-            .filter(|file| file.status(self) == FileStatus::Open)
-            .collect()
-    }
     pub fn all_files(&self) -> Vec<File> {
         self.files.entries.lock().values().copied().collect()
-    }
-    /// Reload observed directory inputs after watched creation/deletion or cache fetches.
-    pub fn reload_directories(&mut self) {
-        let directories = self.files.directories.lock().clone();
-        for (root, directory) in directories {
-            let root = Uri::parse(root).expect("canonical directory URI");
-            let members = self.loader.list_files(&root).unwrap_or_default();
-            let state = backing_state(&root, &members);
-            if directory.backing_state(self) != &state {
-                directory.set_backing_state(self).to(state);
-            }
-            if directory.members(self) != &members {
-                directory.set_members(self).to(members);
-            }
-        }
     }
 }
 
@@ -525,8 +497,10 @@ pub fn with_module_resolver<R>(
 ) -> R {
     let loader = DatabaseSourceLoader::new(db);
     let config = db.config();
+    let facts = DatabaseRoutingFacts { db };
     let resolver =
-        ImportResolver::with_settings(&loader, config.modulepath(db), config.cache_dir(db));
+        ImportResolver::with_settings(&loader, config.modulepath(db), config.cache_dir(db))
+            .with_facts(&facts);
     work(&resolver)
 }
 
@@ -537,12 +511,17 @@ pub fn resolve_import(
     owner: NodeId,
     context: Option<Project>,
 ) -> ImportResolution {
-    let unresolved = || ImportResolution::Unresolved {
-        package_to_download: None,
-    };
-    let Ok(tree) = parse(db, file) else {
-        return unresolved();
-    };
+    match import_reference(db, file, owner) {
+        Some((reference, glob)) => resolve_module_uri(db, file, reference, glob, context),
+        None => ImportResolution::Unresolved {
+            package_to_download: None,
+        },
+    }
+}
+
+/// The lowered URI of an import-like `owner` and whether it is a glob import.
+fn import_reference(db: &dyn Db, file: File, owner: NodeId) -> Option<(String, bool)> {
+    let tree: &SyntaxTree = parse(db, file).as_ref().ok()?;
     let reference = if owner == NodeId::ROOT {
         tree.module_extends_or_amends_target()
     } else {
@@ -555,11 +534,8 @@ pub fn resolve_import(
                 ModuleExtendsAmendsClause::cast(tree, owner).and_then(|node| node.target(tree))
             })
             .and_then(|string| tree.escaped_string_literal(string))
-    };
-    let Some(reference) = reference else {
-        return unresolved();
-    };
-    resolve_module_uri(db, file, reference, tree.is_glob_import(owner), context)
+    }?;
+    Some((reference, tree.is_glob_import(owner)))
 }
 
 /// Resolve a lowered URI without depending on the importing source tree.
@@ -571,42 +547,33 @@ pub fn resolve_module_uri(
     glob: bool,
     context: Option<Project>,
 ) -> ImportResolution {
+    resolve_module_uri_uncached(db, file, reference, glob, context)
+}
+
+/// Re-run an import's resolution past the memo, so request-scoped I/O
+/// discovery observes the source and routing inputs it reads.
+pub(crate) fn replay_import(db: &dyn Db, file: File, owner: NodeId, context: Option<Project>) {
+    if let Some((reference, glob)) = import_reference(db, file, owner) {
+        resolve_module_uri_uncached(db, file, reference, glob, context);
+    }
+}
+
+fn resolve_module_uri_uncached(
+    db: &dyn Db,
+    file: File,
+    reference: String,
+    glob: bool,
+    context: Option<Project>,
+) -> ImportResolution {
     let unresolved = || ImportResolution::Unresolved {
         package_to_download: None,
     };
-    let config = db.config();
     let project = if file.uri(db).scheme().as_str() == "file" {
         project_for_file(db, file)
     } else {
         context
     };
     let project = project.and_then(|project| project.metadata(db).as_deref());
-    // Package availability and root classification inspect deterministic disk state.
-    // Observe only roots relevant to this resolution; ordinary text edits leave these inputs alone.
-    let mut roots = config.modulepath(db).clone();
-    if let Some(project) = project {
-        roots.extend(
-            project
-                .metadata
-                .evaluator_settings
-                .iter()
-                .flat_map(|settings| settings.module_path.iter().flatten())
-                .map(|path| project.project_dir().unwrap_or_default().join(path)),
-        );
-    }
-    if reference.starts_with("package:")
-        || reference.starts_with("@")
-        || file.uri(db).scheme().as_str() == "jar"
-    {
-        roots.push(config.cache_dir(db).clone());
-    }
-    for root in roots {
-        if let Ok(uri) = pkl_vfs::path_to_uri(&root)
-            && let Ok(directory) = db.directory(&uri)
-        {
-            let _ = directory.backing_state(db);
-        }
-    }
     let source = Source {
         url: file.uri(db).clone(),
         text: Arc::from(""),
@@ -649,50 +616,16 @@ pub fn contextual_project(db: &dyn Db, root: File, file: File) -> Option<Project
         .flatten()
 }
 
-fn backing_state(root: &Uri<String>, members: &[Uri<String>]) -> Vec<(String, u64)> {
-    use std::{
-        hash::{Hash, Hasher},
-        io::Read,
-    };
-    let mut result = Vec::new();
-    for uri in std::iter::once(root).chain(members) {
-        // Module text has its own File input; only routing artifacts need fingerprints.
-        if uri != root && uri.path().as_str().ends_with(".pkl") {
-            continue;
-        }
-        let Ok(path) = url_to_path(uri) else {
-            continue;
-        };
-        let Ok(mut file) = std::fs::File::open(path) else {
-            continue;
-        };
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        let mut buffer = [0u8; 8192];
-        loop {
-            match file.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(length) => buffer[..length].hash(&mut hash),
-                Err(_) => break,
-            }
-        }
-        result.push((uri.as_str().to_owned(), hash.finish()));
-    }
-    result
-}
-
 pub struct DirectoryUpdate {
     root: Uri<String>,
     members: Vec<Uri<String>>,
-    backing_state: Vec<(String, u64)>,
 }
 impl DirectoryUpdate {
     pub fn load(loader: &dyn SourceLoader, root: &Uri<String>) -> Self {
         let members = loader.list_files(root).unwrap_or_default();
-        let backing_state = backing_state(root, &members);
         Self {
             root: root.clone(),
             members,
-            backing_state,
         }
     }
 }

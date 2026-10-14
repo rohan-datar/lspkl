@@ -121,11 +121,7 @@ fn with_import_context(f: impl FnOnce(&AnalysisContext)) {
     base.add(3, other.source());
     base.add(4, "twoValue = 2\n");
     let db = base.db.borrow();
-    let ctx = AnalysisContext::new(
-        &base,
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
+    let ctx = AnalysisContext::for_root(&*db, pkl_db::Db::file(&*db, &harness::uri(1)).unwrap());
     f(&ctx);
 }
 

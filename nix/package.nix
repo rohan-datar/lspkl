@@ -4,6 +4,7 @@
   rustPlatform,
   fetchurl,
   runtimeShell,
+  coreutils,
   stdlibUrl ? "https://codeload.github.com/apple/pkl/zip/9ed02459c136435a50ea32619c33258c149cf95f",
 }:
 let
@@ -60,9 +61,14 @@ rustPlatform.buildRustPackage {
   postPatch = ''
     substituteInPlace \
       crates/lspkl/tests/json_rpc.rs \
+      crates/lspkl/tests/stdio.rs \
       crates/pkl-project/tests/cli.rs \
       crates/pkl-project/tests/project_manager.rs \
       --replace-fail '#!/bin/sh' '#!${runtimeShell}'
+    substituteInPlace crates/lspkl/tests/json_rpc.rs crates/lspkl/tests/stdio.rs \
+      --replace-fail '/bin/sleep' '${coreutils}/bin/sleep'
+    substituteInPlace crates/lspkl/tests/stdio.rs \
+      --replace-fail '/bin/cat' '${coreutils}/bin/cat'
   '';
 
   cargoBuildFlags = [

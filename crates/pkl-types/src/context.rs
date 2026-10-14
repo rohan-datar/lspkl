@@ -27,9 +27,6 @@ pub struct AnalysisContext<'a> {
     pub root: File,
 }
 impl<'a> AnalysisContext<'a> {
-    pub fn new(base: &'a BaseModule, db: &'a dyn Db, root: File) -> Self {
-        Self { base, db, root }
-    }
     /// Construct a semantic query context without caller-owned SDK state.
     pub fn for_root(db: &'a dyn Db, root: File) -> Self {
         Self {

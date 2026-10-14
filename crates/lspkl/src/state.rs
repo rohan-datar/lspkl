@@ -4,9 +4,13 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use fluent_uri::Uri;
 use lsp_features::positions::PositionEncoding;
-use pkl_db::{Db, DirectoryUpdate, File, FileStatus, RootDatabase, settings::WorkspaceSettings};
+use pkl_db::{
+    Db, DirectoryUpdate, File, FileStatus, IoUpdate, RootDatabase, settings::WorkspaceSettings,
+};
 use pkl_project::{PklProject, cli::PklCli, dto::ProjectDeps};
-use pkl_vfs::{FileError, Source, SourceLoader, parse_source_uri, url_to_path};
+use pkl_vfs::{
+    FileError, Source, SourceLoader, StandardSourceLoader, parse_source_uri, url_to_path,
+};
 use salsa::{Database, Setter};
 
 use crate::{
@@ -24,9 +28,11 @@ pub enum WorkspaceError {
 
 /// Owns the writable database. No idle database clones may survive an input write.
 pub struct Workspace {
-    pub db: RootDatabase,
+    pub(crate) db: RootDatabase,
+    https_loader: Arc<StandardSourceLoader>,
     project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
     settings: Arc<WorkspaceSettings>,
+    explicit_settings: WorkspaceSettings,
     position_encoding: PositionEncoding,
     client_configuration: bool,
     pub watched_files: bool,
@@ -44,7 +50,8 @@ pub struct Workspace {
 #[derive(Clone)]
 pub struct Snapshot {
     pub db: RootDatabase,
-    pub project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
+    pub(crate) project_manager:
+        Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
     pub settings: Arc<WorkspaceSettings>,
     pub position_encoding: PositionEncoding,
     pub client_configuration: bool,
@@ -68,7 +75,9 @@ impl std::fmt::Debug for Snapshot {
 }
 impl Default for Workspace {
     fn default() -> Self {
-        Self::with_database(RootDatabase::default())
+        let https_loader = Arc::new(StandardSourceLoader::new());
+        let db = RootDatabase::new(https_loader.clone(), WorkspaceSettings::default());
+        Self::with_database_and_https_loader(db, https_loader)
     }
 }
 impl Workspace {
@@ -77,11 +86,20 @@ impl Workspace {
     }
     /// Bootstrap immutable SDK analysis before exposing any request snapshots.
     pub fn with_database(db: RootDatabase) -> Self {
+        Self::with_database_and_https_loader(db, Arc::new(StandardSourceLoader::new()))
+    }
+    /// Retain a configured HTTPS loader, including its trusted certificate roots.
+    pub fn with_database_and_https_loader(
+        db: RootDatabase,
+        https_loader: Arc<StandardSourceLoader>,
+    ) -> Self {
         let _ = pkl_types::base_module(&db);
         let settings = Arc::new(db.config().settings(&db).clone());
         Self {
             db,
+            https_loader,
             project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
+            explicit_settings: (*settings).clone(),
             settings,
             position_encoding: PositionEncoding::default(),
             client_configuration: false,
@@ -105,6 +123,43 @@ impl Workspace {
             generation: self.generation,
             project_generation: self.project_generation,
         }
+    }
+    pub fn document_version(&self, uri: &str) -> Option<i32> {
+        self.document(uri).and_then(|file| file.version(&self.db))
+    }
+    pub fn project_manager(&self) -> pkl_project::project_manager::ProjectManager {
+        self.project_manager.lock().clone()
+    }
+    pub fn settings(&self) -> &WorkspaceSettings {
+        &self.settings
+    }
+    pub fn client_configuration(&self) -> bool {
+        self.client_configuration
+    }
+    pub fn database(&self) -> &RootDatabase {
+        &self.db
+    }
+    /// Owned I/O handles; retaining these does not retain a Salsa database snapshot.
+    pub fn semantic_loaders(
+        &self,
+    ) -> (
+        Arc<dyn SourceLoader + Send + Sync>,
+        Arc<StandardSourceLoader>,
+    ) {
+        (
+            self.db.source_loader_handle(),
+            Arc::clone(&self.https_loader),
+        )
+    }
+    pub fn apply_io(&mut self, update: IoUpdate) -> std::result::Result<(), FileError> {
+        let _write = perf::Compute::runtime("salsa_write");
+        self.db.apply_io(update)?;
+        // Missing results complete an attempt and must also refresh diagnostics.
+        self.invalidate_analysis();
+        Ok(())
+    }
+    pub fn request_routing_refresh(&mut self) {
+        self.db.request_routing_refresh();
     }
     pub(crate) fn project_generation(&self) -> u64 {
         self.project_generation
@@ -193,24 +248,84 @@ impl Workspace {
         }
         Ok(self.reload_work(vec![uri], false, false))
     }
-    pub fn apply_save(
+    /// Explicit sources replace the fallback used by subsequent configuration pulls.
+    pub fn apply_explicit_settings(&mut self, settings: WorkspaceSettings) {
+        self.explicit_settings = settings.clone();
+        self.apply_settings(settings);
+    }
+    /// A null pull section means no client value, not an explicit reset.
+    pub fn apply_pulled_settings(
         &mut self,
-        _params: lsp_types::DidSaveTextDocumentParams,
-    ) -> std::result::Result<(), FileError> {
+        values: &[serde_json::Value; 5],
+    ) -> std::result::Result<(), serde_json::Error> {
+        let mut settings = self.explicit_settings.clone();
+        if !values[0].is_null() {
+            settings.cli.path = serde_json::from_value(values[0].clone())?;
+        }
+        if !values[1].is_null() {
+            settings.formatter.grammar_version = serde_json::from_value(values[1].clone())?;
+        }
+        if !values[2].is_null() {
+            settings.modulepath = serde_json::from_value(values[2].clone())?;
+        }
+        if !values[3].is_null() {
+            settings.projects.excluded_directories = serde_json::from_value(values[3].clone())?;
+        }
+        if !values[4].is_null() {
+            settings.cache_dir = serde_json::from_value(values[4].clone())?;
+        }
+        settings.module_paths.clear();
+        settings.resolved_cache_dir = None;
+        self.apply_settings(settings);
         Ok(())
     }
     pub fn apply_settings(&mut self, mut settings: WorkspaceSettings) {
+        settings.working_directory = self.settings.working_directory.clone();
+        // Provisional path binding is pure; existence-based selection is an owned
+        // I/O job and feeds its resolved settings back through this setter.
+        let folders = self.project_manager.lock().workspace_folders().to_vec();
+        if settings.module_paths.len() != settings.modulepath.len() {
+            settings.module_paths = settings
+                .modulepath
+                .iter()
+                .map(|path| {
+                    if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        folders
+                            .first()
+                            .unwrap_or(&settings.working_directory)
+                            .join(path)
+                    }
+                })
+                .collect();
+        }
+        if settings.resolved_cache_dir.is_none() {
+            settings.resolved_cache_dir = settings.cache_dir.as_ref().map(|path| {
+                if path.is_absolute() {
+                    path.clone()
+                } else {
+                    folders
+                        .first()
+                        .unwrap_or(&settings.working_directory)
+                        .join(path)
+                }
+            });
+        }
         let cli = PklCli {
             binary_path: settings.cli.path.clone(),
         };
         {
             let mut projects = self.project_manager.lock();
-            settings.resolve_paths(projects.workspace_folders());
             projects.configure(cli.clone(), settings.projects.excluded_directories.clone());
+        }
+        if *self.settings == settings {
+            return;
         }
         self.project_generation += 1;
         let _write = perf::Compute::runtime("salsa_write");
         self.db.set_settings(settings.clone());
+        self.db.request_routing_refresh();
         self.settings = Arc::new(settings);
         self.invalidate_analysis();
     }
@@ -256,12 +371,14 @@ impl Workspace {
             .clone()
             .map(WorkspaceSettings::parse)
         {
-            Some(Ok(settings)) => self.apply_settings(settings),
+            Some(Ok(settings)) => self.apply_explicit_settings(settings),
             Some(Err(error)) => tracing::error!(?error, "invalid initialization settings"),
             None => {}
         }
     }
     pub fn apply_workspace_folders(&mut self, params: lsp_types::DidChangeWorkspaceFoldersParams) {
+        // Folder arrival supersedes jobs captured against the previous roots.
+        self.project_generation += 1;
         let mut folders = self.project_manager.lock().workspace_folders().to_vec();
         for folder in params.event.removed {
             if let Ok(uri) = parse_source_uri(folder.uri.as_str())
@@ -280,9 +397,9 @@ impl Workspace {
         }
         self.project_manager.lock().initialize(folders);
         self.refresh_projects();
-        let settings = self
-            .settings
-            .rebind(self.project_manager.lock().workspace_folders());
+        let mut settings = (*self.settings).clone();
+        settings.module_paths.clear();
+        settings.resolved_cache_dir = None;
         self.apply_settings(settings);
     }
     pub fn apply_project_manager(&mut self, manager: pkl_project::project_manager::ProjectManager) {
@@ -305,6 +422,18 @@ impl Workspace {
             .into_iter()
             .filter_map(|event| parse_source_uri(event.uri.as_str()).ok())
             .collect();
+        if uris
+            .iter()
+            .filter_map(|uri| url_to_path(uri).ok())
+            .any(|path| {
+                matches!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some("PklProject" | "PklProject.deps.json")
+                )
+            })
+        {
+            self.project_generation += 1;
+        }
         let changed = uris.len();
         for file in self.db.all_files() {
             let uri = file.uri(&self.db);
@@ -368,6 +497,9 @@ impl Workspace {
         }
     }
     pub fn apply_reload(&mut self, loaded: LoadedFiles) {
+        if loaded.updates.is_empty() && loaded.directories.is_empty() {
+            return;
+        }
         let _write = perf::Compute::runtime("salsa_write");
         let mut project_changed = false;
         for update in loaded.updates {

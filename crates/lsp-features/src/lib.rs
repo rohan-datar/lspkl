@@ -1,9 +1,9 @@
-//! Pure compute for the LSP features lspkl exposes.
+//! Pure compute for the LSP features lspkl exposes, in protocol types.
 //!
-//! The lspkl binary's `LanguageServer` handlers are responsible for:
+//! The lspkl server is responsible for:
 //! - resolving document URIs to database file inputs
-//! - any async / IO orchestration
-//! - wrapping returned values in `jsonrpc::Result`
+//! - scheduling, cancellation and all I/O
+//! - converting results and errors into JSON-RPC responses
 use lsp_types::{Position, Range};
 const MAX_RANGE: Range = Range {
     start: Position {
@@ -20,6 +20,7 @@ pub mod positions;
 
 pub mod code_action;
 pub mod completion;
+pub mod diagnostics;
 pub mod formatting;
 pub mod goto_definition;
 pub mod hover;

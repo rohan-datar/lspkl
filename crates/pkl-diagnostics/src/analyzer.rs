@@ -25,19 +25,6 @@ pub trait Analyzer: Send + Sync {
     }
 }
 
-/// Drive `analyzer` recursively over the subtree rooted at `node`.
-pub fn run_analyzer(
-    analyzer: &dyn Analyzer,
-    node: NodeRef,
-    holder: &mut DiagnosticsHolder,
-    ctx: &AnalysisContext,
-) {
-    let Some(tree) = ctx.tree(node.file) else {
-        return;
-    };
-    run_analyzer_with_tree(analyzer, node, holder, ctx, tree);
-}
-
 /// Walk a same-file subtree using the tree already captured by the engine.
 pub(crate) fn run_analyzer_with_tree(
     analyzer: &dyn Analyzer,

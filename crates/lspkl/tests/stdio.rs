@@ -1,4 +1,6 @@
 //! Navigation, hover, completion, and lifecycle semantics over the shipped binary.
+#[path = "support/https.rs"]
+mod https;
 mod support;
 
 use serde_json::{Value, json};
@@ -113,6 +115,25 @@ async fn local_and_imported_definitions_have_target_ranges_and_foreign_hover_doc
         markdown.contains("Foreign property documentation."),
         "{markdown}"
     );
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn invalid_initialize_can_be_retried_with_open_stdin() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut client = LspClient::spawn(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path()).await;
+    let invalid = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.request("initialize", json!({})),
+    )
+    .await
+    .expect("invalid initialization must receive a response");
+    assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+    let valid = client
+        .request("initialize", json!({"capabilities":{}}))
+        .await;
+    assert!(valid.get("error").is_none(), "{valid}");
+    client.notify("initialized", json!({})).await;
     client.shutdown().await;
 }
 
@@ -751,5 +772,373 @@ async fn watched_archive_changes_refresh_present_and_missing_members() {
             .contains("value: Boolean"),
         "{hover}"
     );
+    client.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn slow_formatters_do_not_delay_edits_cancellation_or_fresh_hover() {
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    let temp = tempfile::tempdir().unwrap();
+    let started = temp.path().join("started");
+    let release = temp.path().join("release");
+    let binary = temp.path().join("formatter");
+    fs::write(&binary, format!("#!/bin/sh\necho started >> '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\n/bin/cat\n", started.display(), release.display())).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut client =
+        LspClient::spawn_manual_configuration(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path())
+            .await;
+    let response = client
+        .request(
+            "initialize",
+            json!({"capabilities":{},"initializationOptions":{"cli":{"path":binary}}}),
+        )
+        .await;
+    assert!(response.get("error").is_none(), "{response}");
+    client.notify("initialized", json!({})).await;
+    let main = uri(&temp.path().join("main.pkl"));
+    open(&mut client, &main, "value: Int = 1\nanswer = value\n").await;
+    let sender = client.sender();
+    let mut requests = Vec::new();
+    for _ in 0..4 {
+        requests.push(sender.start_request("textDocument/formatting",json!({"textDocument":{"uri":main},"options":{"tabSize":2,"insertSpaces":true}})).await);
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fs::read_to_string(&started)
+                .unwrap_or_default()
+                .lines()
+                .count()
+                == 4
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("four external formatter jobs must start");
+    client.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":"value: String = \"fresh\"\nanswer = value\n"}]})).await;
+    client
+        .notify("$/cancelRequest", json!({"id":requests[0].id}))
+        .await;
+    let cancelled =
+        tokio::time::timeout(Duration::from_millis(500), client.response(requests[0].id))
+            .await
+            .expect("cancel is not queued behind formatter work");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    let hover = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.request(
+            "textDocument/hover",
+            json!({"textDocument":{"uri":main},"position":{"line":1,"character":12}}),
+        ),
+    )
+    .await
+    .expect("hover is not queued behind external work");
+    assert!(
+        hover["result"]["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: String"),
+        "{hover}"
+    );
+    fs::write(&release, "").unwrap();
+    for request in &requests[1..] {
+        let response = client.response(request.id).await;
+        assert_eq!(response["error"]["code"], -32801, "{response}");
+    }
+    // The completed cancelled job must not produce a second response.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+    while let Some(message) = client.observe_until(deadline).await {
+        assert_ne!(
+            message.message["id"], requests[0].id,
+            "duplicate cancelled response"
+        );
+    }
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn stale_configuration_reply_cannot_revert_pushed_modulepath() {
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    fs::create_dir(&old).unwrap();
+    fs::create_dir(&new).unwrap();
+    fs::write(old.join("library.pkl"), "value: Int = 1\n").unwrap();
+    fs::write(new.join("library.pkl"), "value: String = \"new\"\n").unwrap();
+    let mut client =
+        LspClient::spawn_manual_configuration(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path())
+            .await;
+    let response = client
+        .request(
+            "initialize",
+            json!({"capabilities":{"workspace":{"configuration":true}}}),
+        )
+        .await;
+    assert!(response.get("error").is_none(), "{response}");
+    client.notify("initialized", json!({})).await;
+    let pull = client.notification("workspace/configuration").await;
+    client
+        .notify(
+            "workspace/didChangeConfiguration",
+            json!({"settings":{"modulepath":[new]}}),
+        )
+        .await;
+    let main = uri(&temp.path().join("main.pkl"));
+    let source = "import \"modulepath:/library.pkl\" as library\nanswer = library.value\n";
+    open(&mut client, &main, source).await;
+    diagnostics(&mut client, &main).await;
+    client
+        .respond(pull["id"].clone(), json!([null, null, [old], [], null]))
+        .await;
+    let hover = at(&mut client, "textDocument/hover", &main, source, "value").await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("value: String"),
+        "{hover}"
+    );
+    client.shutdown().await;
+}
+#[cfg(unix)]
+async fn blocked_project_job(watched: Option<&str>, cancel: bool) {
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("PklProject");
+    fs::write(&project, "amends \"pkl:Project\"\n").unwrap();
+    let started = temp.path().join("started");
+    let release = temp.path().join("release");
+    let old = temp.path().join("old-cli");
+    let new = temp.path().join("new-cli");
+    let metadata = |version: &str| {
+        json!({
+        "projectFileUri":uri(&project),"packageUri":format!("package://example.com/app@{version}"),
+        "declaredDependencies":{},"evaluatorSettings":null
+    }).to_string()
+    };
+    fs::write(&old, format!("#!/bin/sh\ncase \"$1\" in\nproject) exit 0 ;;\neval) echo started > '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\nprintf '%s' '{}' ;;\n*) exit 9 ;;\nesac\n",started.display(),release.display(),metadata("1.0.0"))).unwrap();
+    fs::write(&new, format!("#!/bin/sh\ncase \"$1\" in\nproject) exit 0 ;;\neval) printf '%s' '{}' ;;\n*) exit 9 ;;\nesac\n",metadata("2.0.0"))).unwrap();
+    for script in [&old, &new] {
+        fs::set_permissions(script, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut client = start(temp.path(), json!({"cli":{"path":old}})).await;
+    let request = client
+        .sender()
+        .start_request("pkl/syncProjects", json!(null))
+        .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("sync job entered CLI eval");
+    let state = temp.path().join(".lspkl/projects.json");
+    assert!(!state.exists(), "unaccepted job must not persist");
+    if let Some(name) = watched {
+        client
+            .notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":uri(&temp.path().join(name)),"type":2}]}),
+            )
+            .await;
+        // A response is a protocol-order barrier, not a timing assumption about the I/O worker.
+        let barrier = client.request("textDocument/hover",json!({"textDocument":{"uri":uri(&temp.path().join("missing.pkl"))},"position":{"line":0,"character":0}})).await;
+        assert!(barrier.get("error").is_none(), "{barrier}");
+        fs::write(&release, "").unwrap();
+        let response = client.response(request.id).await;
+        assert_eq!(response["error"]["code"], -32801, "{response}");
+        client.shutdown().await;
+        assert!(
+            !state.exists(),
+            "watcher-rejected unregistered project must not persist"
+        );
+    } else {
+        if cancel {
+            client
+                .notify("$/cancelRequest", json!({"id":request.id}))
+                .await;
+            let response = client.response(request.id).await;
+            assert_eq!(response["error"]["code"], -32800, "{response}");
+        }
+        client
+            .notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"cli":{"path":new}}}),
+            )
+            .await;
+        let accepted = client.request("pkl/syncProjects", json!(null)).await;
+        assert!(accepted.get("error").is_none(), "{accepted}");
+        fs::write(&release, "").unwrap();
+        if !cancel {
+            let response = client.response(request.id).await;
+            assert_eq!(response["error"]["code"], -32801, "{response}");
+        }
+        client.shutdown().await;
+        let saved = fs::read_to_string(state).unwrap();
+        assert!(saved.contains("app@2.0.0"), "{saved}");
+        assert!(
+            !saved.contains("app@1.0.0"),
+            "stale job overwrote accepted state: {saved}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn project_watchers_invalidate_jobs_before_manager_registration() {
+    for name in ["PklProject", "PklProject.deps.json"] {
+        blocked_project_job(Some(name), false).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn superseded_sync_cannot_overwrite_accepted_persistence() {
+    blocked_project_job(None, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelled_sync_cannot_overwrite_accepted_persistence() {
+    blocked_project_job(None, true).await;
+}
+
+#[tokio::test]
+async fn uncached_https_import_resolves_and_clears_diagnostics_without_file_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let ca = temp.path().join("fixture-ca.pem");
+    let mut origin = https::HttpsFixture::start(&ca);
+    let cache = temp.path().join("cache");
+    let imported = fluent_uri::Uri::parse(origin.uri.clone()).unwrap();
+    let loader = pkl_vfs::StandardSourceLoader::new();
+    assert!(
+        pkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_err(),
+        "the HTTPS import must start uncached"
+    );
+    let main = uri(&temp.path().join("main.pkl"));
+    let source = format!(
+        "import \"{}\" as library\nanswer = library.value\n",
+        origin.uri
+    );
+    let mut client = LspClient::spawn_with_env(
+        Path::new(env!("CARGO_BIN_EXE_lspkl")),
+        temp.path(),
+        &[("SSL_CERT_FILE", ca.as_path())],
+    )
+    .await;
+    let response = client
+        .request(
+            "initialize",
+            json!({
+                "processId":null,"rootUri":uri(temp.path()),
+                "workspaceFolders":[{"uri":uri(temp.path()),"name":"fixture"}],
+                "capabilities":{"workspace":{"configuration":true}},
+                "initializationOptions":{"cacheDir":cache}
+            }),
+        )
+        .await;
+    assert!(response.get("error").is_none(), "{response}");
+    client.notify("initialized", json!({})).await;
+    open(&mut client, &main, &source).await;
+    let cold = diagnostics(&mut client, &main).await;
+    assert!(
+        !cold["diagnostics"].as_array().unwrap().is_empty(),
+        "{cold}"
+    );
+    origin.release();
+    let cleared = loop {
+        let published = diagnostics(&mut client, &main).await;
+        if published["diagnostics"].as_array().unwrap().is_empty() {
+            break published;
+        }
+    };
+    assert_eq!(cleared["version"], 1);
+    assert!(
+        pkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_ok(),
+        "semantic I/O must populate the HTTPS cache"
+    );
+    let definition = at(
+        &mut client,
+        "textDocument/definition",
+        &main,
+        &source,
+        "value",
+    )
+    .await;
+    assert_eq!(
+        definition["uri"],
+        pkl_vfs::to_editor_uri(&imported).unwrap().as_str()
+    );
+    assert_eq!(
+        definition["range"],
+        json!({"start":{"line":0,"character":0},"end":{"line":1,"character":15}})
+    );
+    let hover = at(&mut client, "textDocument/hover", &main, &source, "value").await;
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.contains("value: Int"), "{markdown}");
+    assert!(
+        markdown.contains("Downloaded HTTPS documentation."),
+        "{markdown}"
+    );
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn blocked_import_does_not_freeze_unrelated_hover_or_waiting_cancellation() {
+    use std::time::Duration;
+    let temp = tempfile::tempdir().unwrap();
+    let ca = temp.path().join("ca.pem");
+    let origin = https::HttpsFixture::start(&ca);
+    let mut client = LspClient::spawn_with_env(
+        Path::new(env!("CARGO_BIN_EXE_lspkl")),
+        temp.path(),
+        &[("SSL_CERT_FILE", ca.as_path())],
+    )
+    .await;
+    assert!(client.request("initialize", json!({"capabilities":{},"initializationOptions":{"cacheDir":temp.path().join("cache")}})).await.get("error").is_none());
+    client.notify("initialized", json!({})).await;
+    let remote = uri(&temp.path().join("remote.pkl"));
+    let source = format!(
+        "import \"{}\" as library\nanswer = library.value\n",
+        origin.uri
+    );
+    open(&mut client, &remote, &source).await;
+    origin.wait_requested();
+    let waiting = client
+        .sender()
+        .start_request(
+            "textDocument/hover",
+            json!({"textDocument":{"uri":remote},"position":position(&source,"value")}),
+        )
+        .await;
+    let local = uri(&temp.path().join("local.pkl"));
+    open(&mut client, &local, "value: Int = 42\nanswer = value\n").await;
+    let hover = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request(
+            "textDocument/hover",
+            json!({"textDocument":{"uri":local},"position":{"line":1,"character":10}}),
+        ),
+    )
+    .await
+    .expect("unrelated hover must not wait for HTTPS");
+    assert!(
+        hover["result"]["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Int"),
+        "{hover}"
+    );
+    client
+        .notify("$/cancelRequest", json!({"id":waiting.id}))
+        .await;
+    let cancelled = tokio::time::timeout(Duration::from_secs(1), client.response(waiting.id))
+        .await
+        .expect("waiting cancellation must respond promptly");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
     client.shutdown().await;
 }

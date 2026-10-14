@@ -36,7 +36,7 @@ fn client_aliases_share_canonical_inputs_but_close_independently() {
             vec![editor.as_str().parse().unwrap()]
         );
         let file = workspace.document(editor.as_str()).unwrap();
-        let text = file.text(&workspace.db).clone();
+        let text = file.text(workspace.database()).clone();
         open(&mut workspace, canonical.as_str());
         assert_eq!(workspace.document(canonical.as_str()), Some(file));
         assert_eq!(workspace.open_document_uris().len(), 2);
@@ -53,8 +53,8 @@ fn client_aliases_share_canonical_inputs_but_close_independently() {
             vec![canonical.as_str().parse().unwrap()]
         );
         assert_eq!(workspace.document(canonical.as_str()), Some(file));
-        assert_eq!(file.text(&workspace.db), &text);
-        assert_eq!(file.version(&workspace.db), Some(1));
+        assert_eq!(file.text(workspace.database()), &text);
+        assert_eq!(file.version(workspace.database()), Some(1));
         if canonical.scheme().as_str() == "pkl" {
             assert_ne!(text.as_ref(), "value: Int = 1\n", "SDK text is immutable");
         }

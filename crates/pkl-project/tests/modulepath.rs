@@ -105,9 +105,6 @@ fn relative_lookup_merges_roots_and_path_membership_is_component_safe() {
     .unwrap();
     let source = manager.load(&source_url, temp.path()).unwrap();
     let resolver = ModulepathResolver::new(&manager, temp.path());
-    assert!(resolver.is_on_module_path(&second.join("nested/source.pkl"), Some(&context)));
-    assert!(!resolver.is_on_module_path(&prefix_trap.join("outside.pkl"), Some(&context)));
-    assert!(!resolver.is_on_module_path(&first.join("shared.pkl"), None));
     assert_eq!(
         resolver
             .resolve_relative(&source, "../shared.pkl", Some(&context))

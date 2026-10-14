@@ -206,6 +206,7 @@ fn sync_projects_with_no_project_files_does_not_call_cli() {
         .expect("empty workspace needs no CLI");
     assert_eq!(manager.projects().count(), 0);
     let state_file = ws.path().join(".lspkl/projects.json");
+    manager.persist_state(&state_file).unwrap();
     let state: serde_json::Value = serde_json::from_slice(&fs::read(state_file).unwrap()).unwrap();
     assert_eq!(state["pklProjects"].as_array().unwrap().len(), 0);
 }
@@ -272,9 +273,12 @@ fn sync_projects_resolves_evaluates_and_loads_metadata() {
         .expect("project registered");
     assert_eq!(project.project_dir().unwrap(), ws.path());
     assert!(project.project_deps.is_some(), "load resolved dependencies");
+    manager
+        .persist_state(&ws.path().join(".lspkl/projects.json"))
+        .unwrap();
     assert!(
         ws.path().join(".lspkl/projects.json").exists(),
-        "persist synced state"
+        "persist accepted synced state"
     );
 }
 
@@ -285,7 +289,7 @@ fn shell_quote(value: &str) -> String {
 
 #[cfg(unix)]
 #[test]
-fn sync_projects_persists_each_workspace_separately() {
+fn synced_projects_can_be_persisted_for_each_workspace_separately() {
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
@@ -335,6 +339,7 @@ fn sync_projects_persists_each_workspace_separately() {
     assert_eq!(manager.projects().count(), 2);
     for (index, root) in roots.iter().enumerate() {
         let state_file = root.join(".lspkl/projects.json");
+        manager.persist_state(&state_file).unwrap();
         let state: serde_json::Value =
             serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
         let entries = state["pklProjects"].as_array().unwrap();
@@ -394,7 +399,7 @@ fn nested_workspace_owns_its_own_project_state() {
 }
 
 #[test]
-fn configure_preserves_shared_projects_and_applies_exclusions() {
+fn configure_preserves_projects_and_applies_exclusions() {
     let ws = tempfile::tempdir().unwrap();
     write_workspace(ws.path());
     let state = ws.path().join(".lspkl/projects.json");
@@ -403,8 +408,10 @@ fn configure_preserves_shared_projects_and_applies_exclusions() {
     let mut manager = ProjectManager::default();
     manager.initialize(vec![ws.path().to_path_buf()]);
     manager.load_state(&state).unwrap();
-    let pinned = manager
-        .get_pkl_project_shared(&ws.path().join("config.pkl"))
+    let directory = manager
+        .get_pkl_project(&ws.path().join("config.pkl"))
+        .unwrap()
+        .project_dir()
         .unwrap();
     manager.configure(
         PklCli {
@@ -412,10 +419,14 @@ fn configure_preserves_shared_projects_and_applies_exclusions() {
         },
         vec!["app".into()],
     );
-    let after = manager
-        .get_pkl_project_shared(&ws.path().join("config.pkl"))
-        .unwrap();
-    assert!(std::sync::Arc::ptr_eq(&pinned, &after));
+    assert_eq!(
+        manager
+            .get_pkl_project(&ws.path().join("config.pkl"))
+            .unwrap()
+            .project_dir()
+            .unwrap(),
+        directory
+    );
     assert_eq!(manager.projects().count(), 1);
     assert_eq!(
         manager.discover_project_files().unwrap(),
@@ -425,12 +436,7 @@ fn configure_preserves_shared_projects_and_applies_exclusions() {
         ]
     );
     manager.initialize(Vec::new());
-    assert_eq!(
-        pinned.metadata.project_file_uri,
-        url::Url::from_file_path(ws.path().join("PklProject"))
-            .unwrap()
-            .as_str()
-    );
+    assert_eq!(manager.projects().count(), 0);
 }
 
 #[test]

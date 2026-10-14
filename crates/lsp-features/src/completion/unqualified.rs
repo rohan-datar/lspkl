@@ -5,7 +5,7 @@ use pkl_types::NodeRef;
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use pkl_syntax::ast::nodes::{Expr, ModuleMember, ObjectMember};
+use pkl_syntax::ast::nodes::Expr;
 use pkl_syntax::ast::{NodeId, NodeKind};
 
 use pkl_types::{AnalysisContext, ScopeKind, Type, scope_at};
@@ -39,7 +39,7 @@ pub(crate) fn completions(
             && tree.line_index().line_col(offset).col == 0);
 
     if in_definition_position {
-        let defined = collect_defined_property_names(node, tree);
+        let defined = collect_defined_property_names(NodeRef::new(file, node), tree, ctx);
         if add_definition_completions(node, &this_type, &defined, tree, ctx, &mut collector) {
             return collector;
         }
@@ -343,33 +343,33 @@ fn to_class_type(ty: &Type, ctx: &AnalysisContext) -> Option<Type> {
     }
 }
 
-/// Names of properties already declared in the enclosing module/class/object
-/// body.
-fn collect_defined_property_names(node: NodeId, tree: &pkl_syntax::ast::SyntaxTree) -> Vec<String> {
-    let mut current = tree.parent(node);
-    while let Some(id) = current {
-        match tree.kind(id) {
-            NodeKind::Module | NodeKind::Class | NodeKind::ObjectBody => {
-                return ModuleMember::children(tree, id)
-                    .filter(|&member| {
-                        matches!(
-                            ModuleMember::cast(tree, member),
-                            Some(ModuleMember::ClassProperty(_) | ModuleMember::ClassMethod(_))
-                        )
-                    })
-                    .chain(ObjectMember::children(tree, id).filter(|&member| {
-                        matches!(
-                            ObjectMember::cast(tree, member),
-                            Some(ObjectMember::ObjectProperty(_) | ObjectMember::ObjectMethod(_))
-                        )
-                    }))
-                    .filter_map(|member| tree.name(member).map(str::to_string))
-                    .collect();
-            }
-            _ => current = tree.parent(id),
-        }
-    }
-    Vec::new()
+/// Names declared in the nearest definition container, excluding inherited members.
+fn collect_defined_property_names(
+    node: NodeRef,
+    tree: &pkl_syntax::ast::SyntaxTree,
+    ctx: &AnalysisContext,
+) -> Vec<String> {
+    let container = |id| {
+        super::ancestor_or_self(id, tree, |kind| {
+            matches!(
+                kind,
+                NodeKind::Module | NodeKind::ClassBody | NodeKind::ObjectBody
+            )
+        })
+    };
+    let Some(owner) = container(node.value) else {
+        return Vec::new();
+    };
+    scope_at(node, ctx)
+        .entries()
+        .filter(|entry| matches!(entry.kind, ScopeKind::Property | ScopeKind::Method))
+        .filter(|entry| {
+            entry.node(ctx).is_some_and(|source| {
+                source.file == node.file && container(source.value) == Some(owner)
+            })
+        })
+        .map(|entry| entry.name.text(ctx.db).to_owned())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

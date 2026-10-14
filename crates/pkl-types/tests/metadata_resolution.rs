@@ -1,10 +1,9 @@
 use fluent_uri::Uri;
 use pkl_db::{Db, File, FileStatus, RootDatabase};
 use pkl_types::{
-    ClassId, DeclId, ItemId, Name, Type, TypeParameterId, TypeRef, base_module, decl_type,
-    find_member, module_id, module_items, resolve_alias, resolve_type_ref,
+    ClassId, DeclId, ItemId, Name, Type, TypeRef, base_module, decl_type, find_member, module_id,
+    module_items, resolve_alias, resolve_type_ref,
 };
-type TypeBindings = std::collections::BTreeMap<TypeParameterId, Type>;
 use pkl_vfs::StandardSourceLoader;
 use std::sync::Arc;
 
@@ -48,8 +47,7 @@ fn all_lowered_type_variants_resolve_without_source_locations() {
     let mut db = database();
     let file = put(&mut db, "variants", "class Owner<T> {}\n");
     let owner = class(&db, file, "Owner");
-    let bindings = TypeBindings::new();
-    let resolve = |ty: &TypeRef| resolve_type_ref(&db, owner, ty, &bindings);
+    let resolve = |ty: &TypeRef| resolve_type_ref(&db, owner, ty);
     let int = named(&db, "Int");
     let int_type = base_module(&db).int_type().clone();
     assert_eq!(resolve(&TypeRef::Unknown), Type::Unknown);
@@ -110,17 +108,7 @@ fn generic_aliases_and_inherited_members_substitute_stable_parameters() {
         "typealias Identity<T> = T\nopen class Parent<T> { value: T }\nclass Child<U> extends Parent<Identity<U>> {}\n",
     );
     let owner = class(&db, file, "Child");
-    let parameter = TypeParameterId {
-        declaration: owner,
-        index: 0,
-    };
     let int = base_module(&db).int_type().clone();
-    let mut bindings = TypeBindings::new();
-    bindings.insert(parameter, int.clone());
-    assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "U"), &bindings),
-        int
-    );
     let child = decl_type(&db, owner).with_type_args(vec![int.clone()]);
     assert_eq!(find_member(&db, &child, "value").unwrap().ty, int);
     let alias_index = module_items(&db, file)
@@ -138,7 +126,7 @@ fn generic_aliases_and_inherited_members_substitute_stable_parameters() {
 }
 
 #[test]
-fn method_parameters_shadow_class_parameters_and_import_qualification() {
+fn method_type_parameters_do_not_shadow_qualified_imports() {
     let mut db = database();
     let imported = put(&mut db, "imported", "class Export {}\n");
     let file = put(
@@ -146,38 +134,18 @@ fn method_parameters_shadow_class_parameters_and_import_qualification() {
         "shadow",
         "import \"imported.pkl\" as T\nclass Owner<T> { function f<T>(): T = throw(\"x\") }\n",
     );
-    let owner = class(&db, file, "Owner");
     let method_index = module_items(&db, file).methods.iter().next().unwrap().0;
     let method = DeclId {
         file,
         root: file,
         item: ItemId::Method(method_index),
     };
-    let mut bindings = TypeBindings::new();
-    bindings.insert(
-        TypeParameterId {
-            declaration: owner,
-            index: 0,
-        },
-        base_module(&db).int_type().clone(),
-    );
-    bindings.insert(
-        TypeParameterId {
-            declaration: method,
-            index: 0,
-        },
-        base_module(&db).string_type().clone(),
-    );
-    assert_eq!(
-        resolve_type_ref(&db, method, &named(&db, "T"), &bindings),
-        base_module(&db).string_type().clone()
-    );
     let qualified = TypeRef::Named {
         path: vec![Name::new(&db, "T"), Name::new(&db, "Export")],
         arguments: vec![],
     };
     assert_eq!(
-        resolve_type_ref(&db, method, &qualified, &bindings),
+        resolve_type_ref(&db, method, &qualified),
         decl_type(
             &db,
             DeclId {
@@ -248,7 +216,7 @@ fn stale_metadata_ids_resolve_conservatively_after_deletion() {
     assert_eq!(decl_type(&db, property), Type::Unknown);
     assert_eq!(resolve_alias(&db, alias, &[]), Type::Unknown);
     assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "T"), &TypeBindings::new()),
+        resolve_type_ref(&db, owner, &named(&db, "T")),
         Type::Unknown
     );
     assert!(pkl_types::resolver::super_type(&old_class, &db).is_none());
@@ -289,15 +257,15 @@ fn unqualified_types_and_qualified_imports_use_distinct_namespaces() {
     );
     let owner = class(&db, file, "Owner");
     assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "String"), &TypeBindings::new()),
+        resolve_type_ref(&db, owner, &named(&db, "String")),
         base_module(&db).string_type().clone()
     );
     assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "Local"), &TypeBindings::new()).unaliased(&db),
+        resolve_type_ref(&db, owner, &named(&db, "Local")).unaliased(&db),
         base_module(&db).int_type().clone()
     );
     assert_eq!(
-        resolve_type_ref(&db, owner, &named(&db, "Shared"), &TypeBindings::new()),
+        resolve_type_ref(&db, owner, &named(&db, "Shared")),
         decl_type(&db, class(&db, file, "Shared"))
     );
     let path = TypeRef::Named {
@@ -305,7 +273,7 @@ fn unqualified_types_and_qualified_imports_use_distinct_namespaces() {
         arguments: vec![],
     };
     assert_eq!(
-        resolve_type_ref(&db, owner, &path, &TypeBindings::new()),
+        resolve_type_ref(&db, owner, &path),
         decl_type(
             &db,
             DeclId {
