@@ -1,0 +1,25 @@
+[package]
+name = "lspkl-project"
+version = "0.1.0"
+edition = "2024"
+description = "Pkl project, package, and import resolution for the lspkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+semver = { version = "1", features = ["serde"] }
+fluent-uri.workspace = true
+url.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+lspkl-vfs.workspace = true
+globset.workspace = true
+percent-encoding.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip.workspace = true

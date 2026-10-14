@@ -1,7 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-3:7 error: unresolved reference: bar
-5:7 error: unresolved reference: someQux
-9:11 error: unresolved reference: flooey

@@ -5,6 +5,7 @@
   fetchurl,
   runtimeShell,
   coreutils,
+  llvmPackages,
   stdlibUrl ? "https://codeload.github.com/apple/pkl/zip/9ed02459c136435a50ea32619c33258c149cf95f",
 }:
 let
@@ -49,12 +50,15 @@ rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFile = ../Cargo.lock;
-    outputHashes = {
-      "tree-sitter-pkl-0.21.0" = "sha256-I6jz9MksI+aiuxMQ3hZ1VyksA+rj3XxRKHfe8gkoO/I=";
-    };
   };
 
   PKL_STDLIB_ARCHIVE = stdlibArchive;
+
+  # GNU ar does not produce the Mach-O archive index needed by Apple's linker.
+  env = lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+    AR = "${llvmPackages.bintools}/bin/ar";
+    RANLIB = "${llvmPackages.bintools}/bin/ranlib";
+  };
 
   # These tests create executable shell fixtures at runtime. Only their
   # interpreter changes in the sandbox; their commands and assertions do not.
@@ -62,12 +66,16 @@ rustPlatform.buildRustPackage {
     substituteInPlace \
       crates/lspkl/tests/json_rpc.rs \
       crates/lspkl/tests/stdio.rs \
-      crates/pkl-project/tests/cli.rs \
-      crates/pkl-project/tests/project_manager.rs \
+      crates/lspkl/tests/fallback_cache.rs \
+      crates/lspkl/tests/handlers.rs \
+      crates/lspkl/tests/project_reload.rs \
+      crates/lspkl/tests/settings_regressions.rs \
+      crates/lspkl-project/tests/cli.rs \
+      crates/lspkl-project/tests/project_manager.rs \
       --replace-fail '#!/bin/sh' '#!${runtimeShell}'
     substituteInPlace crates/lspkl/tests/json_rpc.rs crates/lspkl/tests/stdio.rs \
       --replace-fail '/bin/sleep' '${coreutils}/bin/sleep'
-    substituteInPlace crates/lspkl/tests/stdio.rs \
+    substituteInPlace crates/lspkl/tests/stdio.rs crates/lspkl/tests/settings_regressions.rs \
       --replace-fail '/bin/cat' '${coreutils}/bin/cat'
   '';
 
@@ -84,8 +92,8 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     install -Dm644 LICENSE "$out/share/doc/lspkl/LICENSE"
     install -Dm644 NOTICE.txt "$out/share/doc/lspkl/NOTICE.txt"
-    install -Dm644 crates/pkl-stdlib/LICENSE "$out/share/doc/lspkl/stdlib/LICENSE"
-    install -Dm644 crates/pkl-stdlib/NOTICE "$out/share/doc/lspkl/stdlib/NOTICE"
+    install -Dm644 crates/lspkl-stdlib/LICENSE "$out/share/doc/lspkl/stdlib/LICENSE"
+    install -Dm644 crates/lspkl-stdlib/NOTICE "$out/share/doc/lspkl/stdlib/NOTICE"
   '';
 
   doInstallCheck = true;

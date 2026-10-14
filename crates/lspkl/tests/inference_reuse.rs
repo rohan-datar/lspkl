@@ -1,8 +1,8 @@
 use fluent_uri::Uri;
+use lspkl_db::{FileStatus, RootDatabase};
+use lspkl_types::{DeclId, InFile, ItemId, Type, decl_type, module_items};
+use lspkl_vfs::StandardSourceLoader;
 use parking_lot::Mutex;
-use pkl_db::{FileStatus, RootDatabase};
-use pkl_types::{DeclId, InFile, ItemId, Type, decl_type, module_items};
-use pkl_vfs::StandardSourceLoader;
 use std::sync::Arc;
 
 #[test]
@@ -29,7 +29,7 @@ fn hover_reuses_the_body_inferred_by_diagnostics() {
         .unwrap();
     let workspace = lspkl::Workspace::with_database(db);
     let snapshot = workspace.snapshot();
-    let diagnostics = pkl_diagnostics::diagnostics(&snapshot.db, file);
+    let diagnostics = lspkl_diagnostics::diagnostics(&snapshot.db, file);
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(
         events
@@ -40,7 +40,7 @@ fn hover_reuses_the_body_inferred_by_diagnostics() {
         1
     );
     events.lock().clear();
-    let hover = lsp_features::hover::hover(
+    let hover = lspkl_features::hover::hover(
         &snapshot.db,
         file,
         InFile::new(file, (source.rfind("probe").unwrap() as u32).into()),
@@ -98,7 +98,7 @@ fn explicit_declaration_types_do_not_depend_on_initializer_positions() {
         item: ItemId::Property(item),
     };
     let before = decl_type(&db, declaration);
-    assert_eq!(before, *pkl_types::base_module(&db).string_type());
+    assert_eq!(before, *lspkl_types::base_module(&db).string_type());
     events.lock().clear();
     db.upsert_file(
         &uri,

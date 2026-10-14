@@ -2,6 +2,10 @@
 name = "lspkl"
 version = "0.1.0"
 edition = "2024"
+description = "A native language server for the Pkl configuration language"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
 
 [lib]
 path = "src/lib.rs"
@@ -11,14 +15,14 @@ name = "lspkl"
 path = "src/main.rs"
 
 [dependencies]
-pkl-db.workspace = true
+lspkl-db.workspace = true
 salsa.workspace = true
-pkl-diagnostics.workspace = true
-pkl-syntax.workspace = true
-pkl-types.workspace = true
-pkl-vfs.workspace = true
-pkl-project.workspace = true
-lsp-features.workspace = true
+lspkl-diagnostics.workspace = true
+lspkl-syntax.workspace = true
+lspkl-types.workspace = true
+lspkl-vfs.workspace = true
+lspkl-project.workspace = true
+lspkl-features.workspace = true
 lsp-server.workspace = true
 crossbeam-channel.workspace = true
 lsp-types.workspace = true

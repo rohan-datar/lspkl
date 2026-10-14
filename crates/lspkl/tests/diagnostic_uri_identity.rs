@@ -28,7 +28,7 @@ fn client_aliases_share_canonical_inputs_but_close_independently() {
         "jar:file:///nonexistent/library.zip!/library.pkl",
     ] {
         let canonical = Uri::parse(canonical.to_owned()).unwrap();
-        let editor = pkl_vfs::to_editor_uri(&canonical).unwrap();
+        let editor = lspkl_vfs::to_editor_uri(&canonical).unwrap();
         let mut workspace = Workspace::new();
         open(&mut workspace, editor.as_str());
         assert_eq!(
@@ -77,7 +77,7 @@ async fn stdio_publishes_exact_client_alias_and_excludes_closed_aliases() {
         "jar:file:///nonexistent/library.zip!/library.pkl",
     ] {
         let canonical = Uri::parse(canonical.to_owned()).unwrap();
-        let editor = pkl_vfs::to_editor_uri(&canonical).unwrap();
+        let editor = lspkl_vfs::to_editor_uri(&canonical).unwrap();
         client
             .notify(
                 "textDocument/didOpen",

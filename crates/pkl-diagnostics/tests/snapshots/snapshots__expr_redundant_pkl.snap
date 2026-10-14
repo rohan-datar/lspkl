@@ -1,6 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-1:8 error: non null is redundant
-3:8 error: null coalescing is redundant

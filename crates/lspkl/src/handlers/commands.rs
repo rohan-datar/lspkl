@@ -3,7 +3,7 @@
 use super::{HandlerError, Result};
 use crate::state::Snapshot;
 use lsp_types::ExecuteCommandParams;
-use pkl_project::{
+use lspkl_project::{
     cli::PklCli, dto::PackageUri, package_manager::PackageManager, project_manager::ProjectManager,
 };
 use std::path::PathBuf;

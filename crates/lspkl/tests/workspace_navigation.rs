@@ -11,7 +11,7 @@ use std::path::Path;
 
 use lsp_types::*;
 use lspkl::{Workspace, handlers};
-use pkl_project::dto::{PackageMetadata, PackageUri, RemoteDependency};
+use lspkl_project::dto::{PackageMetadata, PackageUri, RemoteDependency};
 use serde_json::{Value, json};
 
 fn uri(path: &Path) -> Uri {

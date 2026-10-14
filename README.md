@@ -8,10 +8,26 @@ quick fixes, and Pkl CLI-backed formatting over the Language Server Protocol
 
 ## Installation
 
+### Install with Cargo
+
+Install a published release from crates.io:
+
+```sh
+cargo install lspkl --locked
+lspkl --version
+```
+
+Building from Cargo requires a Rust toolchain supporting edition 2024 and a C
+compiler for Tree-sitter and the bundled Pkl grammar. A fresh build also needs
+HTTPS access to GitHub to fetch the pinned Pkl 0.32.1 SDK archive; its SHA-256
+checksum is verified before the standard-library sources are embedded.
+To build without this fetch, set `PKL_STDLIB_ARCHIVE` to a pre-fetched supported
+archive (see below).
+
 ### Release binaries
 
-Download the archive for your system from
-[GitHub Releases](https://github.com/rohan-datar/lspkl/releases). 
+Check [GitHub Releases](https://github.com/rohan-datar/lspkl/releases) for
+published archives for your system.
 
 | System | Archive target |
 | --- | --- |
@@ -22,15 +38,17 @@ Download the archive for your system from
 | Windows, x86-64 | `x86_64-pc-windows-msvc` |
 
 
-### Install with Cargo
+### Install from source
 
 ```sh
 cargo install --git https://github.com/rohan-datar/lspkl.git --locked lspkl
 lspkl --version
 ```
 
-A fresh build downloads and verifies the pinned SDK archive from GitHub. The source can be overridden by setting `PKL_STDLIB_URL`; for a pre-fetched archive,
-set `PKL_STDLIB_ARCHIVE`:
+Source builds have the same compiler and SDK requirements as registry installs.
+The download URL can be overridden with `PKL_STDLIB_URL`; this changes the
+source location, not the accepted checksums. For a pre-fetched archive, set
+`PKL_STDLIB_ARCHIVE`:
 
 ```sh
 PKL_STDLIB_URL=https://example.com/pkl-source-0.32.1.zip \
@@ -221,7 +239,15 @@ cargo nextest run --workspace --locked --test-threads=1 --no-fail-fast \
 cargo test --workspace --doc --locked
 ```
 
-
+## License and parser provenance
 
 Licensed under [Apache 2.0](LICENSE). See [NOTICE.txt](NOTICE.txt) and the SDK
-license/notice files for applicable attributions.
+[license](crates/lspkl-stdlib/LICENSE) and [notice](crates/lspkl-stdlib/NOTICE) for
+applicable attributions.
+
+`lspkl-syntax` bundles Apple's
+[`tree-sitter-pkl` grammar at tag `v0.21.0`](https://github.com/apple/tree-sitter-pkl/tree/v0.21.0),
+including the generated C parser, scanner, and required headers. The grammar is
+compiled during the build; it is not fetched from Git and does not require a
+separate grammar crate or Tree-sitter CLI. Its upstream license and notice are
+retained in `crates/lspkl-syntax/vendor/tree-sitter-pkl/`.

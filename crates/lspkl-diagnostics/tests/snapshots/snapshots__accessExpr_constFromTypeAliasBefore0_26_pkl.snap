@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+6:32 warning: should not access non-const property from typealias

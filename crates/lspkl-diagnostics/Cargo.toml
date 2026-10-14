@@ -1,0 +1,24 @@
+[package]
+name = "lspkl-diagnostics"
+version = "0.1.0"
+edition = "2024"
+description = "Pkl diagnostics and fixes for the lspkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+# These integration tests share support code with other workspace crates.
+exclude = ["tests/**"]
+
+[dependencies]
+salsa.workspace = true
+lspkl-db.workspace = true
+lspkl-syntax.workspace = true
+lspkl-types.workspace = true
+fluent-uri.workspace = true
+semver = "1"
+
+[dev-dependencies]
+parking_lot.workspace = true
+lspkl-project.workspace = true
+lspkl-vfs.workspace = true
+insta.workspace = true

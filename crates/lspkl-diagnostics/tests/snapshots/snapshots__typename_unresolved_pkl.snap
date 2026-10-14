@@ -1,0 +1,12 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+3:17 error: unresolved reference: Baz
+5:17 error: unresolved reference: Baz
+7:19 error: unresolved reference: Fooey
+9:8 error: unresolved reference: Baz
+11:8 error: unresolved reference: Baz
+13:8 error: unresolved reference: Fooey
+15:1 error: could not find annotation: Baz
+18:1 error: could not find annotation: Bar.Baz

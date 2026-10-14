@@ -5,9 +5,9 @@ use crate::{
     perf,
     state::{ReloadWork, Snapshot, Workspace},
 };
-use lsp_features::positions::PositionEncoding;
 use lsp_types::*;
-use pkl_db::settings::WorkspaceSettings;
+use lspkl_db::settings::WorkspaceSettings;
+use lspkl_features::positions::PositionEncoding;
 use tracing::error;
 
 pub fn initialize(workspace: &mut Workspace, params: &InitializeParams) -> InitializeResult {
@@ -126,12 +126,12 @@ pub fn did_change_workspace_folders(
 
 pub fn prepare_restore_workspaces(
     snapshot: &Snapshot,
-) -> pkl_project::project_manager::ProjectManager {
+) -> lspkl_project::project_manager::ProjectManager {
     snapshot.project_manager.lock().clone()
 }
 pub fn restore_workspaces(
-    mut manager: pkl_project::project_manager::ProjectManager,
-) -> Result<pkl_project::project_manager::ProjectManager> {
+    mut manager: lspkl_project::project_manager::ProjectManager,
+) -> Result<lspkl_project::project_manager::ProjectManager> {
     for root in manager.workspace_folders().to_vec() {
         let path = root.join(".lspkl/projects.json");
         match path.try_exists() {

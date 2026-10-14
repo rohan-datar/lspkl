@@ -1,7 +1,7 @@
 //! Immutable SDK bootstrap must survive cancellation of the first document analysis.
 use lspkl::{Workspace, handlers::HandlerError};
-use pkl_db::{Db, RootDatabase};
-use pkl_types::NodeRef;
+use lspkl_db::{Db, RootDatabase};
+use lspkl_types::NodeRef;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -17,7 +17,7 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
     let callback_release = release.clone();
     let callback_executions = executions.clone();
     let db = RootDatabase::with_event_callback(
-        Arc::new(pkl_vfs::StandardSourceLoader::default()),
+        Arc::new(lspkl_vfs::StandardSourceLoader::default()),
         Default::default(),
         Some(Box::new(move |event| match event.kind {
             salsa::EventKind::WillExecute { database_key } => {
@@ -61,7 +61,7 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
     let snapshot = workspace.snapshot();
     let reader = std::thread::spawn(move || {
         snapshot.run("sdk_bootstrap", |snapshot| {
-            let ctx = pkl_types::AnalysisContext::for_root(&snapshot.db, file);
+            let ctx = lspkl_types::AnalysisContext::for_root(&snapshot.db, file);
             Ok(ctx.tree(file).unwrap().source().to_owned())
         })
     });
@@ -83,15 +83,15 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
         Err(HandlerError::ContentModified)
     ));
     let snapshot = workspace.snapshot();
-    let ctx = pkl_types::AnalysisContext::for_root(&snapshot.db, file);
+    let ctx = lspkl_types::AnalysisContext::for_root(&snapshot.db, file);
     let tree = ctx.tree(file).unwrap();
     let property = tree
         .child(tree.root(), |kind| {
-            matches!(kind, pkl_syntax::ast::NodeKind::ClassProperty)
+            matches!(kind, lspkl_syntax::ast::NodeKind::ClassProperty)
         })
         .unwrap();
     assert_eq!(
-        pkl_types::resolver::definition_type(ctx.db, NodeRef::new(file, property), ctx.root)
+        lspkl_types::resolver::definition_type(ctx.db, NodeRef::new(file, property), ctx.root)
             .render(ctx.db),
         "String"
     );

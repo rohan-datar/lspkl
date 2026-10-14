@@ -3,13 +3,13 @@ use fluent_uri::Uri;
 mod support;
 
 use lspkl::Workspace;
-use pkl_db::{Db, File, FileStatus, ImportResolution, parse, resolve_import};
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
-use pkl_types::NodeRef;
+use lspkl_db::{Db, File, FileStatus, ImportResolution, parse, resolve_import};
+use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
+use lspkl_types::NodeRef;
 use std::{fs, path::Path, sync::Arc};
 
 fn uri(path: &Path) -> Uri<String> {
-    pkl_vfs::path_to_uri(path).unwrap()
+    lspkl_vfs::path_to_uri(path).unwrap()
 }
 fn prepare(state: &mut Workspace, path: &Path, source: &str) -> File {
     open(state, uri(path), source.into(), Some(1))
@@ -62,14 +62,14 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         let original = parse(state.database(), builtin).as_ref().unwrap().clone();
         if warm {
             let view = state.snapshot();
-            assert_eq!(pkl_types::base_module(&view.db).file_id(), builtin);
+            assert_eq!(lspkl_types::base_module(&view.db).file_id(), builtin);
         }
         let file = open(&mut state, url.clone(), "edited = 1\n".into(), Some(1));
         assert_eq!(file, builtin);
         assert_eq!(file.version(state.database()), Some(1));
         {
             let view = state.snapshot();
-            let ctx = pkl_types::AnalysisContext::for_root(&view.db, file);
+            let ctx = lspkl_types::AnalysisContext::for_root(&view.db, file);
             assert_eq!(ctx.base.file_id(), file);
             assert_eq!(ctx.base.string_type().render(ctx.db), "String");
             assert_eq!(ctx.tree(file).unwrap().source(), original.source());
@@ -88,14 +88,14 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         );
         {
             let view = state.snapshot();
-            let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+            let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
             assert_eq!(single(&state, root), builtin);
             let tree = ctx.tree(root).unwrap();
             let property = tree
                 .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
                 .unwrap();
             assert_eq!(
-                pkl_types::resolver::definition_type(
+                lspkl_types::resolver::definition_type(
                     ctx.db,
                     NodeRef::new(root, property),
                     ctx.root
@@ -110,7 +110,7 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         assert_eq!(file.version(state.database()), None);
         assert_eq!(state.database().file(&url).unwrap(), builtin);
         let view = state.snapshot();
-        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+        let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
         assert_eq!(ctx.base.string_type().render(ctx.db), "String");
         assert_eq!(ctx.tree(builtin).unwrap().source(), original.source());
     }
@@ -121,7 +121,7 @@ fn uri_diagnostics_use_real_resolution_for_single_expression_extends_glob_and_pa
     fs::write(temp.path().join("valid.pkl"), "value = 1").unwrap();
     let mut state = Workspace::new();
     state.apply_settings(
-        pkl_db::settings::WorkspaceSettings::parse(
+        lspkl_db::settings::WorkspaceSettings::parse(
             serde_json::json!({ "cacheDir": temp.path().join("cache") }),
         )
         .unwrap(),
@@ -167,9 +167,9 @@ value = import("missing-expr.pkl")
             .count(),
         3
     );
-    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
-    let diagnostics = pkl_diagnostics::DiagnosticsEngine::new()
-        .with(Box::new(pkl_diagnostics::analyzers::ModuleUriAnalyzer))
+    let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
+    let diagnostics = lspkl_diagnostics::DiagnosticsEngine::new()
+        .with(Box::new(lspkl_diagnostics::analyzers::ModuleUriAnalyzer))
         .analyze(&ctx, root);
     assert_eq!(diagnostics.len(), 5);
     let downloads: Vec<_> = diagnostics.iter().flat_map(|d| &d.quick_fixes).collect();
@@ -177,7 +177,7 @@ value = import("missing-expr.pkl")
     assert_eq!(
         downloads[0].command,
         Some(
-            pkl_diagnostics::diagnostic::QuickFixCommand::DownloadPackage {
+            lspkl_diagnostics::diagnostic::QuickFixCommand::DownloadPackage {
                 uri: "package://example.test/uncached@1.0.0".into(),
             }
         )
@@ -210,7 +210,7 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
     let mut state = Workspace::new();
     let root = prepare(&mut state, &dir.join("main.pkl"), main);
     let view = state.snapshot();
-    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+    let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
     assert_eq!(ctx.base.string_type().render(ctx.db), "String");
     let file_for = |path: &str| view.db.file(&uri(&dir.join(path))).unwrap();
     let expected_edges = [
@@ -232,7 +232,7 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
         );
         assert_eq!(
             ctx.import(NodeRef::new(file, owner)),
-            Some(pkl_types::ImportResolution::Single(NodeRef::new(
+            Some(lspkl_types::ImportResolution::Single(NodeRef::new(
                 file_for(target),
                 NodeId::ROOT
             )))
@@ -270,7 +270,7 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
         "import \"./good.pkl\"\nimport \"./missing.pkl\"\nimport \"ftp://example.com/remote.pkl\"\nimport* \"./glob-only.pkl\"\nmainValue = 0\n",
     );
     let view = state.snapshot();
-    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+    let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
     let good = view.db.file(&uri(&temp.path().join("good.pkl"))).unwrap();
     let glob = view
         .db
@@ -328,7 +328,7 @@ fn later_requests_see_editor_updates_without_mutating_owned_tree_observations() 
     let (before_root, before_target) = {
         let view = state.snapshot();
         assert_eq!(single(&state, root), target);
-        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+        let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
         assert_eq!(property_name(ctx.tree(target).unwrap()), "oldValue");
         (
             parse(&view.db, root).as_ref().unwrap().clone(),
@@ -340,7 +340,7 @@ fn later_requests_see_editor_updates_without_mutating_owned_tree_observations() 
     assert_eq!(single(&state, root), target);
     assert_eq!(
         property_name(
-            pkl_types::AnalysisContext::for_root(&view.db, root)
+            lspkl_types::AnalysisContext::for_root(&view.db, root)
                 .tree(target)
                 .unwrap()
         ),
@@ -378,7 +378,7 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     let observed = {
         let view = state.snapshot();
         assert_eq!(single(&state, root), target);
-        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+        let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
         (
             property_name(ctx.tree(root).unwrap()).to_owned(),
             property_name(ctx.tree(target).unwrap()).to_owned(),
@@ -401,7 +401,7 @@ fn completed_consumers_observe_edit_close_and_reopen() {
         let view = state.snapshot();
         assert_eq!(
             property_name(
-                pkl_types::AnalysisContext::for_root(&view.db, root)
+                lspkl_types::AnalysisContext::for_root(&view.db, root)
                     .tree(target)
                     .unwrap()
             ),
@@ -430,7 +430,7 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     assert_eq!(single(&state, root), target);
     assert_eq!(
         property_name(
-            pkl_types::AnalysisContext::for_root(&view.db, root)
+            lspkl_types::AnalysisContext::for_root(&view.db, root)
                 .tree(root)
                 .unwrap()
         ),
@@ -438,7 +438,7 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     );
     assert_eq!(
         property_name(
-            pkl_types::AnalysisContext::for_root(&view.db, root)
+            lspkl_types::AnalysisContext::for_root(&view.db, root)
                 .tree(target)
                 .unwrap()
         ),
@@ -494,7 +494,7 @@ fn open(
     url: Uri<String>,
     text: String,
     version: Option<i32>,
-) -> pkl_db::File {
+) -> lspkl_db::File {
     state
         .apply_open(lsp_types::DidOpenTextDocumentParams {
             text_document: lsp_types::TextDocumentItem {
@@ -604,7 +604,7 @@ fn base_is_addressable_like_every_other_file() {
     assert!(parse(state.database(), base).is_ok());
     let view = state.snapshot();
     assert_eq!(
-        pkl_types::AnalysisContext::for_root(&view.db, base)
+        lspkl_types::AnalysisContext::for_root(&view.db, base)
             .base
             .file_id(),
         base

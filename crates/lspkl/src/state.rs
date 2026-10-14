@@ -3,12 +3,12 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use fluent_uri::Uri;
-use lsp_features::positions::PositionEncoding;
-use pkl_db::{
+use lspkl_db::{
     Db, DirectoryUpdate, File, FileStatus, IoUpdate, RootDatabase, settings::WorkspaceSettings,
 };
-use pkl_project::{PklProject, cli::PklCli, dto::ProjectDeps};
-use pkl_vfs::{
+use lspkl_features::positions::PositionEncoding;
+use lspkl_project::{PklProject, cli::PklCli, dto::ProjectDeps};
+use lspkl_vfs::{
     FileError, Source, SourceLoader, StandardSourceLoader, parse_source_uri, url_to_path,
 };
 use salsa::{Database, Setter};
@@ -30,7 +30,7 @@ pub enum WorkspaceError {
 pub struct Workspace {
     pub(crate) db: RootDatabase,
     https_loader: Arc<StandardSourceLoader>,
-    project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
+    project_manager: Arc<parking_lot::Mutex<lspkl_project::project_manager::ProjectManager>>,
     settings: Arc<WorkspaceSettings>,
     explicit_settings: WorkspaceSettings,
     position_encoding: PositionEncoding,
@@ -51,7 +51,7 @@ pub struct Workspace {
 pub struct Snapshot {
     pub db: RootDatabase,
     pub(crate) project_manager:
-        Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
+        Arc<parking_lot::Mutex<lspkl_project::project_manager::ProjectManager>>,
     pub settings: Arc<WorkspaceSettings>,
     pub position_encoding: PositionEncoding,
     pub client_configuration: bool,
@@ -93,7 +93,7 @@ impl Workspace {
         db: RootDatabase,
         https_loader: Arc<StandardSourceLoader>,
     ) -> Self {
-        let _ = pkl_types::base_module(&db);
+        let _ = lspkl_types::base_module(&db);
         let settings = Arc::new(db.config().settings(&db).clone());
         Self {
             db,
@@ -127,7 +127,7 @@ impl Workspace {
     pub fn document_version(&self, uri: &str) -> Option<i32> {
         self.document(uri).and_then(|file| file.version(&self.db))
     }
-    pub fn project_manager(&self) -> pkl_project::project_manager::ProjectManager {
+    pub fn project_manager(&self) -> lspkl_project::project_manager::ProjectManager {
         self.project_manager.lock().clone()
     }
     pub fn settings(&self) -> &WorkspaceSettings {
@@ -402,7 +402,10 @@ impl Workspace {
         settings.resolved_cache_dir = None;
         self.apply_settings(settings);
     }
-    pub fn apply_project_manager(&mut self, manager: pkl_project::project_manager::ProjectManager) {
+    pub fn apply_project_manager(
+        &mut self,
+        manager: lspkl_project::project_manager::ProjectManager,
+    ) {
         self.project_generation += 1;
         self.project_manager = Arc::new(parking_lot::Mutex::new(manager));
         self.refresh_projects();
@@ -440,7 +443,7 @@ impl Workspace {
             if uri.scheme().as_str() != "jar" {
                 continue;
             }
-            if let Ok(archive) = pkl_vfs::archive_file_uri(uri)
+            if let Ok(archive) = lspkl_vfs::archive_file_uri(uri)
                 && uris[..changed].contains(&archive)
             {
                 uris.push(uri.clone());

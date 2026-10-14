@@ -1,0 +1,20 @@
+---
+source: crates/lspkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    LogicalOrExpr
+      IntLiteralExpr
+      LineComment
+      IntLiteralExpr
+  ClassProperty
+    AdditiveExpr
+      IntLiteralExpr
+      BlockComment
+      IntLiteralExpr
+  ClassProperty
+    NullCoalesceExpr
+      IntLiteralExpr
+      LineComment
+      IntLiteralExpr

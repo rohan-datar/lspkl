@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for index in 0..args.modules {
         let path = workspace.path().join(format!("module{index}.pkl"));
         std::fs::write(&path, source(index, args.modules, 1))?;
-        uris.push(pkl_vfs::path_to_uri(&path)?.to_string());
+        uris.push(lspkl_vfs::path_to_uri(&path)?.to_string());
     }
     let mut client =
         LspClient::spawn_with_stderr_limit(&binary, workspace.path(), usize::MAX).await;

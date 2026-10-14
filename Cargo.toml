@@ -7,7 +7,6 @@ insta = "1.43.2"
 text-size = "1.1"
 line-index = "0.1"
 tree-sitter = "0.25"
-tree-sitter-pkl = { git = "https://github.com/apple/tree-sitter-pkl", tag = "v0.21.0" }
 
 salsa = "0.28"
 la-arena = "0.3"
@@ -32,14 +31,14 @@ sha2 = "0.10"
 percent-encoding = "2"
 
 # Path deps
-pkl-stdlib = { path = "crates/pkl-stdlib" }
-pkl-db = { path = "crates/pkl-db" }
-pkl-syntax = { path = "crates/pkl-syntax" }
-pkl-vfs = { path = "crates/pkl-vfs" }
-pkl-types = { path = "crates/pkl-types" }
-pkl-diagnostics = { path = "crates/pkl-diagnostics" }
-pkl-project = { path = "crates/pkl-project" }
-lsp-features = { path = "crates/lsp-features" }
+lspkl-stdlib = { version = "0.1.0", path = "crates/lspkl-stdlib" }
+lspkl-db = { version = "0.1.0", path = "crates/lspkl-db" }
+lspkl-syntax = { version = "0.1.0", path = "crates/lspkl-syntax" }
+lspkl-vfs = { version = "0.1.0", path = "crates/lspkl-vfs" }
+lspkl-types = { version = "0.1.0", path = "crates/lspkl-types" }
+lspkl-diagnostics = { version = "0.1.0", path = "crates/lspkl-diagnostics" }
+lspkl-project = { version = "0.1.0", path = "crates/lspkl-project" }
+lspkl-features = { version = "0.1.0", path = "crates/lspkl-features" }
 
 [profile.release]
 lto = "thin"

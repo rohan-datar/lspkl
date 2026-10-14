@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:13 error: cannot reference module from const

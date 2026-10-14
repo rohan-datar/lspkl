@@ -18,6 +18,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Verify crates.io packages without publishing
+        run: cargo publish --workspace --locked --dry-run
 
   test:
     name: Native tests (${{ matrix.os }})

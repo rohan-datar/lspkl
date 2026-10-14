@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use fluent_uri::Uri;
 use lspkl::Workspace;
-use pkl_db::{File, ImportResolution, parse, resolve_import};
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
+use lspkl_db::{File, ImportResolution, parse, resolve_import};
+use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
 fn file_uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
@@ -207,7 +207,7 @@ fn open(
     url: Uri<String>,
     text: String,
     version: Option<i32>,
-) -> pkl_db::File {
+) -> lspkl_db::File {
     state
         .apply_open(lsp_types::DidOpenTextDocumentParams {
             text_document: lsp_types::TextDocumentItem {
@@ -224,7 +224,7 @@ fn open(
 
 #[test]
 fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
-    use pkl_db::Db;
+    use lspkl_db::Db;
     use std::io::Write;
     let temp = tempfile::tempdir().unwrap();
     for name in ["outer", "inner"] {
@@ -259,7 +259,7 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
             ("inner/PklProject", &["lib"]),
         ],
     );
-    state.apply_settings(pkl_db::settings::WorkspaceSettings {
+    state.apply_settings(lspkl_db::settings::WorkspaceSettings {
         modulepath: vec![archive],
         ..Default::default()
     });
@@ -268,9 +268,9 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
     // A contextless warmup must not freeze the remote's project routing.
     {
         let view = state.snapshot();
-        let ctx = pkl_types::AnalysisContext::for_root(&view.db, shared);
+        let ctx = lspkl_types::AnalysisContext::for_root(&view.db, shared);
         assert!(
-            ctx.import(pkl_types::NodeRef::new(
+            ctx.import(lspkl_types::NodeRef::new(
                 shared,
                 import_node(ctx.tree(shared).unwrap())
             ))
@@ -284,26 +284,26 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
     let (inner, _) = source(&mut state, &temp.path().join("inner/main.pkl"), text);
     let view = state.snapshot();
     for (root, expected) in [(outer, "Int"), (inner, "String"), (outer, "Int")] {
-        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
+        let ctx = lspkl_types::AnalysisContext::for_root(&view.db, root);
         let tree = ctx.tree(root).unwrap();
         let property = tree
             .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))
             .unwrap();
         assert_eq!(
-            pkl_types::resolver::definition_type(
+            lspkl_types::resolver::definition_type(
                 ctx.db,
-                pkl_types::NodeRef::new(root, property),
+                lspkl_types::NodeRef::new(root, property),
                 ctx.root
             )
             .render(ctx.db),
             expected
         );
         let imported = ctx
-            .import(pkl_types::NodeRef::new(root, import_node(tree)))
+            .import(lspkl_types::NodeRef::new(root, import_node(tree)))
             .unwrap()
             .single()
             .unwrap();
         assert_eq!(imported.file, shared);
-        assert!(pkl_db::project_for_file(&view.db, shared).is_none());
+        assert!(lspkl_db::project_for_file(&view.db, shared).is_none());
     }
 }

@@ -1,0 +1,13 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+3:1 error: missing modifier `local`
+  fix: add modifier `local`
+    insert "local " at 3:1
+5:1 error: missing modifier `local`
+  fix: add modifier `local`
+    insert "local " at 5:1
+8:3 error: missing modifier `local`
+  fix: add modifier `local`
+    insert "local " at 8:3

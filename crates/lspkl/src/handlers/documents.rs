@@ -6,11 +6,11 @@ use super::{
 };
 use crate::{perf, state::Snapshot};
 use fluent_uri::Uri;
-use lsp_features::positions::PositionConverter;
 use lsp_types::*;
-use pkl_db::FileStatus;
-use pkl_types::InFile;
-use pkl_vfs::{Source, SourceLoader};
+use lspkl_db::FileStatus;
+use lspkl_features::positions::PositionConverter;
+use lspkl_types::InFile;
+use lspkl_vfs::{Source, SourceLoader};
 use std::{path::PathBuf, sync::Arc};
 use tracing::{error, info};
 
@@ -27,7 +27,7 @@ pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> 
         return Ok(None);
     };
     let _compute = perf::Compute::start("hover");
-    Ok(lsp_features::hover::hover(
+    Ok(lspkl_features::hover::hover(
         &snapshot.db,
         file,
         InFile::new(file, offset),
@@ -50,14 +50,16 @@ pub fn definition(
         return Ok(None);
     };
     let _compute = perf::Compute::start("goto_definition");
-    Ok(lsp_features::goto_definition::goto_definition(
+    Ok(lspkl_features::goto_definition::goto_definition(
         &snapshot.db,
         file,
         InFile::new(file, offset),
         |file| {
             let uri = file.uri(&snapshot.db);
             match uri.scheme().as_str() {
-                "pkl" | "https" | "jar" => pkl_vfs::to_editor_uri(uri).ok()?.as_str().parse().ok(),
+                "pkl" | "https" | "jar" => {
+                    lspkl_vfs::to_editor_uri(uri).ok()?.as_str().parse().ok()
+                }
                 _ => uri.as_str().parse().ok(),
             }
         },
@@ -79,8 +81,8 @@ pub fn completion(
     let Some(offset) = PositionConverter::new(tree, encoding).offset(doc.position) else {
         return Ok(None);
     };
-    let uri_completion = pkl_db::with_module_resolver(&snapshot.db, |resolver| {
-        lsp_features::module_uri_completion::completion(
+    let uri_completion = lspkl_db::with_module_resolver(&snapshot.db, |resolver| {
+        lspkl_features::module_uri_completion::completion(
             &snapshot.db,
             file,
             offset,
@@ -93,7 +95,7 @@ pub fn completion(
     }
     let _compute = perf::Compute::start("completion");
     let positions = PositionConverter::new(tree, encoding);
-    Ok(lsp_features::completion::completion(
+    Ok(lspkl_features::completion::completion(
         &snapshot.db,
         file,
         InFile::new(file, offset),
@@ -101,7 +103,7 @@ pub fn completion(
     ))
 }
 pub fn resolve(snapshot: &Snapshot, item: CompletionItem) -> Result<CompletionItem> {
-    Ok(lsp_features::module_uri_completion::resolve(
+    Ok(lspkl_features::module_uri_completion::resolve(
         &snapshot.db,
         item,
     ))
@@ -123,13 +125,13 @@ pub fn code_action(
     let _compute = perf::Compute::start("code_action");
     let positions = PositionConverter::new(tree, snapshot.position_encoding);
     let actions =
-        lsp_features::code_action::code_action(&params, &diags, |range| positions.range(range));
+        lspkl_features::code_action::code_action(&params, &diags, |range| positions.range(range));
     Ok(Some(CodeActionResponse::from(actions)))
 }
 /// Extract owned formatter input before starting a subprocess.
 pub struct FormatRequest {
     source: Arc<str>,
-    settings: Arc<pkl_db::settings::WorkspaceSettings>,
+    settings: Arc<lspkl_db::settings::WorkspaceSettings>,
     uri: String,
 }
 pub fn prepare_formatting(
@@ -144,7 +146,7 @@ pub fn prepare_formatting(
     }))
 }
 pub fn formatting(request: FormatRequest) -> Result<Option<Vec<TextEdit>>> {
-    match lsp_features::formatting::formatting(
+    match lspkl_features::formatting::formatting(
         &request.source,
         request.settings.cli_path(),
         request
@@ -152,7 +154,7 @@ pub fn formatting(request: FormatRequest) -> Result<Option<Vec<TextEdit>>> {
             .formatter
             .grammar_version
             .as_ref()
-            .map(pkl_db::settings::GrammarVersion::as_str),
+            .map(lspkl_db::settings::GrammarVersion::as_str),
     ) {
         Ok(edits) => Ok(Some(edits)),
         Err(error) => {
@@ -178,7 +180,7 @@ pub fn prepare_file_contents(
     snapshot: &Snapshot,
     document: TextDocumentIdentifier,
 ) -> Result<FileContentsRequest> {
-    let uri = pkl_vfs::parse_source_uri(document.uri.as_str())?;
+    let uri = lspkl_vfs::parse_source_uri(document.uri.as_str())?;
     if let Some(file) = snapshot.db.known_file(&uri)
         && file.status(&snapshot.db) != FileStatus::Missing
     {
@@ -208,7 +210,7 @@ pub fn file_contents(request: FileContentsRequest) -> Result<FileContentsResult>
             let source = match loader.load(&uri, &cache_dir) {
                 Ok(source) => source,
                 Err(_) if uri.scheme().as_str() == "https" => {
-                    pkl_vfs::StandardSourceLoader::new().fetch(&uri, &cache_dir)?
+                    lspkl_vfs::StandardSourceLoader::new().fetch(&uri, &cache_dir)?
                 }
                 Err(error) => return Err(error.into()),
             };

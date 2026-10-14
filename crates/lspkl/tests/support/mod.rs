@@ -70,18 +70,18 @@ pub fn initialize_workspace(
 /// input also advances the analysis generation.
 pub fn preload(workspace: &mut lspkl::Workspace) {
     let loader = workspace.database().source_loader_handle();
-    let https = pkl_vfs::StandardSourceLoader::new();
+    let https = lspkl_vfs::StandardSourceLoader::new();
     let roots = workspace.database().directory_roots();
     for root in roots {
         workspace
-            .apply_io(pkl_db::IoUpdate::Directory(pkl_db::DirectoryUpdate::load(
-                &*loader, &root,
-            )))
+            .apply_io(lspkl_db::IoUpdate::Directory(
+                lspkl_db::DirectoryUpdate::load(&*loader, &root),
+            ))
             .expect("fixture directory input should apply");
     }
     loop {
         for file in workspace.database().all_files() {
-            let _ = pkl_db::import_graph(workspace.database(), file);
+            let _ = lspkl_db::import_graph(workspace.database(), file);
         }
         let jobs = workspace.database().pending_io();
         if jobs.is_empty() {
@@ -89,10 +89,10 @@ pub fn preload(workspace: &mut lspkl::Workspace) {
         }
         for job in jobs {
             let update = match job {
-                pkl_db::PendingIo::Source { uri, cache_dir }
+                lspkl_db::PendingIo::Source { uri, cache_dir }
                     if uri.scheme().as_str() == "https" =>
                 {
-                    pkl_db::IoUpdate::Source {
+                    lspkl_db::IoUpdate::Source {
                         text: loader
                             .load(&uri, &cache_dir)
                             .ok()

@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let workspace = tempfile::tempdir()?;
     let root_uri = url::Url::from_directory_path(workspace.path())
         .map_err(|()| "workspace path is not absolute")?;
-    let document_uri = pkl_vfs::path_to_uri(&workspace.path().join("main.pkl"))?;
+    let document_uri = lspkl_vfs::path_to_uri(&workspace.path().join("main.pkl"))?;
     let source = "import \"pkl:json\"\nparser: json.Parser = new {}\ntext: String = \"hello\"\n";
     let mut initialize_ms = Vec::with_capacity(usize::from(args.iterations));
     let mut analysis_ms = Vec::with_capacity(usize::from(args.iterations));
