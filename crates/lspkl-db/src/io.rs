@@ -200,11 +200,10 @@ impl RootDatabase {
                 self.apply_source(&uri, text)?;
             }
             IoUpdate::Directory(update) => {
-                self.files
-                    .pending_directories
-                    .lock()
-                    .remove(update.root.as_str());
+                let root = update.root.clone();
                 self.apply_directory_updates(vec![update]);
+                // After the setter has drained readers, as for sources.
+                self.files.pending_directories.lock().remove(root.as_str());
             }
             IoUpdate::Routing { request, root } => {
                 let key = format!("{request:?}");

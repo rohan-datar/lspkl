@@ -251,10 +251,10 @@ impl RootDatabase {
         text: Option<Arc<str>>,
     ) -> Result<File, FileError> {
         let canonical = effective_uri(uri)?;
-        self.files.pending_sources.lock().remove(canonical.as_str());
         if let Some(file) = self.known_file(uri)
             && (file.status(self) == FileStatus::Open || file.uri(self).scheme().as_str() == "pkl")
         {
+            self.files.pending_sources.lock().remove(canonical.as_str());
             return Ok(file);
         }
         let status = if text.is_some() {
@@ -344,7 +344,6 @@ impl RootDatabase {
         status: FileStatus,
     ) -> Result<File, FileError> {
         let uri = effective_uri(uri)?;
-        self.files.pending_sources.lock().remove(uri.as_str());
         let file = if let Some(file) = self.known_file(&uri) {
             file
         } else {
@@ -365,6 +364,9 @@ impl RootDatabase {
         if file.status(self) != status {
             file.set_status(self).to(status);
         }
+        // Only after the setters have cancelled and drained readers: a reader that saw
+        // no pending load must also see the installed input.
+        self.files.pending_sources.lock().remove(uri.as_str());
         Ok(file)
     }
     pub fn open_file(
