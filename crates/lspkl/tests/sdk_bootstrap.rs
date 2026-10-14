@@ -61,7 +61,7 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
     let snapshot = workspace.snapshot();
     let reader = std::thread::spawn(move || {
         snapshot.run("sdk_bootstrap", |snapshot| {
-            let ctx = snapshot.context(file);
+            let ctx = pkl_types::AnalysisContext::for_root(&snapshot.db, file);
             Ok(ctx.tree(file).unwrap().source().to_owned())
         })
     });
@@ -83,7 +83,7 @@ fn first_analysis_cancellation_does_not_restart_sdk_parsing() {
         Err(HandlerError::ContentModified)
     ));
     let snapshot = workspace.snapshot();
-    let ctx = snapshot.context(file);
+    let ctx = pkl_types::AnalysisContext::for_root(&snapshot.db, file);
     let tree = ctx.tree(file).unwrap();
     let property = tree
         .child(tree.root(), |kind| {

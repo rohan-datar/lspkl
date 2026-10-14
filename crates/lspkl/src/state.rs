@@ -1,18 +1,12 @@
 //! Notification-side workspace ownership and short-lived Salsa request handles.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{Arc, LazyLock},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use fluent_uri::Uri;
 use lsp_features::positions::PositionEncoding;
 use pkl_db::{Db, DirectoryUpdate, File, FileStatus, RootDatabase, settings::WorkspaceSettings};
-use pkl_diagnostics::DiagnosticsEngine;
 use pkl_project::{PklProject, cli::PklCli, dto::ProjectDeps};
-use pkl_types::{AnalysisContext, BaseModule};
-use pkl_vfs::{FileError, Source, SourceLoader, effective_uri, url_to_path};
+use pkl_vfs::{FileError, Source, SourceLoader, parse_source_uri, url_to_path};
 use salsa::{Database, Setter};
 
 use crate::{
@@ -33,8 +27,6 @@ pub struct Workspace {
     pub db: RootDatabase,
     project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
     settings: Arc<WorkspaceSettings>,
-    base_module: Arc<BaseModule>,
-    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
     position_encoding: PositionEncoding,
     client_configuration: bool,
     pub watched_files: bool,
@@ -54,8 +46,6 @@ pub struct Snapshot {
     pub db: RootDatabase,
     pub project_manager: Arc<parking_lot::Mutex<pkl_project::project_manager::ProjectManager>>,
     pub settings: Arc<WorkspaceSettings>,
-    base_module: Arc<BaseModule>,
-    diagnostics: Arc<LazyLock<DiagnosticsEngine>>,
     pub position_encoding: PositionEncoding,
     pub client_configuration: bool,
     pub generation: u64,
@@ -87,14 +77,12 @@ impl Workspace {
     }
     /// Bootstrap immutable SDK analysis before exposing any request snapshots.
     pub fn with_database(db: RootDatabase) -> Self {
-        let base_module = pkl_types::base_module(&db).clone();
+        let _ = pkl_types::base_module(&db);
         let settings = Arc::new(db.config().settings(&db).clone());
         Self {
             db,
             project_manager: Arc::new(parking_lot::Mutex::new(Default::default())),
             settings,
-            base_module,
-            diagnostics: Arc::new(LazyLock::new(DiagnosticsEngine::default)),
             position_encoding: PositionEncoding::default(),
             client_configuration: false,
             watched_files: false,
@@ -112,8 +100,6 @@ impl Workspace {
             db: self.db.clone(),
             project_manager: Arc::clone(&self.project_manager),
             settings: Arc::clone(&self.settings),
-            base_module: Arc::clone(&self.base_module),
-            diagnostics: Arc::clone(&self.diagnostics),
             position_encoding: self.position_encoding,
             client_configuration: self.client_configuration,
             generation: self.generation,
@@ -143,7 +129,7 @@ impl Workspace {
         params: lsp_types::DidOpenTextDocumentParams,
     ) -> std::result::Result<(), FileError> {
         let document = params.text_document;
-        let uri = effective_uri(&Uri::parse(document.uri.as_str().to_owned())?)?;
+        let uri = parse_source_uri(document.uri.as_str())?;
         let _write = perf::Compute::runtime("salsa_write");
         self.db
             .open_file(&uri, Arc::from(document.text), Some(document.version))?;
@@ -155,10 +141,12 @@ impl Workspace {
         &mut self,
         params: lsp_types::DidChangeTextDocumentParams,
     ) -> std::result::Result<(), WorkspaceError> {
-        let uri = effective_uri(
-            &Uri::parse(params.text_document.uri.as_str().to_owned()).map_err(FileError::from)?,
-        )?;
-        if self.document(uri.as_str()).is_none() {
+        let uri = parse_source_uri(params.text_document.uri.as_str())?;
+        if !self
+            .db
+            .known_file(&uri)
+            .is_some_and(|file| file.status(&self.db) == FileStatus::Open)
+        {
             return Err(WorkspaceError::NotOpen(uri));
         }
         let Some(change) = params.content_changes.into_iter().last() else {
@@ -178,7 +166,7 @@ impl Workspace {
         &mut self,
         params: lsp_types::DidCloseTextDocumentParams,
     ) -> std::result::Result<ReloadWork, FileError> {
-        let uri = effective_uri(&Uri::parse(params.text_document.uri.as_str().to_owned())?)?;
+        let uri = parse_source_uri(params.text_document.uri.as_str())?;
         self.open_documents.remove(&params.text_document.uri);
         if self
             .open_documents
@@ -188,7 +176,11 @@ impl Workspace {
             self.invalidate_analysis();
             return Ok(self.reload_work(Vec::new(), false, false));
         }
-        if let Some(file) = self.document(uri.as_str()) {
+        if let Some(file) = self
+            .db
+            .known_file(&uri)
+            .filter(|file| file.status(&self.db) == FileStatus::Open)
+        {
             let _write = perf::Compute::runtime("salsa_write");
             let status = if uri.scheme().as_str() == "pkl" {
                 FileStatus::Present
@@ -255,7 +247,7 @@ impl Workspace {
             .unwrap_or_else(|| params.root_uri.iter().collect());
         let folders = uris
             .into_iter()
-            .filter_map(|uri| Uri::parse(uri.as_str().to_owned()).ok())
+            .filter_map(|uri| parse_source_uri(uri.as_str()).ok())
             .filter_map(|uri| url_to_path(&uri).ok())
             .collect();
         self.project_manager.lock().initialize(folders);
@@ -272,14 +264,14 @@ impl Workspace {
     pub fn apply_workspace_folders(&mut self, params: lsp_types::DidChangeWorkspaceFoldersParams) {
         let mut folders = self.project_manager.lock().workspace_folders().to_vec();
         for folder in params.event.removed {
-            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
+            if let Ok(uri) = parse_source_uri(folder.uri.as_str())
                 && let Ok(path) = url_to_path(&uri)
             {
                 folders.retain(|existing| existing != &path);
             }
         }
         for folder in params.event.added {
-            if let Ok(uri) = Uri::parse(folder.uri.as_str().to_owned())
+            if let Ok(uri) = parse_source_uri(folder.uri.as_str())
                 && let Ok(path) = url_to_path(&uri)
                 && !folders.contains(&path)
             {
@@ -311,8 +303,7 @@ impl Workspace {
         let mut uris: Vec<_> = params
             .changes
             .into_iter()
-            .filter_map(|event| Uri::parse(event.uri.as_str().to_owned()).ok())
-            .filter_map(|uri| effective_uri(&uri).ok())
+            .filter_map(|event| parse_source_uri(event.uri.as_str()).ok())
             .collect();
         let changed = uris.len();
         for file in self.db.all_files() {
@@ -425,7 +416,7 @@ impl Workspace {
 }
 
 fn document(db: &RootDatabase, uri: &str) -> Option<File> {
-    let uri = Uri::parse(uri.to_owned()).ok()?;
+    let uri = parse_source_uri(uri).ok()?;
     let file = db.known_file(&uri)?;
     (file.status(db) == FileStatus::Open).then_some(file)
 }
@@ -435,15 +426,6 @@ impl Snapshot {
     }
     pub fn document_version(&self, uri: &str) -> Option<i32> {
         self.document(uri).and_then(|file| file.version(&self.db))
-    }
-    pub fn base_module(&self) -> &BaseModule {
-        &self.base_module
-    }
-    pub fn context(&self, root: File) -> AnalysisContext<'_> {
-        AnalysisContext::new(self.base_module(), &self.db, root)
-    }
-    pub fn diagnostics(&self) -> &DiagnosticsEngine {
-        &self.diagnostics
     }
     /// Catch only Salsa cancellation; unrelated panics remain ordinary worker failures.
     pub fn run<R>(self, stage: &'static str, work: impl FnOnce(&Self) -> Result<R>) -> Result<R> {

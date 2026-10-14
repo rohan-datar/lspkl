@@ -1,27 +1,35 @@
 //! Native editor URIs and archive-safe resolution.
 use crate::FileError;
-use fluent_uri::Uri;
+use fluent_uri::{Uri, UriRef};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+
+/// Convert protocol/source text once, parsing borrowed input before owning its identity.
+pub fn parse_source_uri(value: &str) -> Result<Uri<String>, FileError> {
+    let uri = Uri::parse(value)?;
+    match uri.scheme().as_str() {
+        "jar" | "lspkl" => effective_uri(&uri.to_owned()),
+        _ => Ok(uri.normalize()),
+    }
+}
 
 pub fn effective_uri(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
     if uri.scheme().as_str() != "lspkl" {
         return canonical(uri);
     }
-    let parsed =
-        url::Url::parse(uri.as_str()).map_err(|_| FileError::InvalidSource(uri.to_string()))?;
-    let path = parsed.path().trim_start_matches('/');
+    let host = uri.authority().map(|authority| authority.host());
+    let path = uri.path().as_str().trim_start_matches('/');
     let path = path.replace('+', " ");
     let decoded = percent_decode_str(&path)
         .decode_utf8()
         .map_err(|_| FileError::InvalidSource(uri.to_string()))?;
-    let value = match parsed.host_str() {
+    let value = match host {
         Some("stdlib") => format!("pkl:{}", decoded.trim_end_matches(".pkl")),
         Some("https" | "jar") => decoded.into_owned(),
         _ => return Err(FileError::InvalidSource(uri.to_string())),
     };
     let result = Uri::parse(value)?;
-    if (parsed.host_str() == Some("https") && result.scheme().as_str() != "https")
-        || (parsed.host_str() == Some("jar") && result.scheme().as_str() != "jar")
+    if (host == Some("https") && result.scheme().as_str() != "https")
+        || (host == Some("jar") && result.scheme().as_str() != "jar")
     {
         return Err(FileError::InvalidSource(uri.to_string()));
     }
@@ -54,7 +62,7 @@ pub(crate) fn canonical(uri: &Uri<String>) -> Result<Uri<String>, FileError> {
         let (archive, member) = archive_parts(uri)?;
         archive_uri(&archive, &normalize_member(&member)?)
     } else {
-        Ok(uri.clone().normalize())
+        Ok(uri.normalize())
     }
 }
 
@@ -129,8 +137,8 @@ pub(crate) fn archive_uri(archive: &Uri<String>, member: &str) -> Result<Uri<Str
 
 pub(crate) fn resolve(source: &Uri<String>, reference: &str) -> Result<Uri<String>, FileError> {
     let source = effective_uri(source)?;
-    if let Ok(absolute) = Uri::parse(reference.to_owned()) {
-        return effective_uri(&absolute);
+    if let Ok(absolute) = Uri::parse(reference) {
+        return effective_uri(&absolute.to_owned());
     }
     if source.scheme().as_str() == "jar" {
         let (archive, member) = archive_parts(&source)?;
@@ -152,10 +160,59 @@ pub(crate) fn resolve(source: &Uri<String>, reference: &str) -> Result<Uri<Strin
     if source.scheme().as_str() == "pkl" {
         return Err(FileError::InvalidSource(reference.to_owned()));
     }
-    let parsed = url::Url::parse(source.as_str())
-        .map_err(|_| FileError::InvalidSource(source.to_string()))?;
-    let target = parsed
-        .join(reference)
-        .map_err(|_| FileError::InvalidSource(reference.to_owned()))?;
-    effective_uri(&Uri::parse(target.as_str().to_owned())?)
+    let encoded;
+    let reference = match UriRef::parse(reference) {
+        Ok(reference) => reference,
+        Err(_) => {
+            const LITERAL_ESCAPE: percent_encoding::AsciiSet = percent_encoding::CONTROLS
+                .add(b' ')
+                .add(b'"')
+                .add(b'<')
+                .add(b'>')
+                .add(b'`')
+                .add(b'{')
+                .add(b'}')
+                .add(b'|')
+                .add(b'[')
+                .add(b']')
+                .add(b'^')
+                .add(b'\\');
+            encoded = utf8_percent_encode(reference, &LITERAL_ESCAPE).to_string();
+            UriRef::parse(encoded.as_str())
+                .map_err(|_| FileError::InvalidSource(reference.to_owned()))?
+        }
+    };
+    let base = source.strip_fragment();
+    let target = reference
+        .resolve_against(&base)
+        .map_err(|_| FileError::InvalidSource(reference.as_str().to_owned()))?;
+    // File references cannot traverse above a Windows drive root. Network
+    // references and references naming another drive retain their own roots.
+    if source.scheme().as_str().eq_ignore_ascii_case("file")
+        && reference.authority().is_none()
+        && file_drive(target.path().as_str()).is_none()
+        && let Some(drive) = file_drive(source.path().as_str())
+    {
+        let path_start = target.scheme().as_str().len()
+            + 1
+            + target
+                .authority()
+                .map_or(0, |authority| 2 + authority.as_str().len());
+        let prefix = [drive.as_bytes()[0], b':', b'/'];
+        let prefix = std::str::from_utf8(&prefix).expect("file drive prefixes are ASCII");
+        let mut target = target.into_string();
+        target.insert_str(path_start + 1, prefix);
+        let target = Uri::parse(target).map_err(|(_, value)| FileError::InvalidSource(value))?;
+        return canonical(&target);
+    }
+    canonical(&target)
+}
+
+fn file_drive(path: &str) -> Option<&str> {
+    let drive = path.as_bytes().get(..3)?;
+    (drive[0] == b'/'
+        && drive[1].is_ascii_alphabetic()
+        && drive[2] == b':'
+        && path.as_bytes().get(3).is_none_or(|next| *next == b'/'))
+    .then(|| &path[1..3])
 }

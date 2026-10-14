@@ -518,6 +518,18 @@ impl SourceLoader for DatabaseSourceLoader<'_> {
     }
 }
 
+/// Construct project routing once at the database/source boundary.
+pub fn with_module_resolver<R>(
+    db: &dyn Db,
+    work: impl FnOnce(&dyn pkl_project::ModuleResolver) -> R,
+) -> R {
+    let loader = DatabaseSourceLoader::new(db);
+    let config = db.config();
+    let resolver =
+        ImportResolver::with_settings(&loader, config.modulepath(db), config.cache_dir(db));
+    work(&resolver)
+}
+
 #[salsa::tracked(returns(clone))]
 pub fn resolve_import(
     db: &dyn Db,
@@ -563,9 +575,6 @@ pub fn resolve_module_uri(
         package_to_download: None,
     };
     let config = db.config();
-    let loader = DatabaseSourceLoader::new(db);
-    let resolver =
-        ImportResolver::with_settings(&loader, config.modulepath(db), config.cache_dir(db));
     let project = if file.uri(db).scheme().as_str() == "file" {
         project_for_file(db, file)
     } else {
@@ -602,30 +611,32 @@ pub fn resolve_module_uri(
         url: file.uri(db).clone(),
         text: Arc::from(""),
     };
-    if glob {
-        let files: Vec<_> = resolver
-            .resolve_glob(&reference, &source, project)
-            .iter()
-            .filter_map(|source| db.file(&source.url).ok())
-            .collect();
-        if files.is_empty()
-            && let Some(package) = resolver.missing_package_uri(&reference, &source, project)
-        {
-            ImportResolution::Unresolved {
-                package_to_download: Some(package),
+    with_module_resolver(db, |resolver| {
+        if glob {
+            let files: Vec<_> = resolver
+                .resolve_glob(&reference, &source, project)
+                .iter()
+                .filter_map(|source| db.file(&source.url).ok())
+                .collect();
+            if files.is_empty()
+                && let Some(package) = resolver.missing_package_uri(&reference, &source, project)
+            {
+                ImportResolution::Unresolved {
+                    package_to_download: Some(package),
+                }
+            } else {
+                ImportResolution::Glob(files)
             }
+        } else if let Some(source) = resolver.resolve_file(&reference, &source, project) {
+            db.file(&source.url)
+                .map(ImportResolution::Single)
+                .unwrap_or_else(|_| unresolved())
         } else {
-            ImportResolution::Glob(files)
+            ImportResolution::Unresolved {
+                package_to_download: resolver.missing_package_uri(&reference, &source, project),
+            }
         }
-    } else if let Some(source) = resolver.resolve_file(&reference, &source, project) {
-        db.file(&source.url)
-            .map(ImportResolution::Single)
-            .unwrap_or_else(|_| unresolved())
-    } else {
-        ImportResolution::Unresolved {
-            package_to_download: resolver.missing_package_uri(&reference, &source, project),
-        }
-    }
+    })
 }
 
 /// Scalar projection shields semantic queries from source-only graph changes.

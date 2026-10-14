@@ -127,9 +127,13 @@ pub fn default_cache() -> PathBuf {
 }
 
 pub(crate) fn https_cache_path(uri: &Uri<String>, cache: &Path) -> Result<PathBuf, FileError> {
-    let parsed =
-        url::Url::parse(uri.as_str()).map_err(|_| FileError::InvalidSource(uri.to_string()))?;
-    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
+    if uri.authority().is_none()
+        || uri
+            .authority()
+            .and_then(|authority| authority.userinfo())
+            .is_some_and(|userinfo| !userinfo.as_str().is_empty())
+        || uri.fragment().is_some()
+    {
         return Err(FileError::InvalidSource(uri.to_string()));
     }
     // Hash the entire canonical URI: host, port, path and query all participate.

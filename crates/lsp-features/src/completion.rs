@@ -1,13 +1,14 @@
 //! Completion: suggest identifiers / members / keywords at the cursor.
 //!
 //! Resource-aware module URI candidates and their lazy documentation resolution
-//! are provided by the server layer, before these pure semantic providers.
+//! are provided by `module_uri_completion`, before these semantic providers.
 //!
 //! TODO(completion-doc-link): `DocCommentMemberLinkCompletionProvider` is
 //! deferred
 
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, InsertTextFormat, Range};
 
+use pkl_db::{Db, File};
 use pkl_syntax::{TextRange, TextSize};
 use pkl_types::AnalysisContext;
 
@@ -18,10 +19,12 @@ mod unqualified;
 
 /// Compute completion candidates at a file-qualified UTF-8 byte offset.
 pub fn completion(
-    ctx: &AnalysisContext,
+    db: &dyn Db,
+    root: File,
     offset: pkl_types::InFile<TextSize>,
     range_for: impl Fn(TextRange) -> Range,
 ) -> Option<CompletionResponse> {
+    let ctx = &AnalysisContext::for_root(db, root);
     // Deepest node containing the cursor; whitespace past any token yields
     // `None`, which propagates as "no completions".
     let file = offset.file;
@@ -29,7 +32,7 @@ pub fn completion(
     let offset = offset.value;
     let node = tree.find_at(offset)?;
 
-    // URI completion runs in the server layer before this semantic dispatch.
+    // URI completion runs before this semantic dispatch.
     // Each provider contributes only when applicable to the current node.
     let mut collector = Vec::new();
     collector.extend(qualified::completions(node, tree, file, ctx));

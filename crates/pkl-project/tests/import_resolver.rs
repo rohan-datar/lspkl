@@ -169,3 +169,60 @@ fn unsupported_or_missing_imports_return_none() {
             .is_none()
     );
 }
+#[test]
+fn resolver_trait_candidates_preserve_root_precedence_without_loading_modules() {
+    use pkl_project::ModuleResolver;
+    let temp = tempfile::tempdir().unwrap();
+    for root in ["first", "second"] {
+        fs::create_dir_all(temp.path().join(root).join("nested")).unwrap();
+        fs::write(
+            temp.path().join(root).join("nested/same.pkl"),
+            "invalid source is only a candidate",
+        )
+        .unwrap();
+    }
+    fs::write(temp.path().join("second/nested/only.pkl"), "only").unwrap();
+    let ctx = project(temp.path(), &["first", "second"]);
+    let loader = StandardSourceLoader::new();
+    let implementation = ImportResolver::new(&loader, temp.path());
+    let resolver: &dyn ModuleResolver = &implementation;
+    let children = resolver.modulepath_children("nested/", Some(&ctx));
+    assert_eq!(
+        children
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["only.pkl", "same.pkl"]
+    );
+    assert_eq!(
+        children[1].2,
+        file_uri(&temp.path().join("first/nested/same.pkl"))
+    );
+    let root_children = resolver.modulepath_children("", Some(&ctx));
+    assert_eq!(root_children[0].0, "nested/");
+    assert!(root_children[0].1);
+}
+
+#[test]
+fn resolver_trait_discovers_both_package_cache_layouts() {
+    use pkl_project::ModuleResolver;
+    let temp = tempfile::tempdir().unwrap();
+    for (layout, name, version) in [("package-1", "old", "1.0.0"), ("package-2", "new", "2.0.0")] {
+        let directory = temp
+            .path()
+            .join(layout)
+            .join(format!("example.test/{name}@{version}"));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("metadata.json"), "{}").unwrap();
+    }
+    let loader = StandardSourceLoader::new();
+    let implementation = ImportResolver::new(&loader, temp.path());
+    let resolver: &dyn ModuleResolver = &implementation;
+    assert_eq!(
+        resolver.cached_packages().into_iter().collect::<Vec<_>>(),
+        [
+            "package://example.test/new@2.0.0",
+            "package://example.test/old@1.0.0"
+        ]
+    );
+}

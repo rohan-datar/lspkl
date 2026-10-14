@@ -13,7 +13,7 @@ fn constrained_receiver_keeps_qualified_hover_and_definition() {
             harness::file(ctx, 1),
             source.rfind("value").unwrap().try_into().unwrap(),
         );
-        let hovered = hover(ctx, cursor).unwrap();
+        let hovered = hover(ctx.db, ctx.root, cursor).unwrap();
         let HoverContents::Markup(markup) = hovered.contents else {
             panic!("markdown hover")
         };
@@ -25,7 +25,8 @@ fn constrained_receiver_keeps_qualified_hover_and_definition() {
         );
         let uri: lsp_types::Uri = "file:///snippets/refined.pkl".parse().unwrap();
         let definition = goto_definition(
-            ctx,
+            ctx.db,
+            ctx.root,
             cursor,
             |file| (file == harness::file(ctx, 1)).then(|| uri.clone()),
             harness::range,

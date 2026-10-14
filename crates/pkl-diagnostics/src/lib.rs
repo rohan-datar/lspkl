@@ -8,7 +8,7 @@ pub mod render;
 
 pub use analyzer::Analyzer;
 pub use diagnostic::{Diagnostic, QuickFix, Severity, TextEdit};
-pub use engine::DiagnosticsEngine;
+pub use engine::{DiagnosticsEngine, diagnostics};
 pub use feature::{FEATURES, Feature, effective_pkl_version};
 pub use holder::DiagnosticsHolder;
 pub use render::render_diagnostics;

@@ -1001,9 +1001,11 @@ dependencies = [
  "lsp-types",
  "pkl-db",
  "pkl-diagnostics",
+ "pkl-project",
  "pkl-syntax",
  "pkl-types",
  "pkl-vfs",
+ "serde_json",
 ]
 
 [[package]]
@@ -1190,11 +1192,13 @@ version = "0.1.0"
 dependencies = [
  "fluent-uri 0.4.1",
  "insta",
+ "parking_lot",
  "pkl-db",
  "pkl-project",
  "pkl-syntax",
  "pkl-types",
  "pkl-vfs",
+ "salsa",
  "semver",
 ]
 

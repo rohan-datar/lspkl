@@ -29,7 +29,8 @@ fn same_file_definition_returns_location_in_document() {
         let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 4);
 
         let result = goto_definition(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |_| Some(doc_uri()),
             harness::range,
@@ -61,7 +62,8 @@ fn stdlib_target_uses_uri_callback() {
 
         let uri = Uri::from_str("lspkl://stdlib/base.pkl").unwrap();
         let result = goto_definition(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |id| (id == base.file_id()).then(|| uri.clone()),
             harness::range,
@@ -73,7 +75,8 @@ fn stdlib_target_uses_uri_callback() {
         assert_eq!(location.uri, uri);
         assert!(
             goto_definition(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(harness::file(ctx, 1), offset),
                 |_| None,
                 harness::range
@@ -93,7 +96,8 @@ fn whitespace_returns_none() {
 
         assert!(
             goto_definition(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(harness::file(ctx, 1), offset),
                 |_| Some(doc_uri()),
                 harness::range

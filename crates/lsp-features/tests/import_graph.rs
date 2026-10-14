@@ -34,7 +34,8 @@ fn find(
 fn labels(ctx: &AnalysisContext, line: u32, col: u32) -> Vec<String> {
     let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), line, col);
     match lsp_features::completion::completion(
-        ctx,
+        ctx.db,
+        ctx.root,
         pkl_types::InFile::new(harness::file(ctx, 1), offset),
         |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
     )
@@ -48,7 +49,8 @@ fn labels(ctx: &AnalysisContext, line: u32, col: u32) -> Vec<String> {
 fn imported_hover_and_definition_use_target_tree() {
     with_graph(|ctx| {
         let h = lsp_features::hover::hover(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 3, 13),
@@ -61,7 +63,8 @@ fn imported_hover_and_definition_use_target_tree() {
         assert!(m.value.contains("value: Int"));
         assert!(m.value.contains("Imported docs"));
         let d = lsp_features::goto_definition::goto_definition(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 3, 13),
@@ -79,7 +82,8 @@ fn imported_hover_and_definition_use_target_tree() {
         assert_eq!(l.uri.as_str(), "file:///2.pkl");
         assert!(
             lsp_features::hover::hover(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(
                     harness::file(ctx, 1),
                     harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 21)
@@ -147,7 +151,8 @@ fn lexical_import_precedes_inherited_output_in_resolution_and_completion() {
         );
         let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 5, 6);
         let response = lsp_features::completion::completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |range| harness::range(ctx.tree(harness::file(ctx, 1)).unwrap(), range),
         )
@@ -258,7 +263,8 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
     ];
     let callback = |id: File| id.uri(&*db).as_str().parse().ok();
     let GotoDefinitionResponse::Array(locations) = lsp_features::goto_definition::goto_definition(
-        &ctx,
+        ctx.db,
+        ctx.root,
         pkl_types::InFile::new(
             harness::file(&ctx, 1),
             harness::offset(ctx.tree(harness::file(&ctx, 1)).unwrap(), 0, 10),
@@ -282,7 +288,8 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
     }
     assert!(
         lsp_features::goto_definition::goto_definition(
-            &ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(&ctx, 1),
                 harness::offset(ctx.tree(harness::file(&ctx, 1)).unwrap(), 1, 16)
@@ -294,7 +301,8 @@ fn glob_uri_navigates_to_all_pinned_modules_and_empty_glob_has_no_definition() {
     );
     assert!(
         lsp_features::goto_definition::goto_definition(
-            &ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(&ctx, 1),
                 harness::offset(ctx.tree(harness::file(&ctx, 1)).unwrap(), 0, 20)
@@ -319,14 +327,15 @@ fn editor_requests_select_the_qualified_file_and_do_not_fall_back() {
         pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
     );
     let offset = pkl_types::InFile::new(file, harness::offset(&string, 1, 4));
-    let hover = lsp_features::hover::hover(&ctx, offset).unwrap();
+    let hover = lsp_features::hover::hover(ctx.db, ctx.root, offset).unwrap();
     let HoverContents::Markup(markdown) = hover.contents else {
         panic!("markdown")
     };
     assert!(markdown.value.contains("x: String"), "{}", markdown.value);
-    let completion =
-        lsp_features::completion::completion(&ctx, offset, |range| harness::range(&string, range))
-            .unwrap();
+    let completion = lsp_features::completion::completion(ctx.db, ctx.root, offset, |range| {
+        harness::range(&string, range)
+    })
+    .unwrap();
     let items = match completion {
         CompletionResponse::Array(items) => items,
         CompletionResponse::List(list) => list.items,
@@ -341,7 +350,8 @@ fn editor_requests_select_the_qualified_file_and_do_not_fall_back() {
         Some("String")
     );
     let definition = lsp_features::goto_definition::goto_definition(
-        &ctx,
+        ctx.db,
+        ctx.root,
         offset,
         |id| (id == file).then(|| "file:///string.pkl".parse().unwrap()),
         harness::range,
@@ -357,14 +367,22 @@ fn editor_requests_select_the_qualified_file_and_do_not_fall_back() {
     );
 
     let missing = pkl_types::InFile::new(harness::file(&ctx, 99), offset.value);
-    assert!(lsp_features::hover::hover(&ctx, missing).is_none());
+    assert!(lsp_features::hover::hover(ctx.db, ctx.root, missing).is_none());
     assert!(
-        lsp_features::completion::completion(&ctx, missing, |range| harness::range(&string, range))
-            .is_none()
+        lsp_features::completion::completion(ctx.db, ctx.root, missing, |range| harness::range(
+            &string, range
+        ))
+        .is_none()
     );
     assert!(
-        lsp_features::goto_definition::goto_definition(&ctx, missing, |_| None, harness::range)
-            .is_none()
+        lsp_features::goto_definition::goto_definition(
+            ctx.db,
+            ctx.root,
+            missing,
+            |_| None,
+            harness::range
+        )
+        .is_none()
     );
 }
 
@@ -376,7 +394,8 @@ fn generic_class_completion_details_use_instantiated_member_types() {
         "class Box<T> { value: T }\nbox: Box<String>\nx = box.value\n",
         |tree, ctx| {
             let response = lsp_features::completion::completion(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(harness::file(ctx, 1), harness::offset(tree, 2, 8)),
                 |range| harness::range(tree, range),
             )

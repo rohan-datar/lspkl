@@ -1,7 +1,7 @@
 //! Editor requests and source retrieval against a captured document epoch.
 
 use super::{
-    HandlerError, Result,
+    Result,
     diagnostics::{analyze_document, open_document_analysis},
 };
 use crate::{perf, state::Snapshot};
@@ -27,8 +27,11 @@ pub fn hover(snapshot: &Snapshot, params: HoverParams) -> Result<Option<Hover>> 
         return Ok(None);
     };
     let _compute = perf::Compute::start("hover");
-    let ctx = snapshot.context(file);
-    Ok(lsp_features::hover::hover(&ctx, InFile::new(file, offset)))
+    Ok(lsp_features::hover::hover(
+        &snapshot.db,
+        file,
+        InFile::new(file, offset),
+    ))
 }
 pub fn definition(
     snapshot: &Snapshot,
@@ -47,9 +50,9 @@ pub fn definition(
         return Ok(None);
     };
     let _compute = perf::Compute::start("goto_definition");
-    let ctx = snapshot.context(file);
     Ok(lsp_features::goto_definition::goto_definition(
-        &ctx,
+        &snapshot.db,
+        file,
         InFile::new(file, offset),
         |file| {
             let uri = file.uri(&snapshot.db);
@@ -76,21 +79,32 @@ pub fn completion(
     let Some(offset) = PositionConverter::new(tree, encoding).offset(doc.position) else {
         return Ok(None);
     };
-    let uri_completion = crate::module_uri_completion::completion(snapshot, file, offset);
+    let uri_completion = pkl_db::with_module_resolver(&snapshot.db, |resolver| {
+        lsp_features::module_uri_completion::completion(
+            &snapshot.db,
+            file,
+            offset,
+            encoding,
+            resolver,
+        )
+    });
     if uri_completion.is_some() {
         return Ok(uri_completion);
     }
     let _compute = perf::Compute::start("completion");
-    let ctx = snapshot.context(file);
     let positions = PositionConverter::new(tree, encoding);
     Ok(lsp_features::completion::completion(
-        &ctx,
+        &snapshot.db,
+        file,
         InFile::new(file, offset),
         |range| positions.range(range),
     ))
 }
 pub fn resolve(snapshot: &Snapshot, item: CompletionItem) -> Result<CompletionItem> {
-    Ok(crate::module_uri_completion::resolve(snapshot, item))
+    Ok(lsp_features::module_uri_completion::resolve(
+        &snapshot.db,
+        item,
+    ))
 }
 pub fn code_action(
     snapshot: &Snapshot,
@@ -99,7 +113,11 @@ pub fn code_action(
     let uri_str = params.text_document.uri.as_str();
     info!(uri = uri_str, "codeAction");
 
-    let Some((tree, diags)) = analyze_document(snapshot, uri_str)? else {
+    let Some(super::diagnostics::DocumentDiagnostics {
+        tree,
+        diagnostics: diags,
+    }) = analyze_document(snapshot, uri_str)?
+    else {
         return Ok(None);
     };
     let _compute = perf::Compute::start("code_action");
@@ -160,10 +178,7 @@ pub fn prepare_file_contents(
     snapshot: &Snapshot,
     document: TextDocumentIdentifier,
 ) -> Result<FileContentsRequest> {
-    let uri = Uri::parse(document.uri.as_str())
-        .map_err(|error| HandlerError::InvalidParams(error.to_string()))?
-        .to_owned();
-    let uri = pkl_vfs::effective_uri(&uri)?;
+    let uri = pkl_vfs::parse_source_uri(document.uri.as_str())?;
     if let Some(file) = snapshot.db.known_file(&uri)
         && file.status(&snapshot.db) != FileStatus::Missing
     {

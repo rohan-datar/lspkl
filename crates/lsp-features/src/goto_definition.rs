@@ -3,18 +3,20 @@
 
 use lsp_types::{GotoDefinitionResponse, Location, Range, Uri};
 
-use pkl_db::File;
+use pkl_db::{Db, File};
 use pkl_types::{AnalysisContext, NodeRef, resolve_reference};
 
 use pkl_syntax::{TextRange, TextSize, ast::SyntaxTree};
 
 /// Resolve the definition for the symbol at the file-qualified byte `offset`.
 pub fn goto_definition(
-    ctx: &AnalysisContext,
+    db: &dyn Db,
+    root: File,
     offset: pkl_types::InFile<TextSize>,
     uri_for: impl Fn(File) -> Option<Uri>,
     range_for: impl Fn(&SyntaxTree, TextRange) -> Range,
 ) -> Option<GotoDefinitionResponse> {
+    let ctx = &AnalysisContext::for_root(db, root);
     let file = offset.file;
     let tree = ctx.tree(file)?;
     let offset = offset.value;

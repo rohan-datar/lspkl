@@ -30,8 +30,12 @@ fn hover_on_unqualified_access_renders_property() {
     harness::with_snippet(&base, src, |_tree, ctx| {
         let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 4);
 
-        let result = hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset))
-            .expect("hover should produce a result for `x`");
+        let result = hover(
+            ctx.db,
+            ctx.root,
+            pkl_types::InFile::new(harness::file(ctx, 1), offset),
+        )
+        .expect("hover should produce a result for `x`");
 
         let HoverContents::Markup(markup) = result.contents else {
             panic!("expected MarkupContent, got something else");
@@ -55,7 +59,12 @@ fn hover_on_whitespace_returns_none() {
         let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 10);
 
         assert!(
-            hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset)).is_none(),
+            hover(
+                ctx.db,
+                ctx.root,
+                pkl_types::InFile::new(harness::file(ctx, 1), offset)
+            )
+            .is_none(),
             "no hover info expected past end of line",
         );
     });
@@ -72,8 +81,12 @@ fn hover_includes_doc_comment_and_signature() {
         // Cursor on the `double` reference in `y = double(1)`.
         let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 2, 6);
 
-        let result = hover(ctx, pkl_types::InFile::new(harness::file(ctx, 1), offset))
-            .expect("hover should resolve `double`");
+        let result = hover(
+            ctx.db,
+            ctx.root,
+            pkl_types::InFile::new(harness::file(ctx, 1), offset),
+        )
+        .expect("hover should resolve `double`");
         let HoverContents::Markup(markup) = result.contents else {
             panic!("expected MarkupContent, got something else");
         };

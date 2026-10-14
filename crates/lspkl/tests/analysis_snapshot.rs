@@ -60,14 +60,14 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         let original = parse(&state.db, builtin).as_ref().unwrap().clone();
         if warm {
             let view = state.snapshot();
-            assert_eq!(view.base_module().file_id(), builtin);
+            assert_eq!(pkl_types::base_module(&view.db).file_id(), builtin);
         }
         let file = open(&mut state, url.clone(), "edited = 1\n".into(), Some(1));
         assert_eq!(file, builtin);
         assert_eq!(file.version(&state.db), Some(1));
         {
             let view = state.snapshot();
-            let ctx = view.context(file);
+            let ctx = pkl_types::AnalysisContext::for_root(&view.db, file);
             assert_eq!(ctx.base.file_id(), file);
             assert_eq!(ctx.base.string_type().render(ctx.db), "String");
             assert_eq!(ctx.tree(file).unwrap().source(), original.source());
@@ -86,7 +86,7 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         );
         {
             let view = state.snapshot();
-            let ctx = view.context(root);
+            let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
             assert_eq!(single(&state, root), builtin);
             let tree = ctx.tree(root).unwrap();
             let property = tree
@@ -108,7 +108,7 @@ fn sdk_document_lifecycle_keeps_builtin_identity_and_metadata_immutable() {
         assert_eq!(file.version(&state.db), None);
         assert_eq!(state.db.file(&url).unwrap(), builtin);
         let view = state.snapshot();
-        let ctx = view.context(root);
+        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
         assert_eq!(ctx.base.string_type().render(ctx.db), "String");
         assert_eq!(ctx.tree(builtin).unwrap().source(), original.source());
     }
@@ -165,7 +165,7 @@ value = import("missing-expr.pkl")
             .count(),
         3
     );
-    let ctx = view.context(root);
+    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
     let diagnostics = pkl_diagnostics::DiagnosticsEngine::new()
         .with(Box::new(pkl_diagnostics::analyzers::ModuleUriAnalyzer))
         .analyze(&ctx, root);
@@ -208,7 +208,7 @@ fn transitive_shared_dependencies_and_cycles_resolve_to_their_own_trees() {
     let mut state = Workspace::new();
     let root = prepare(&mut state, &dir.join("main.pkl"), main);
     let view = state.snapshot();
-    let ctx = view.context(root);
+    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
     assert_eq!(ctx.base.string_type().render(ctx.db), "String");
     let file_for = |path: &str| view.db.file(&uri(&dir.join(path))).unwrap();
     let expected_edges = [
@@ -268,7 +268,7 @@ fn reachable_imports_include_globs_and_record_unresolved_targets() {
         "import \"./good.pkl\"\nimport \"./missing.pkl\"\nimport \"ftp://example.com/remote.pkl\"\nimport* \"./glob-only.pkl\"\nmainValue = 0\n",
     );
     let view = state.snapshot();
-    let ctx = view.context(root);
+    let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
     let good = view.db.file(&uri(&temp.path().join("good.pkl"))).unwrap();
     let glob = view
         .db
@@ -326,7 +326,7 @@ fn later_requests_see_editor_updates_without_mutating_owned_tree_observations() 
     let (before_root, before_target) = {
         let view = state.snapshot();
         assert_eq!(single(&state, root), target);
-        let ctx = view.context(root);
+        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
         assert_eq!(property_name(ctx.tree(target).unwrap()), "oldValue");
         (
             parse(&view.db, root).as_ref().unwrap().clone(),
@@ -337,7 +337,11 @@ fn later_requests_see_editor_updates_without_mutating_owned_tree_observations() 
     let view = state.snapshot();
     assert_eq!(single(&state, root), target);
     assert_eq!(
-        property_name(view.context(root).tree(target).unwrap()),
+        property_name(
+            pkl_types::AnalysisContext::for_root(&view.db, root)
+                .tree(target)
+                .unwrap()
+        ),
         "newValue"
     );
     assert_eq!(property_name(&before_target), "oldValue");
@@ -372,7 +376,7 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     let observed = {
         let view = state.snapshot();
         assert_eq!(single(&state, root), target);
-        let ctx = view.context(root);
+        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
         (
             property_name(ctx.tree(root).unwrap()).to_owned(),
             property_name(ctx.tree(target).unwrap()).to_owned(),
@@ -394,7 +398,11 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     {
         let view = state.snapshot();
         assert_eq!(
-            property_name(view.context(root).tree(target).unwrap()),
+            property_name(
+                pkl_types::AnalysisContext::for_root(&view.db, root)
+                    .tree(target)
+                    .unwrap()
+            ),
             "importAfter"
         );
         assert_eq!(view.document_version(target_uri.as_str()), Some(2));
@@ -419,11 +427,19 @@ fn completed_consumers_observe_edit_close_and_reopen() {
     let view = state.snapshot();
     assert_eq!(single(&state, root), target);
     assert_eq!(
-        property_name(view.context(root).tree(root).unwrap()),
+        property_name(
+            pkl_types::AnalysisContext::for_root(&view.db, root)
+                .tree(root)
+                .unwrap()
+        ),
         "rootAfter"
     );
     assert_eq!(
-        property_name(view.context(root).tree(target).unwrap()),
+        property_name(
+            pkl_types::AnalysisContext::for_root(&view.db, root)
+                .tree(target)
+                .unwrap()
+        ),
         "reopened"
     );
     assert_eq!(view.document_version(target_uri.as_str()), Some(3));
@@ -588,7 +604,12 @@ fn base_is_addressable_like_every_other_file() {
     assert_eq!(base.status(&state.db), FileStatus::Present);
     assert!(parse(&state.db, base).is_ok());
     let view = state.snapshot();
-    assert_eq!(view.context(base).base.file_id(), base);
+    assert_eq!(
+        pkl_types::AnalysisContext::for_root(&view.db, base)
+            .base
+            .file_id(),
+        base
+    );
     assert_ne!(
         state
             .db

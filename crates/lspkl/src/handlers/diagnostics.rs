@@ -7,6 +7,11 @@ use lsp_types::{Diagnostic, DiagnosticSeverity};
 use pkl_db::File;
 use pkl_syntax::ast::SyntaxTree;
 
+pub(super) struct DocumentDiagnostics<'a> {
+    pub tree: &'a SyntaxTree,
+    pub diagnostics: std::sync::Arc<[pkl_diagnostics::Diagnostic]>,
+}
+
 pub(super) fn open_document_analysis<'a>(
     snapshot: &'a Snapshot,
     uri: &str,
@@ -23,18 +28,19 @@ pub(super) fn open_document_analysis<'a>(
 pub(super) fn analyze_document<'a>(
     snapshot: &'a Snapshot,
     uri: &str,
-) -> Result<Option<(&'a SyntaxTree, Vec<pkl_diagnostics::Diagnostic>)>> {
+) -> Result<Option<DocumentDiagnostics<'a>>> {
     let Some(document) = open_document_analysis(snapshot, uri)? else {
         return Ok(None);
     };
     let _compute = perf::Compute::start("diagnostics");
-    let diagnostics = snapshot
-        .diagnostics()
-        .analyze(&snapshot.context(document.0), document.0);
-    Ok(Some((document.1, diagnostics)))
+    let diagnostics = pkl_diagnostics::diagnostics(&snapshot.db, document.0);
+    Ok(Some(DocumentDiagnostics {
+        tree: document.1,
+        diagnostics,
+    }))
 }
 pub fn diagnostics(snapshot: &Snapshot, uri: &str) -> Result<Vec<Diagnostic>> {
-    let Some((tree, diagnostics)) = analyze_document(snapshot, uri)? else {
+    let Some(DocumentDiagnostics { tree, diagnostics }) = analyze_document(snapshot, uri)? else {
         return Ok(Vec::new());
     };
     let _compute = perf::Compute::start("diagnostics_conversion");

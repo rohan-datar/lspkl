@@ -1,5 +1,6 @@
 //! `Analyzer` trait + the recursive walker that drives it.
 
+use pkl_syntax::ast::SyntaxTree;
 use pkl_types::{AnalysisContext, NodeRef};
 
 use crate::holder::DiagnosticsHolder;
@@ -31,12 +32,23 @@ pub fn run_analyzer(
     holder: &mut DiagnosticsHolder,
     ctx: &AnalysisContext,
 ) {
+    let Some(tree) = ctx.tree(node.file) else {
+        return;
+    };
+    run_analyzer_with_tree(analyzer, node, holder, ctx, tree);
+}
+
+/// Walk a same-file subtree using the tree already captured by the engine.
+pub(crate) fn run_analyzer_with_tree(
+    analyzer: &dyn Analyzer,
+    node: NodeRef,
+    holder: &mut DiagnosticsHolder,
+    ctx: &AnalysisContext,
+    tree: &SyntaxTree,
+) {
     if analyzer.analyze_node(node, holder, ctx) {
-        let Some(tree) = ctx.tree(node.file) else {
-            return;
-        };
         for &child in tree.children(node.value) {
-            run_analyzer(analyzer, node.with_value(child), holder, ctx);
+            run_analyzer_with_tree(analyzer, node.with_value(child), holder, ctx, tree);
         }
     }
 }

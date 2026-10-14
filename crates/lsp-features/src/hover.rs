@@ -9,7 +9,7 @@ use pkl_syntax::ast::nodes::{
 };
 use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
-use pkl_db::File;
+use pkl_db::{Db, File};
 use pkl_types::{AnalysisContext, NodeRef, Type, resolve_reference};
 
 /// Resolve hover information for the given cursor byte `offset`.
@@ -24,7 +24,8 @@ use pkl_types::{AnalysisContext, NodeRef, Type, resolve_reference};
 ///   2. Resolve what it refers to (`resolve_reference`).
 ///   3. Render the resolved declaration as Markdown (`render_markdown`).
 ///   4. Wrap as a Markdown `Hover`.
-pub fn hover(ctx: &AnalysisContext, offset: pkl_types::InFile<TextSize>) -> Option<Hover> {
+pub fn hover(db: &dyn Db, root: File, offset: pkl_types::InFile<TextSize>) -> Option<Hover> {
+    let ctx = &AnalysisContext::for_root(db, root);
     let file = offset.file;
     let tree = ctx.tree(file)?;
     let offset = offset.value;

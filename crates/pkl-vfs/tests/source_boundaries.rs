@@ -43,3 +43,91 @@ fn bracketed_filenames_are_loadable_and_enumerated_as_valid_uris() {
     assert_eq!(direct.url, listed[0]);
     assert_eq!(direct.contents(), "value = 7\n");
 }
+
+#[test]
+fn relative_source_references_encode_literal_space_and_unicode() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nested/space ü.pkl");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "value = 7\n").unwrap();
+    let base = pkl_vfs::path_to_uri(&temp.path().join("main.pkl")).unwrap();
+    let files = StandardSourceLoader::new();
+    let literal = files.resolve_uri(&base, "nested/space ü.pkl").unwrap();
+    let escaped = files
+        .resolve_uri(&base, "nested/space%20%C3%BC.pkl")
+        .unwrap();
+    assert_eq!(literal, escaped);
+    assert_eq!(literal, pkl_vfs::path_to_uri(&path).unwrap());
+    assert_eq!(
+        files.load(&literal, temp.path()).unwrap().contents(),
+        "value = 7\n"
+    );
+}
+
+#[test]
+fn file_references_preserve_windows_drive_roots() {
+    let files = StandardSourceLoader::new();
+    let base = fluent_uri::Uri::parse("file:///C:/project/main.pkl".to_owned()).unwrap();
+    for reference in ["/shared.pkl", "../../../shared.pkl"] {
+        assert_eq!(
+            files.resolve_uri(&base, reference).unwrap().as_str(),
+            "file:///C:/shared.pkl"
+        );
+    }
+    assert_eq!(
+        files.resolve_uri(&base, "/D:/shared.pkl").unwrap().as_str(),
+        "file:///D:/shared.pkl"
+    );
+    assert_eq!(
+        files
+            .resolve_uri(&base, "//server/shared.pkl")
+            .unwrap()
+            .as_str(),
+        "file://server/shared.pkl"
+    );
+}
+
+#[test]
+fn colon_filenames_are_not_windows_drive_segments() {
+    let files = StandardSourceLoader::new();
+    let base = fluent_uri::Uri::parse("file:///C:source.pkl".to_owned()).unwrap();
+    assert_eq!(
+        files.resolve_uri(&base, "sibling.pkl").unwrap().as_str(),
+        "file:///sibling.pkl"
+    );
+    let base = fluent_uri::Uri::parse("file:///C:/project/main.pkl".to_owned()).unwrap();
+    assert_eq!(
+        files.resolve_uri(&base, "/D:target.pkl").unwrap().as_str(),
+        "file:///C:/D:target.pkl"
+    );
+}
+
+#[test]
+fn file_references_replace_base_fragments_without_losing_reference_fragments() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sibling.pkl");
+    fs::write(&path, "value = 7\n").unwrap();
+    let base = fluent_uri::Uri::parse(format!(
+        "{}#view",
+        pkl_vfs::path_to_uri(&temp.path().join("main.pkl")).unwrap()
+    ))
+    .unwrap();
+    let files = StandardSourceLoader::new();
+    let sibling = files.resolve_uri(&base, "./sibling.pkl").unwrap();
+    assert_eq!(sibling, pkl_vfs::path_to_uri(&path).unwrap());
+    assert_eq!(
+        files.load(&sibling, temp.path()).unwrap().contents(),
+        "value = 7\n"
+    );
+    assert_eq!(
+        files
+            .resolve_uri(&base, "./sibling.pkl#new")
+            .unwrap()
+            .as_str(),
+        format!("{sibling}#new")
+    );
+    assert_eq!(
+        files.resolve_uri(&base, "#new").unwrap().as_str(),
+        base.as_str().replace("#view", "#new")
+    );
+}

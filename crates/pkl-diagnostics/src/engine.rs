@@ -1,11 +1,27 @@
 //! Orchestrator that runs all registered analyzers and merges their output.
 
+use std::sync::{Arc, OnceLock};
+
 use pkl_types::AnalysisContext;
 
-use crate::analyzer::{Analyzer, run_analyzer};
+use crate::analyzer::{Analyzer, run_analyzer_with_tree};
 use crate::analyzers;
 use crate::diagnostic::Diagnostic;
 use crate::holder::DiagnosticsHolder;
+
+/// Production diagnostics and their quick fixes for a root module.
+///
+/// Value equality includes ranges and fixes, allowing Salsa to backdate
+/// unchanged results. Publication and code actions share this memoized result.
+#[salsa::tracked(returns(clone))]
+pub fn diagnostics(db: &dyn pkl_db::Db, file: pkl_db::File) -> Arc<[Diagnostic]> {
+    static ENGINE: OnceLock<DiagnosticsEngine> = OnceLock::new();
+    let ctx = AnalysisContext::for_root(db, file);
+    ENGINE
+        .get_or_init(DiagnosticsEngine::with_default_analyzers)
+        .analyze(&ctx, file)
+        .into()
+}
 
 /// Holds the configured analyzer pipeline. Build via [`Self::new`] and
 /// [`Self::with`], or call [`Self::with_default_analyzers`] for the production
@@ -33,10 +49,7 @@ impl DiagnosticsEngine {
         self.analyzers.push(analyzer);
     }
 
-    /// The production pipeline: all 11 analyzers. Most are stubbed to no-ops
-    /// (recurse without emitting) until their bodies are ported. As each
-    /// analyzer is implemented, the snapshot tests automatically pick up the
-    /// new diagnostics.
+    /// The production pipeline, in stable registration order: all 11 analyzers.
     pub fn with_default_analyzers() -> Self {
         Self::new()
             .with(Box::new(analyzers::SyntaxAnalyzer))
@@ -62,11 +75,12 @@ impl DiagnosticsEngine {
         let mut all = Vec::new();
         for analyzer in &self.analyzers {
             let mut holder = DiagnosticsHolder::new();
-            run_analyzer(
+            run_analyzer_with_tree(
                 &**analyzer,
                 pkl_types::NodeRef::new(file, tree.root()),
                 &mut holder,
                 ctx,
+                tree,
             );
             all.extend(holder.into_diagnostics());
         }

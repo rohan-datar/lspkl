@@ -8,7 +8,7 @@ pub use source_loader::{Source, SourceLoader, StandardSourceLoader};
 pub use sources::default_cache;
 use std::path::Path;
 use thiserror::Error;
-pub use uri::{archive_file_uri, effective_uri, to_editor_uri};
+pub use uri::{archive_file_uri, effective_uri, parse_source_uri, to_editor_uri};
 #[derive(Debug, Error)]
 pub enum FileError {
     #[error("URL scheme `{0}` is not supported")]

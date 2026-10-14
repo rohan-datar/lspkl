@@ -362,3 +362,63 @@ impl<'a> ImportResolver<'a> {
         )
     }
 }
+impl crate::ModuleResolver for ImportResolver<'_> {
+    fn resolve_file(
+        &self,
+        reference: &str,
+        source: &Source,
+        context: Option<&PklProject>,
+    ) -> Option<Arc<Source>> {
+        ImportResolver::resolve_file(self, reference, source, context)
+    }
+    fn resolve_glob(
+        &self,
+        reference: &str,
+        source: &Source,
+        context: Option<&PklProject>,
+    ) -> Vec<Arc<Source>> {
+        ImportResolver::resolve_glob(self, reference, source, context)
+    }
+    fn missing_package_uri(
+        &self,
+        reference: &str,
+        source: &Source,
+        context: Option<&PklProject>,
+    ) -> Option<String> {
+        ImportResolver::missing_package_uri(self, reference, source, context)
+    }
+    fn completion_root(
+        &self,
+        reference: &str,
+        source: &Source,
+        context: Option<&PklProject>,
+    ) -> Option<Uri<String>> {
+        ImportResolver::completion_root(self, reference, source, context)
+    }
+    fn dependency_names(&self, source: &Source, context: Option<&PklProject>) -> Vec<String> {
+        ImportResolver::dependency_names(self, source, context)
+    }
+    fn modulepath_relative_path(
+        &self,
+        source: &Source,
+        context: Option<&PklProject>,
+    ) -> Option<String> {
+        self.modulepath.relative_path(source, context)
+    }
+    fn modulepath_roots(&self, context: Option<&PklProject>) -> Vec<Uri<String>> {
+        self.modulepath.roots(context)
+    }
+    fn list_files(&self, directory: &Uri<String>) -> Result<Vec<Uri<String>>, pkl_vfs::FileError> {
+        self.loader.list_files(directory)
+    }
+    fn resolve_uri(
+        &self,
+        base: &Uri<String>,
+        reference: &str,
+    ) -> Result<Uri<String>, pkl_vfs::FileError> {
+        self.loader.resolve_uri(base, reference)
+    }
+    fn cache_dir(&self) -> &Path {
+        self.cache_dir
+    }
+}

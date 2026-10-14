@@ -284,7 +284,7 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
     // A contextless warmup must not freeze the remote's project routing.
     {
         let view = state.snapshot();
-        let ctx = view.context(shared);
+        let ctx = pkl_types::AnalysisContext::for_root(&view.db, shared);
         assert!(
             ctx.import(pkl_types::NodeRef::new(
                 shared,
@@ -300,7 +300,7 @@ fn semantic_context_keeps_shared_archive_imports_rooted_at_each_project() {
     let (inner, _) = source(&mut state, &temp.path().join("inner/main.pkl"), text);
     let view = state.snapshot();
     for (root, expected) in [(outer, "Int"), (inner, "String"), (outer, "Int")] {
-        let ctx = view.context(root);
+        let ctx = pkl_types::AnalysisContext::for_root(&view.db, root);
         let tree = ctx.tree(root).unwrap();
         let property = tree
             .child(tree.root(), |kind| matches!(kind, NodeKind::ClassProperty))

@@ -29,8 +29,7 @@ fn hover_reuses_the_body_inferred_by_diagnostics() {
         .unwrap();
     let workspace = lspkl::Workspace::with_database(db);
     let snapshot = workspace.snapshot();
-    let ctx = snapshot.context(file);
-    let diagnostics = snapshot.diagnostics().analyze(&ctx, file);
+    let diagnostics = pkl_diagnostics::diagnostics(&snapshot.db, file);
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(
         events
@@ -42,7 +41,8 @@ fn hover_reuses_the_body_inferred_by_diagnostics() {
     );
     events.lock().clear();
     let hover = lsp_features::hover::hover(
-        &ctx,
+        &snapshot.db,
+        file,
         InFile::new(file, (source.rfind("probe").unwrap() as u32).into()),
     )
     .unwrap();

@@ -25,7 +25,8 @@ fn qualified_type_completion_uses_imports_despite_expression_parameter_shadowing
     harness::with_snippet(&base, source, |tree, ctx| {
         let offset = source.find("dep.Widget").unwrap() + "dep.Wi".len();
         let response = completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 pkl_syntax::TextSize::try_from(offset).unwrap(),
@@ -54,7 +55,8 @@ fn module_level_unqualified_access_suggests_sibling_properties() {
     let src = "foo = 1\nbar = fo\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         let items = labels(completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 7),
@@ -84,7 +86,8 @@ fn qualified_access_suggests_receiver_members() {
     let src = "nums: List<Int> = List(1, 2)\nx = nums.isEmpty\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         let items = labels(completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 10),
@@ -117,7 +120,8 @@ fn string_literal_offers_union_alternatives() {
     let src = "dir: \"dev\"|\"prod\" = \"\"\n";
     harness::with_snippet(&base, src, |_tree, ctx| {
         let response = completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 21),
@@ -166,7 +170,8 @@ fn string_literal_in_amends_clause_yields_no_candidates_yet() {
     harness::with_snippet(&base, src, |_tree, ctx| {
         assert!(
             completion(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(
                     harness::file(ctx, 1),
                     harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 9)
@@ -188,7 +193,8 @@ fn whitespace_returns_none() {
         // Column 10 is well past `x = 1`.
         assert!(
             completion(
-                ctx,
+                ctx.db,
+                ctx.root,
                 pkl_types::InFile::new(
                     harness::file(ctx, 1),
                     harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, 10)
@@ -215,7 +221,8 @@ fn implement_method_suggests_abstract_superclass_methods() {
     );
     harness::with_snippet(&base, src, |_tree, ctx| {
         let items = labels(completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 4, 1),
@@ -244,7 +251,8 @@ fn constrained_literal_alias_expands_every_member_with_alias_details_and_typed_e
     harness::with_snippet(&base, src, |tree, ctx| {
         let value_start = src.rfind("partial").unwrap();
         let response = completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 pkl_syntax::TextSize::try_from(value_start + 2).unwrap(),
@@ -285,7 +293,8 @@ fn constrained_function_union_offers_every_lambda_shape() {
     let src = "callback: (Function0<String> | Function1<Int, String> | Function2<String, Boolean, String>)(true) = missing\n";
     harness::with_snippet(&base, src, |tree, ctx| {
         let items = completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(
                 harness::file(ctx, 1),
                 pkl_syntax::TextSize::try_from(src.rfind("missing").unwrap() + 2).unwrap(),
@@ -325,7 +334,8 @@ fn parameter_completion_shadows_module_property() {
     harness::with_snippet(&base, src, |tree, ctx| {
         let offset = pkl_syntax::TextSize::from(src.rfind("value").unwrap() as u32);
         let response = completion(
-            ctx,
+            ctx.db,
+            ctx.root,
             pkl_types::InFile::new(harness::file(ctx, 1), offset),
             |range| harness::range(tree, range),
         )
