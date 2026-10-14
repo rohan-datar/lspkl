@@ -14,9 +14,18 @@ use tree_sitter::{Node as TsNode, Parser};
 
 use crate::ast::{NodeEntry, NodeId, NodeKind, SyntaxTree, TokenType};
 use crate::{TextRange, TextSize};
+
+// Binding to the unmodified Apple tree-sitter-pkl v0.21.0 grammar in vendor/.
+unsafe extern "C" {
+    fn tree_sitter_pkl() -> *const ();
+}
+
+const PKL_LANGUAGE: tree_sitter_language::LanguageFn =
+    unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_pkl) };
+
 pub(crate) fn grammar() -> &'static tree_sitter::Language {
     static LANGUAGE: std::sync::LazyLock<tree_sitter::Language> =
-        std::sync::LazyLock::new(|| tree_sitter_pkl::LANGUAGE.into());
+        std::sync::LazyLock::new(|| PKL_LANGUAGE.into());
     &LANGUAGE
 }
 
@@ -302,4 +311,16 @@ fn span_of(ts_node: &TsNode<'_>) -> TextRange {
         TextSize::try_from(ts_node.start_byte()).expect("source exceeds text offset capacity"),
         TextSize::try_from(ts_node.end_byte()).expect("source exceeds text offset capacity"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grammar;
+    use crate::ast::NodeKind;
+
+    #[test]
+    fn compact_unmapped_kinds_keep_human_grammar_names() {
+        let symbol = grammar().id_for_node_kind("identifier", true);
+        assert_eq!(NodeKind::Unmapped(symbol).name(), "identifier");
+    }
 }

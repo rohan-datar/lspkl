@@ -91,30 +91,36 @@
         { pkgs, system }:
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              pkl
-              rustToolchain
-              openssl
-              pkg-config
-              cargo-deny
-              cargo-edit
-              cargo-watch
-              cargo-insta
-              cargo-nextest
-              rust-analyzer
-              just
-              jq
-              zip
-              unzip
-              file
-              binutils
-              curl
-              self.formatter.${system}
-            ];
+            packages =
+              with pkgs;
+              [
+                pkl
+                rustToolchain
+                openssl
+                pkg-config
+                cargo-deny
+                cargo-edit
+                cargo-watch
+                cargo-insta
+                cargo-nextest
+                rust-analyzer
+                just
+                jq
+                zip
+                unzip
+                file
+                curl
+                self.formatter.${system}
+              ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils ];
 
             env = {
               # Required by rust-analyzer
               RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
+            }
+            // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+              AR = "${pkgs.llvmPackages.bintools}/bin/ar";
+              RANLIB = "${pkgs.llvmPackages.bintools}/bin/ranlib";
             };
           };
         }

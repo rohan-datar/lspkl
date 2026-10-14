@@ -8,10 +8,26 @@ quick fixes, and Pkl CLI-backed formatting over the Language Server Protocol
 
 ## Installation
 
+### Install with Cargo
+
+Install a published release from crates.io:
+
+```sh
+cargo install lspkl --locked
+lspkl --version
+```
+
+Building from Cargo requires a Rust toolchain supporting edition 2024 and a C
+compiler for Tree-sitter and the bundled Pkl grammar. A fresh build also needs
+HTTPS access to GitHub to fetch the pinned Pkl 0.32.1 SDK archive; its SHA-256
+checksum is verified before the standard-library sources are embedded.
+To build without this fetch, set `PKL_STDLIB_ARCHIVE` to a pre-fetched supported
+archive (see below).
+
 ### Release binaries
 
-Download the archive for your system from
-[GitHub Releases](https://github.com/rohan-datar/lspkl/releases). 
+Check [GitHub Releases](https://github.com/rohan-datar/lspkl/releases) for
+published archives for your system.
 
 | System | Archive target |
 | --- | --- |
@@ -22,15 +38,17 @@ Download the archive for your system from
 | Windows, x86-64 | `x86_64-pc-windows-msvc` |
 
 
-### Install with Cargo
+### Install from source
 
 ```sh
 cargo install --git https://github.com/rohan-datar/lspkl.git --locked lspkl
 lspkl --version
 ```
 
-A fresh build downloads and verifies the pinned SDK archive from GitHub. The source can be overridden by setting `PKL_STDLIB_URL`; for a pre-fetched archive,
-set `PKL_STDLIB_ARCHIVE`:
+Source builds have the same compiler and SDK requirements as registry installs.
+The download URL can be overridden with `PKL_STDLIB_URL`; this changes the
+source location, not the accepted checksums. For a pre-fetched archive, set
+`PKL_STDLIB_ARCHIVE`:
 
 ```sh
 PKL_STDLIB_URL=https://example.com/pkl-source-0.32.1.zip \
@@ -221,7 +239,43 @@ cargo nextest run --workspace --locked --test-threads=1 --no-fail-fast \
 cargo test --workspace --doc --locked
 ```
 
+### Releasing
 
+The current package version is `0.1.0`. Before a release, update all nine crate
+versions and the internal dependency version requirements in the workspace
+`Cargo.toml` together, and update `Cargo.lock`.
+
+Configure the repository's crates.io publishing token locally with GitHub CLI:
+
+```sh
+gh secret set CARGO_REPOSITORY_TOKEN
+```
+
+Enter the token at the prompt; never commit it. The release workflow requires
+this secret, while ordinary quality CI does not. Quality CI runs
+`cargo publish --workspace --locked --dry-run`.
+
+Push a `vVERSION` tag matching the package versions (for example, `v0.1.0`) to
+trigger the gated release pipeline. Merging a PR labeled `release` into `main`
+is the alternative release trigger. After the quality gates, the pipeline
+publishes all nine packages to crates.io, then publishes the GitHub release
+archives and checksums.
+
+Crates.io uploads are irreversible, and publishing multiple packages is not
+atomic. If a release fails, identify which package versions have already been
+uploaded before retrying; do not assume that nothing was published.
+
+
+
+## License and parser provenance
 
 Licensed under [Apache 2.0](LICENSE). See [NOTICE.txt](NOTICE.txt) and the SDK
-license/notice files for applicable attributions.
+[license](crates/pkl-stdlib/LICENSE) and [notice](crates/pkl-stdlib/NOTICE) for
+applicable attributions.
+
+`pkl-syntax` bundles Apple's
+[`tree-sitter-pkl` grammar at tag `v0.21.0`](https://github.com/apple/tree-sitter-pkl/tree/v0.21.0),
+including the generated C parser, scanner, and required headers. The grammar is
+compiled during the build; it is not fetched from Git and does not require a
+separate grammar crate or Tree-sitter CLI. Its upstream license and notice are
+retained in `crates/pkl-syntax/vendor/tree-sitter-pkl/`.

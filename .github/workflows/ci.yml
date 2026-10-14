@@ -32,3 +32,5 @@ jobs:
       contents: write
       pull-requests: read
     uses: ./.github/workflows/release.yml
+    secrets:
+      CARGO_REPOSITORY_TOKEN: ${{ secrets.CARGO_REPOSITORY_TOKEN }}

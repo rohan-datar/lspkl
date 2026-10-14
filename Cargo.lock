@@ -1213,13 +1213,14 @@ dependencies = [
 name = "pkl-syntax"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "insta",
  "line-index",
  "smallvec",
  "text-size",
  "thiserror",
  "tree-sitter",
- "tree-sitter-pkl",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -2164,15 +2165,6 @@ name = "tree-sitter-language"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
-
-[[package]]
-name = "tree-sitter-pkl"
-version = "0.21.0"
-source = "git+https://github.com/apple/tree-sitter-pkl?tag=v0.21.0#5893fb5dc832ea51a9bff3f84462528c766ecd7d"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
 
 [[package]]
 name = "try-lock"

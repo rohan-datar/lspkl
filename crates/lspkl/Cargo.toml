@@ -2,6 +2,10 @@
 name = "lspkl"
 version = "0.1.0"
 edition = "2024"
+description = "A native language server for the Pkl configuration language"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
 
 [lib]
 path = "src/lib.rs"

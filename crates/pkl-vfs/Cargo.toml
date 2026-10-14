@@ -2,6 +2,10 @@
 name = "pkl-vfs"
 version = "0.1.0"
 edition = "2024"
+description = "Pkl source loading and virtual file management for the lspkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
 
 [dependencies]
 pkl-stdlib.workspace = true

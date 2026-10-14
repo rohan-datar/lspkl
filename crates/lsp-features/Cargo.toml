@@ -2,6 +2,12 @@
 name = "lsp-features"
 version = "0.1.0"
 edition = "2024"
+description = "Language Server Protocol features for the lspkl Pkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+# These integration tests share support code with other workspace crates.
+exclude = ["tests/**"]
 
 [dependencies]
 pkl-db.workspace = true
