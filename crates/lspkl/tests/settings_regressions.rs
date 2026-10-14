@@ -36,20 +36,18 @@ fn folder_arrival_invalidates_project_jobs_when_settings_are_equal() {
 }
 
 fn uri(path: &std::path::Path) -> String {
-    pkl_vfs::path_to_uri(path).unwrap().into_string()
+    lspkl_vfs::path_to_uri(path).unwrap().into_string()
 }
 
 #[tokio::test]
 async fn no_workspace_relative_modulepath_resolves_definition_and_completion() {
     let temp = tempfile::tempdir().unwrap();
     let root = support::canonical_root(temp.path());
-    std::fs::create_dir(temp.path().join("lib")).unwrap();
-    std::fs::write(temp.path().join("lib/library.pkl"), "value = 42\n").unwrap();
-    let mut client = support::LspClient::spawn(
-        std::path::Path::new(env!("CARGO_BIN_EXE_lspkl")),
-        temp.path(),
-    )
-    .await;
+    std::fs::create_dir(root.join("lib")).unwrap();
+    std::fs::write(root.join("lib/library.pkl"), "value = 42\n").unwrap();
+    // The server binds relative modulepath entries to its own working directory.
+    let mut client =
+        support::LspClient::spawn(std::path::Path::new(env!("CARGO_BIN_EXE_lspkl")), &root).await;
     client
         .request(
             "initialize",
@@ -163,7 +161,7 @@ async fn null_pull_preserves_initialization_settings() {
 
 #[test]
 fn pulls_use_latest_explicit_source_and_do_not_retain_older_pull_values() {
-    use pkl_db::settings::WorkspaceSettings;
+    use lspkl_db::settings::WorkspaceSettings;
     let mut workspace = Workspace::new();
     workspace.apply_explicit_settings(
         WorkspaceSettings::parse(json!({
