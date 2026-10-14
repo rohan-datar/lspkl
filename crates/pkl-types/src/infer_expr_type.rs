@@ -230,8 +230,15 @@ pub(crate) fn infer_expr_type_inner(
         // Unary operators
         // ===================================================================
 
-        // `-x` — Number (Int or Float).
-        NodeKind::UnaryMinusExpr => ctx.base.number_type().clone(),
+        // `-x` — Number, Duration, or DataSize.
+        NodeKind::UnaryMinusExpr => Type::union(
+            [
+                ctx.base.number_type().clone(),
+                ctx.base.duration_type().clone(),
+                ctx.base.data_size_type().clone(),
+            ],
+            ctx.db,
+        ),
 
         // `!x` — Boolean.
         NodeKind::LogicalNotExpr => ctx.base.boolean_type().clone(),

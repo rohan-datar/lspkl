@@ -569,7 +569,7 @@ fn editor_changes_do_not_change_the_file_identity() {
 }
 
 #[test]
-fn closing_and_reopening_preserves_identity_without_reusing_it_for_another_canonical_uri() {
+fn closing_and_reopening_preserves_identity_without_reusing_it_for_another_uri() {
     let mut state = Workspace::new();
     let url = canonical_uri("file:///workspace/library.pkl");
     let other_url = canonical_uri("file:///workspace/other.pkl");

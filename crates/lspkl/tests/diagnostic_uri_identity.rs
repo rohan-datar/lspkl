@@ -62,7 +62,7 @@ fn client_aliases_share_canonical_inputs_but_close_independently() {
 }
 
 #[tokio::test]
-async fn stdio_publishes_exact_client_alias_and_stops_closed_alias_worker() {
+async fn stdio_publishes_exact_client_alias_and_excludes_closed_aliases() {
     let temp = tempfile::tempdir().unwrap();
     let mut client = LspClient::spawn(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path()).await;
     let response = client
@@ -100,14 +100,7 @@ async fn stdio_publishes_exact_client_alias_and_stops_closed_alias_worker() {
                 json!({"textDocument":{"uri":editor.as_str()}}),
             )
             .await;
-        let deadline = Instant::now() + Duration::from_millis(100);
-        while let Some(observed) = client.observe_until(deadline).await {
-            assert_ne!(
-                observed.message["method"], "textDocument/publishDiagnostics",
-                "{:?}",
-                observed.message
-            );
-        }
+        assert_no_closed_alias_publish_before_response(&mut client, editor.as_str()).await;
     }
 
     for uri in ["lspkl://stdlib/base.pkl", "pkl:base"] {
@@ -144,15 +137,36 @@ async fn stdio_publishes_exact_client_alias_and_stops_closed_alias_worker() {
     let published = client.notification("textDocument/publishDiagnostics").await;
     assert_eq!(
         published["params"]["uri"], "pkl:base",
-        "closed alias worker survived: {published}"
+        "diagnostics must target only the remaining open alias: {published}"
     );
-    let deadline = Instant::now() + Duration::from_millis(100);
-    while let Some(observed) = client.observe_until(deadline).await {
-        assert_ne!(
-            observed.message["method"], "textDocument/publishDiagnostics",
-            "{:?}",
-            observed.message
-        );
-    }
+    assert_no_closed_alias_publish_before_response(&mut client, "lspkl://stdlib/base.pkl").await;
     client.shutdown().await;
+}
+
+/// A semantic response orders the observation after close processing and a compute turn.
+async fn assert_no_closed_alias_publish_before_response(client: &mut LspClient, closed: &str) {
+    let barrier = client
+        .sender()
+        .start_request(
+            "textDocument/hover",
+            json!({"textDocument":{"uri":"inmemory:///barrier.pkl"},
+                "position":{"line":0,"character":0}}),
+        )
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let observed = client
+            .observe_until(deadline)
+            .await
+            .expect("semantic ordering barrier must answer");
+        let message = observed.message;
+        if message["id"] == barrier.id && message.get("method").is_none() {
+            assert!(message.get("error").is_none(), "{message}");
+            assert_eq!(message["result"], serde_json::Value::Null, "{message}");
+            break;
+        }
+        if message["method"] == "textDocument/publishDiagnostics" {
+            assert_ne!(message["params"]["uri"], closed, "{message}");
+        }
+    }
 }

@@ -40,13 +40,7 @@ fn params_for(echoed: &[lsp_types::Diagnostic]) -> CodeActionParams {
     }
 }
 
-/// A diagnostic with one quick fix that inserts `-> Unknown` after the
-/// property's type annotation:
-///
-/// ```text
-///   fix: annotate as unknown
-///     insert "-> Unknown" at 2:4
-/// ```
+/// A synthetic diagnostic with a quick fix inserting ` -> Unknown` at byte offset 20.
 fn annotated_diagnostic() -> Diagnostic {
     let mut d = Diagnostic::error(
         TextRange::new(TextSize::from(14), TextSize::from(20)),

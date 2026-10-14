@@ -114,13 +114,13 @@ fn editor_uri_roundtrips() {
     assert!(effective_uri(&uri("lspkl://unknown/a")).is_err());
     assert!(effective_uri(&uri("lspkl://https/http%3A%2F%2Fexample.com")).is_err());
 }
+#[cfg(unix)]
 #[test]
-fn filesystem_listing_is_recursive_and_component_safe() {
+fn filesystem_listing_recurses_without_following_symlink_cycles() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("nested/deep")).unwrap();
     fs::write(dir.path().join("a.pkl"), "a = 1").unwrap();
     fs::write(dir.path().join("nested/deep/b.pkl"), "b = 2").unwrap();
-    #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path(), dir.path().join("nested/cycle")).unwrap();
     let root = uri(url::Url::from_directory_path(dir.path()).unwrap().as_str());
     assert_eq!(

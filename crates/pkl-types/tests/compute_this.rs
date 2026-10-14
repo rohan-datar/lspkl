@@ -61,7 +61,6 @@ fn this_type_inside_constrained_type_is_inner_type() {
     let base = harness::load_test_base();
     // Inside `Int(this > 0)`, `this` should resolve to the type being
     // constrained — `Int` — not to the enclosing module/typealias.
-    // (This was previously asserting `Unknown` in the A-level subset.)
     harness::with_snippet(&base, "typealias Bar = Int(this > 0)", |ctx| {
         let inner = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
             matches!(k, NodeKind::ThisExpr)
@@ -79,23 +78,3 @@ fn this_type_inside_constrained_type_is_inner_type() {
         );
     });
 }
-
-// ---------------------------------------------------------------------------
-//  deferred until compute_this_type handles AmendExpr / NewExpr
-//  ObjectBody.
-// ---------------------------------------------------------------------------
-//
-// #[test]
-// fn this_type_inside_new_object_body_matches_class() {
-//     let base = harness::load_test_base();
-//     harness::with_snippet(&base, "class Foo { x: Int } y = new Foo { x = 1 }", |ctx| {
-//         // Find the `1` literal inside the `new Foo { ... }` body and assert
-//         // compute_this_type returns Type::Class for Foo.
-//     });
-// }
-//
-// #[test]
-// fn this_type_inside_amend_uses_receiver_type() {
-//     let base = harness::load_test_base();
-//     // amend syntax: `foo { ... }` where foo's declared type is the receiver
-// }

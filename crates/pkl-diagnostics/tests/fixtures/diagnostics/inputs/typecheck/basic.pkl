@@ -1,3 +1,4 @@
+// Known gap: only `foo` is reported; the mismatches for `name`, the Listing element, and the Mapping key are not.
 foo: String = 15
 
 class Person {

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 fn put(db: &mut RootDatabase, name: &str, text: &str) -> File {
     db.upsert_file(
-        &Uri::parse(format!("file:///phase7/{name}.pkl")).unwrap(),
+        &Uri::parse(format!("file:///module-items/{name}.pkl")).unwrap(),
         Arc::from(text),
         None,
         FileStatus::Present,

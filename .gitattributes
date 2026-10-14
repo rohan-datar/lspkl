@@ -1,0 +1,6 @@
+# Fixtures and snapshots use byte offsets, so keep LF on every platform.
+* text=auto eol=lf
+
+# Archive fixtures must never undergo line-ending conversion.
+*.zip binary
+*.jar binary

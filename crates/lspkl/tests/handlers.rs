@@ -33,6 +33,79 @@ fn hover(snapshot: &Snapshot, uri: &Uri) -> Hover {
     .unwrap()
     .unwrap()
 }
+
+#[test]
+fn document_handlers_return_no_result_for_an_unopened_document() {
+    let workspace = Workspace::new();
+    let snapshot = workspace.snapshot();
+    let uri: Uri = "inmemory:///unopened.pkl".parse().unwrap();
+    assert!(
+        handlers::documents::hover(
+            &snapshot,
+            HoverParams {
+                text_document_position_params: point(&uri, 0, 0),
+                work_done_progress_params: Default::default(),
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        handlers::documents::definition(
+            &snapshot,
+            GotoDefinitionParams {
+                text_document_position_params: point(&uri, 0, 0),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        handlers::documents::completion(
+            &snapshot,
+            CompletionParams {
+                text_document_position: point(&uri, 0, 0),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: None,
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        handlers::documents::code_action(
+            &snapshot,
+            CodeActionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                context: CodeActionContext::default(),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        handlers::documents::prepare_formatting(
+            &snapshot,
+            DocumentFormattingParams {
+                text_document: TextDocumentIdentifier { uri },
+                options: FormattingOptions {
+                    tab_size: 2,
+                    insert_spaces: true,
+                    ..Default::default()
+                },
+                work_done_progress_params: Default::default(),
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+}
 #[test]
 fn semantic_handlers_complete_before_writes_and_use_fresh_source_afterwards() {
     let mut workspace = Workspace::new();

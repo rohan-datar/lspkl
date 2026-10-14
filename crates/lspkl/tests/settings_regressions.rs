@@ -42,6 +42,7 @@ fn uri(path: &std::path::Path) -> String {
 #[tokio::test]
 async fn no_workspace_relative_modulepath_resolves_definition_and_completion() {
     let temp = tempfile::tempdir().unwrap();
+    let root = support::canonical_root(temp.path());
     std::fs::create_dir(temp.path().join("lib")).unwrap();
     std::fs::write(temp.path().join("lib/library.pkl"), "value = 42\n").unwrap();
     let mut client = support::LspClient::spawn(
@@ -57,7 +58,7 @@ async fn no_workspace_relative_modulepath_resolves_definition_and_completion() {
         )
         .await;
     client.notify("initialized", json!({})).await;
-    assert_modulepath(&mut client, temp.path()).await;
+    assert_modulepath(&mut client, &root).await;
     client.shutdown().await;
 }
 
@@ -103,6 +104,7 @@ async fn assert_modulepath(client: &mut support::LspClient, root: &std::path::Pa
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn null_pull_preserves_initialization_settings() {
     use std::os::unix::fs::PermissionsExt;

@@ -269,7 +269,10 @@ fn context_can_resolve_a_package_dependency_to_a_local_project() {
     let resolved = dependencies(cache.path(), &package, Some(&context));
     match &resolved["lib"] {
         RoutingRequest::ModuleRoot(project_dir) => {
-            assert_eq!(*project_dir, owner_dir.join("../local-lib"));
+            assert_eq!(
+                project_dir.canonicalize().unwrap(),
+                workspace.path().join("local-lib").canonicalize().unwrap()
+            );
         }
         other => panic!("expected local project, got {other:?}"),
     }

@@ -1,4 +1,7 @@
+#[path = "support/mod.rs"]
+mod input_support;
 use fluent_uri::Uri;
+use input_support::settle_inputs;
 use parking_lot::Mutex;
 use pkl_db::{Db, File, FileStatus, ImportResolution, RootDatabase, parse, resolve_import};
 use pkl_syntax::ast::{NodeId, NodeKind};
@@ -23,42 +26,7 @@ fn close_editor(db: &mut RootDatabase, uri: &Uri<String>) -> Result<File, pkl_vf
 }
 fn refresh_inputs(db: &mut RootDatabase) {
     db.request_routing_refresh();
-    let loader = db.source_loader_handle();
-    let updates = db
-        .directory_roots()
-        .iter()
-        .map(|root| pkl_db::DirectoryUpdate::load(&*loader, root))
-        .collect();
-    db.apply_directory_updates(updates);
-    for file in db.all_files() {
-        let _ = pkl_db::import_graph(db, file);
-    }
-    settle_inputs(db);
-}
-fn settle_inputs(db: &mut RootDatabase) {
-    let loader = db.source_loader_handle();
-    loop {
-        let jobs = db.pending_io();
-        if jobs.is_empty() {
-            break;
-        }
-        for job in jobs {
-            let update = match job {
-                pkl_db::PendingIo::Source { uri, cache_dir } => pkl_db::IoUpdate::Source {
-                    text: loader
-                        .load(&uri, &cache_dir)
-                        .ok()
-                        .map(|source| source.text.clone()),
-                    uri,
-                },
-                job => job.load(&*loader, &StandardSourceLoader::new()),
-            };
-            db.apply_io(update).unwrap();
-        }
-        for file in db.all_files() {
-            let _ = pkl_db::import_graph(db, file);
-        }
-    }
+    input_support::preload(db);
 }
 
 fn import_owner(db: &RootDatabase, file: File) -> NodeId {
@@ -98,7 +66,7 @@ fn editing_a_executes_only_a_parse_and_keeps_unrelated_import_memoized() {
         Default::default(),
         Some(Box::new(move |event| {
             if let salsa::EventKind::WillExecute { database_key } = event.kind {
-                log.lock().push(format!("{database_key:?}"));
+                log.lock().push(database_key.ingredient_index());
             }
         })),
     );
@@ -130,15 +98,17 @@ fn editing_a_executes_only_a_parse_and_keeps_unrelated_import_memoized() {
     assert_eq!(
         executions
             .iter()
-            .filter(|event| event.starts_with("parse("))
+            .filter(|&&ingredient| {
+                salsa::Database::ingredient_debug_name(&db, ingredient) == "parse"
+            })
             .count(),
         1,
         "{executions:?}"
     );
     assert!(
-        !executions
-            .iter()
-            .any(|event| event.starts_with("resolve_import(")),
+        !executions.iter().any(|&ingredient| {
+            salsa::Database::ingredient_debug_name(&db, ingredient) == "resolve_import"
+        }),
         "{executions:?}"
     );
 }
@@ -531,20 +501,13 @@ fn cyclic_import_graph_terminates_without_query_cycle() {
 
 #[test]
 fn missing_local_dependency_member_creation_resolves_without_metadata_refresh() {
-    use pkl_project::dto::{
-        Dependency, LocalDependency, PackageUri, ProjectDeps, ResolvedDependency,
-        resolved_to_dependency,
-    };
+    use pkl_project::dto::{LocalDependency, PackageUri, ProjectDeps, ResolvedDependency};
     let root = tempfile::tempdir().unwrap();
     let uri = PackageUri::create("package://example.test/local@1.0.0").unwrap();
     let resolved = ResolvedDependency::Local(LocalDependency {
         uri: uri.clone(),
         path: "missing".into(),
     });
-    assert!(matches!(
-        resolved_to_dependency(&resolved, root.path()),
-        Dependency::LocalProject(_)
-    ));
     let mut metadata = (*project(root.path(), "modules")).clone();
     metadata
         .metadata

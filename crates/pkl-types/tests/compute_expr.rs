@@ -1,4 +1,4 @@
-//! `compute_expr_type` tests.
+//! `expr_type` tests for the computed types of expressions themselves.
 //!
 //! Each test parses a tiny Pkl snippet, finds the expression we care about,
 //! and asserts on its inferred type.

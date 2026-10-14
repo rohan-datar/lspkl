@@ -1,5 +1,8 @@
 //! Lifecycle tests: initialize → didOpen → didChange → didClose → shutdown.
 
+mod support;
+use support::initialize_workspace;
+
 use lsp_types::*;
 use lspkl::{Workspace, handlers};
 
@@ -175,19 +178,4 @@ fn initialization_without_settings_preserves_project_discovery_exclusions() {
         ]
         .map(|path| temp.path().join(path))
     );
-}
-
-fn initialize_workspace(
-    workspace: &mut Workspace,
-    params: InitializeParams,
-) -> handlers::Result<InitializeResult> {
-    let result = handlers::lifecycle::initialize(workspace, &params);
-    let mut settings = workspace.settings().clone();
-    settings.resolve_paths(workspace.project_manager().workspace_folders());
-    if params.initialization_options.is_some() {
-        workspace.apply_settings(settings);
-    }
-    let manager = handlers::lifecycle::restore_workspaces(workspace.project_manager())?;
-    workspace.apply_project_manager(manager);
-    Ok(result)
 }

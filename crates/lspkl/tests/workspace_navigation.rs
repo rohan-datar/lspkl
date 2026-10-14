@@ -2,6 +2,8 @@
 
 mod support;
 
+use support::initialize_workspace;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -384,19 +386,4 @@ fn source_rpc_install_does_not_cancel_a_newer_watched_read() {
             .contents(),
         "value: String = \"new\"\n"
     );
-}
-
-fn initialize_workspace(
-    workspace: &mut Workspace,
-    params: InitializeParams,
-) -> handlers::Result<InitializeResult> {
-    let result = handlers::lifecycle::initialize(workspace, &params);
-    let mut settings = workspace.settings().clone();
-    settings.resolve_paths(workspace.project_manager().workspace_folders());
-    if params.initialization_options.is_some() {
-        workspace.apply_settings(settings);
-    }
-    let manager = handlers::lifecycle::restore_workspaces(workspace.project_manager())?;
-    workspace.apply_project_manager(manager);
-    Ok(result)
 }

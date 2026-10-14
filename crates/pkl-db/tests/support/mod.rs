@@ -11,6 +11,12 @@ pub fn preload(db: &mut RootDatabase) {
         .map(|root| pkl_db::DirectoryUpdate::load(&*loader, root))
         .collect();
     db.apply_directory_updates(updates);
+    settle_inputs(db);
+}
+
+/// Apply missing inputs until every known file's import graph is settled.
+pub fn settle_inputs(db: &mut RootDatabase) {
+    let loader = db.source_loader_handle();
     loop {
         for file in db.all_files() {
             let _ = import_graph(db, file);

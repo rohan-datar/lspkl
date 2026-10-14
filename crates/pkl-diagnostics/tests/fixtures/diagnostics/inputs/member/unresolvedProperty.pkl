@@ -1,3 +1,4 @@
+// Known gap: `qux` is not a property of pkl:test and is not reported as unresolved.
 amends "pkl:test"
 
 qux = "This is qux"

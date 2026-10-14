@@ -2,4 +2,4 @@
 source: crates/pkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-47:36 error: Type mismatch. Expected: Number. Actual: DataSize
+(no diagnostics)

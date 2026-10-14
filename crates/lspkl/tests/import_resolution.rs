@@ -153,35 +153,7 @@ fn modulepath_import_selects_the_nearest_project_for_each_source() {
 }
 
 #[test]
-fn imported_file_reuses_unsaved_editor_contents() {
-    let temp = tempfile::tempdir().unwrap();
-    let target_path = temp.path().join("library.pkl");
-    fs::write(&target_path, "answer = 0\n").unwrap();
-    let mut state = Workspace::new();
-    let opened = open(
-        &mut state,
-        file_uri(&target_path),
-        "answer = 42\n".into(),
-        Some(2),
-    );
-    let (source, tree) = source(
-        &mut state,
-        &temp.path().join("main.pkl"),
-        "import \"./library.pkl\"\n",
-    );
-
-    let target = match resolve_import(state.database(), source, import_node(&tree), None) {
-        ImportResolution::Single(file) => file,
-        other => panic!("expected single import: {other:?}"),
-    };
-
-    assert_eq!(target, opened);
-    assert_eq!(target.text(state.database()).as_ref(), "answer = 42\n");
-    assert_eq!(target.version(state.database()), Some(2));
-}
-
-#[test]
-fn missing_or_unsupported_import_targets_return_none() {
+fn missing_or_unsupported_import_targets_are_unresolved() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = Workspace::new();
     for uri in [

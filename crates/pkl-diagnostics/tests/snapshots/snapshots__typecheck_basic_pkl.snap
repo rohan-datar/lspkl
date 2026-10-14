@@ -2,4 +2,4 @@
 source: crates/pkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-1:15 error: Type mismatch. Expected: String. Actual: Int
+2:15 error: Type mismatch. Expected: String. Actual: Int

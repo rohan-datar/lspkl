@@ -262,3 +262,57 @@ fn own_non_glob_imports_name_module_types() {
     assert!(resolve_type_name(&ctx, &["Inherited"], at).is_none());
     assert_eq!(property("globbed"), Type::Unknown.nullable(ctx.db));
 }
+
+#[test]
+fn imported_aliases_and_argument_context_preserve_lexical_scope() {
+    let base = harness::load_test_base();
+    base.add(
+        2,
+        "class C { field: Int }\ntypealias Alias = C\nvalue = 42\n\
+         function f(arg: String): String = arg\n",
+    );
+    base.add(3, "output: String = \"parent\"\n");
+    harness::with_snippet(
+        &base,
+        "extends \"3.pkl\"\nimport \"2.pkl\" as library\nimport \"2.pkl\" as output\n\
+         x: library.Alias\nq = x.field\nz = output.value\n\
+         y = let (library = library.value) library\nw = library.f(foobar)\n",
+        |ctx| {
+            let file = harness::file(ctx, 1);
+            let at = NodeRef::new(file, ctx.tree(file).unwrap().root());
+            let output = resolve_unqualified_access(at, "output", ctx).unwrap();
+            assert_eq!(output.node.file, harness::file(ctx, 2));
+            assert!(matches!(output.ty, Type::Module { .. }));
+            for name in ["q", "z", "y"] {
+                assert_eq!(
+                    resolve_unqualified_access(at, name, ctx).unwrap().ty,
+                    *ctx.base.int_type(),
+                    "{name} must retain the imported Int type"
+                );
+            }
+            let library = resolve_unqualified_access(at, "library", ctx).unwrap();
+            let alias = pkl_types::find_member(ctx.db, &library.ty, "Alias").unwrap();
+            assert!(matches!(alias.ty, Type::Alias { .. }));
+            assert_eq!(alias.node.file, harness::file(ctx, 2));
+            fn find_argument(
+                tree: &pkl_syntax::ast::SyntaxTree,
+                node: pkl_syntax::ast::NodeId,
+            ) -> Option<pkl_syntax::ast::NodeId> {
+                if matches!(tree.kind(node), NodeKind::UnqualifiedAccessExpr)
+                    && tree.text(node) == "foobar"
+                {
+                    return Some(node);
+                }
+                tree.children(node)
+                    .iter()
+                    .find_map(|&child| find_argument(tree, child))
+            }
+            let argument = find_argument(ctx.tree(file).unwrap(), at.value).unwrap();
+            let expression = harness::expr(NodeRef::new(file, argument), ctx);
+            assert_eq!(
+                pkl_types::expected_type(ctx.db, expression.map(|expr| expr.id()), ctx.root),
+                *ctx.base.string_type()
+            );
+        },
+    );
+}

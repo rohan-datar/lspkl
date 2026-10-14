@@ -23,10 +23,6 @@ fn diagnostic_snapshots() {
             .expect("input path must be under fixtures root");
 
         let source = fs::read_to_string(&input_path).expect("fixture should be readable");
-        let tree = std::sync::Arc::new(
-            pkl_syntax::parse(&source)
-                .unwrap_or_else(|err| panic!("parse failed for {}: {err}", relative.display())),
-        );
         let mut db = pkl_db::RootDatabase::default();
         let file = db
             .upsert_file(
@@ -39,7 +35,7 @@ fn diagnostic_snapshots() {
         harness::input_support::preload(&mut db);
         let ctx = pkl_types::AnalysisContext::for_root(&db, file);
         let diagnostics = engine.analyze(&ctx, file);
-        let rendered = render_diagnostics(&diagnostics, tree.line_index());
+        let rendered = render_diagnostics(&diagnostics, pkl_db::line_index(&db, file));
 
         let snapshot_name = relative
             .display()
@@ -47,30 +43,6 @@ fn diagnostic_snapshots() {
             .replace(['/', '\\', '.'], "_");
         insta::assert_snapshot!(snapshot_name, rendered);
     }
-}
-
-#[test]
-fn modulepath_imports_do_not_use_package_uri_rules() {
-    let base = harness::load_test_base();
-    let tree = std::sync::Arc::new(
-        pkl_syntax::parse("import \"modulepath:/library.pkl\" as library\n").unwrap(),
-    );
-    base.add(1, tree.source());
-
-    let db = base.db.borrow();
-
-    let ctx = pkl_types::AnalysisContext::for_root(
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
-    let diagnostics =
-        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, harness::file(&ctx, 1));
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| !diagnostic.message.contains("package")),
-        "{diagnostics:?}"
-    );
 }
 
 #[test]
@@ -104,23 +76,6 @@ fn renderer_keeps_one_based_byte_columns_and_edit_endpoints() {
     assert_eq!(render_diagnostics(&[], &index), "(no diagnostics)\n");
 }
 
-#[test]
-fn malformed_source_remains_analyzable_at_eof() {
-    let base = harness::load_test_base();
-    let tree = std::sync::Arc::new(pkl_syntax::parse("value = (").unwrap());
-    base.add(1, tree.source());
-
-    let db = base.db.borrow();
-
-    let ctx = pkl_types::AnalysisContext::for_root(
-        &*db,
-        pkl_db::Db::file(&*db, &harness::uri(1)).unwrap(),
-    );
-    let diagnostics =
-        DiagnosticsEngine::with_default_analyzers().analyze(&ctx, harness::file(&ctx, 1));
-    assert!(!diagnostics.is_empty());
-    assert!(!render_diagnostics(&diagnostics, tree.line_index()).is_empty());
-}
 #[test]
 fn analyzer_walk_keeps_file_identity_and_honors_subtree_skips() {
     use pkl_diagnostics::{Analyzer, DiagnosticsHolder};

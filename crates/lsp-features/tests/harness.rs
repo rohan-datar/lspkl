@@ -1,3 +1,4 @@
+// Shared by separate integration-test binaries, each using a different subset.
 #![allow(dead_code)]
 #[path = "../../pkl-db/tests/support/mod.rs"]
 pub mod input_support;

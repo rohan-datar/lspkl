@@ -1,3 +1,4 @@
+// Known gap: the String override of `prop` is not reported against `Int(this > 3)`.
 open class Baz {
   prop: Int(this > 3)
 }

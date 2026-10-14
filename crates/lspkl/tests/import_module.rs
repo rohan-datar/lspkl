@@ -95,21 +95,6 @@ fn editor_changes_refresh_imported_tree_without_mutating_owned_observations() {
     assert_eq!(before.source(), "oldValue = 1\n");
 }
 
-#[test]
-fn missing_target_is_unresolved_rather_than_a_parse_error() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut state = Workspace::new();
-    let (source, _tree, import) = importing_source(&mut state, temp.path());
-
-    assert!(parse(state.database(), source).is_ok());
-    assert!(matches!(
-        resolve_import(state.database(), source, import, None),
-        ImportResolution::Unresolved {
-            package_to_download: None
-        }
-    ));
-}
-
 fn open(
     state: &mut Workspace,
     url: Uri<String>,

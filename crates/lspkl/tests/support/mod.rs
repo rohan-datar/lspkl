@@ -17,7 +17,57 @@ use tokio::time::{Instant, timeout, timeout_at};
 
 const WAIT: Duration = Duration::from_secs(15);
 const STDERR_LIMIT: usize = 64 * 1024;
+
+/// Resolve fixture symlinks without retaining Windows verbatim path prefixes.
+pub fn canonical_root(path: &Path) -> std::path::PathBuf {
+    let canonical = path.canonicalize().expect("fixture root should exist");
+    #[cfg(windows)]
+    {
+        use std::path::{Component, PathBuf, Prefix};
+        let mut components = canonical.components();
+        let prefix = match components.next() {
+            Some(Component::Prefix(prefix)) => prefix.kind(),
+            _ => return canonical,
+        };
+        let mut root = match prefix {
+            Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:\\", char::from(drive))),
+            Prefix::VerbatimUNC(server, share) => {
+                let mut root = PathBuf::from(r"\\");
+                root.push(server);
+                root.push(share);
+                root
+            }
+            _ => return canonical,
+        };
+        for component in components {
+            if !matches!(component, Component::RootDir) {
+                root.push(component.as_os_str());
+            }
+        }
+        return root;
+    }
+    #[cfg(not(windows))]
+    canonical
+}
+
+/// Apply the synchronous parts of initialization for direct handler fixtures.
+pub fn initialize_workspace(
+    workspace: &mut lspkl::Workspace,
+    params: lsp_types::InitializeParams,
+) -> lspkl::handlers::Result<lsp_types::InitializeResult> {
+    let result = lspkl::handlers::lifecycle::initialize(workspace, &params);
+    let mut settings = workspace.settings().clone();
+    settings.resolve_paths(workspace.project_manager().workspace_folders());
+    if params.initialization_options.is_some() {
+        workspace.apply_settings(settings);
+    }
+    let manager = lspkl::handlers::lifecycle::restore_workspaces(workspace.project_manager())?;
+    workspace.apply_project_manager(manager);
+    Ok(result)
+}
 /// Prepare synchronous semantic fixtures without fetching synthetic network URLs.
+/// Use Workspace writes (rather than the database fixture helper) so every loaded
+/// input also advances the analysis generation.
 pub fn preload(workspace: &mut lspkl::Workspace) {
     let loader = workspace.database().source_loader_handle();
     let https = pkl_vfs::StandardSourceLoader::new();

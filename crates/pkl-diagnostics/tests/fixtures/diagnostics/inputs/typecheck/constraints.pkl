@@ -1,3 +1,4 @@
+// Known gap: type constraints are not evaluated, so none of these violations is reported.
 int: Int(isBetween(5, 10)) = 100
 
 int2: Int(this > 10) = 5

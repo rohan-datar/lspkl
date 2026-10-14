@@ -1,4 +1,4 @@
-//! `infer_expr_type_from_context` tests.
+//! `expected_type` tests for types required by an expression's surrounding context.
 
 mod harness;
 
@@ -249,7 +249,7 @@ fn throw_expr_arg_is_string() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn unary_minus_operand_is_number() {
+fn unary_minus_operand_accepts_number_duration_and_data_size() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, "x = -1", |ctx| {
         let lit = harness::find_first(ctx.tree(harness::file(ctx, 1)).unwrap(), |k| {
@@ -261,9 +261,20 @@ fn unary_minus_operand_is_number() {
                 .map(|expr| expr.id()),
             ctx.root,
         );
+        for accepted in [
+            ctx.base.int_type(),
+            ctx.base.float_type(),
+            ctx.base.duration_type(),
+            ctx.base.data_size_type(),
+        ] {
+            assert!(
+                accepted.is_subtype_of(&ty, ctx.db),
+                "expected {accepted:?} to satisfy {ty:?}"
+            );
+        }
         assert!(
-            ty.class_equals(ctx.base.number_type()),
-            "expected Number, got {ty:?}"
+            !ctx.base.string_type().is_subtype_of(&ty, ctx.db),
+            "String must not satisfy {ty:?}"
         );
     });
 }
@@ -421,13 +432,13 @@ fn for_generator_iterable_is_collection() {
 }
 
 // ---------------------------------------------------------------------------
-// B-level deferred: contexts that need compute_this_type to handle
-// NewExpr / ObjectBody. Currently compute_this_type returns Unknown for
-// those, so the value type extraction bails to Unknown.
+// Container value types require compute_this_type_inner to resolve object bodies.
+// It currently returns Unknown for NewExpr, AmendExpr, and ObjectBody, so the
+// expected value type cannot yet be extracted.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "B-level: needs compute_this_type to handle NewExpr/ObjectBody"]
+#[ignore = "compute_this_type_inner returns Unknown for NewExpr/ObjectBody receivers"]
 fn object_entry_value_uses_mapping_value_type() {
     let base = harness::load_test_base();
     harness::with_snippet(
@@ -453,7 +464,7 @@ fn object_entry_value_uses_mapping_value_type() {
 }
 
 #[test]
-#[ignore = "B-level: needs compute_this_type to handle NewExpr/ObjectBody"]
+#[ignore = "compute_this_type_inner returns Unknown for NewExpr/ObjectBody receivers"]
 fn member_predicate_value_uses_container_value_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x: Listing<Int> = new { [[true]] = 1 }"#, |ctx| {
