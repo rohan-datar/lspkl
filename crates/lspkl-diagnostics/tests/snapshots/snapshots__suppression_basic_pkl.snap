@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+4:15 warning: Nullability mismatch. Expected: String. Actual: String?

@@ -1,6 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-5:13 error: cannot access from const
-7:13 error: cannot access from const

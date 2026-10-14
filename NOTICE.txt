@@ -57,7 +57,7 @@ reserved.
 
 The generated parser, external scanner, and required tree-sitter header from
 Apple's tree-sitter-pkl v0.21.0 are bundled unmodified in
-crates/pkl-syntax/vendor/tree-sitter-pkl and linked at build time to parse Pkl
+crates/lspkl-syntax/vendor/tree-sitter-pkl and linked at build time to parse Pkl
 source files.
 
 Upstream commit: 5893fb5dc832ea51a9bff3f84462528c766ecd7d

@@ -1,7 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-1:1 error: modifier `local` is not applicable for amending modules
-  fix: delete `local`
-    replace 1:1-1:6 with ""

@@ -956,21 +956,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
-name = "lsp-features"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "lsp-types",
- "pkl-db",
- "pkl-diagnostics",
- "pkl-project",
- "pkl-syntax",
- "pkl-types",
- "pkl-vfs",
- "serde_json",
-]
-
-[[package]]
 name = "lsp-server"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1003,16 +988,16 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "fluent-uri 0.4.1",
- "lsp-features",
  "lsp-server",
  "lsp-types",
+ "lspkl-db",
+ "lspkl-diagnostics",
+ "lspkl-features",
+ "lspkl-project",
+ "lspkl-syntax",
+ "lspkl-types",
+ "lspkl-vfs",
  "parking_lot",
- "pkl-db",
- "pkl-diagnostics",
- "pkl-project",
- "pkl-syntax",
- "pkl-types",
- "pkl-vfs",
  "rcgen",
  "rustls",
  "salsa",
@@ -1023,6 +1008,132 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "lspkl-db"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "line-index",
+ "lspkl-project",
+ "lspkl-stdlib",
+ "lspkl-syntax",
+ "lspkl-vfs",
+ "parking_lot",
+ "salsa",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lspkl-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "insta",
+ "lspkl-db",
+ "lspkl-project",
+ "lspkl-syntax",
+ "lspkl-types",
+ "lspkl-vfs",
+ "parking_lot",
+ "salsa",
+ "semver",
+]
+
+[[package]]
+name = "lspkl-features"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "lsp-types",
+ "lspkl-db",
+ "lspkl-diagnostics",
+ "lspkl-project",
+ "lspkl-syntax",
+ "lspkl-types",
+ "lspkl-vfs",
+ "serde_json",
+]
+
+[[package]]
+name = "lspkl-project"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "globset",
+ "lspkl-vfs",
+ "percent-encoding",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "lspkl-stdlib"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "sha2",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "lspkl-syntax"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "insta",
+ "line-index",
+ "smallvec",
+ "text-size",
+ "thiserror",
+ "tree-sitter",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "lspkl-types"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.1",
+ "fluent-uri 0.4.1",
+ "la-arena",
+ "lspkl-db",
+ "lspkl-project",
+ "lspkl-syntax",
+ "lspkl-vfs",
+ "parking_lot",
+ "salsa",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "lspkl-vfs"
+version = "0.1.0"
+dependencies = [
+ "fluent-uri 0.4.1",
+ "lspkl-stdlib",
+ "percent-encoding",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
  "url",
  "zip",
 ]
@@ -1146,117 +1257,6 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "pkl-db"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "line-index",
- "parking_lot",
- "pkl-project",
- "pkl-stdlib",
- "pkl-syntax",
- "pkl-vfs",
- "salsa",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "pkl-diagnostics"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "insta",
- "parking_lot",
- "pkl-db",
- "pkl-project",
- "pkl-syntax",
- "pkl-types",
- "pkl-vfs",
- "salsa",
- "semver",
-]
-
-[[package]]
-name = "pkl-project"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "globset",
- "percent-encoding",
- "pkl-vfs",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "tracing",
- "url",
- "zip",
-]
-
-[[package]]
-name = "pkl-stdlib"
-version = "0.1.0"
-dependencies = [
- "reqwest",
- "sha2",
- "tempfile",
- "zip",
-]
-
-[[package]]
-name = "pkl-syntax"
-version = "0.1.0"
-dependencies = [
- "cc",
- "insta",
- "line-index",
- "smallvec",
- "text-size",
- "thiserror",
- "tree-sitter",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "pkl-types"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.11.1",
- "fluent-uri 0.4.1",
- "la-arena",
- "parking_lot",
- "pkl-db",
- "pkl-project",
- "pkl-syntax",
- "pkl-vfs",
- "salsa",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "pkl-vfs"
-version = "0.1.0"
-dependencies = [
- "fluent-uri 0.4.1",
- "percent-encoding",
- "pkl-stdlib",
- "rcgen",
- "reqwest",
- "rustls",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
- "url",
- "zip",
-]
 
 [[package]]
 name = "portable-atomic"

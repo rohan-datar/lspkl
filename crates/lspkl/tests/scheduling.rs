@@ -7,10 +7,10 @@ mod memory;
 use fluent_uri::Uri;
 use lsp_server::{Message, RequestId};
 use lspkl::Workspace;
+use lspkl_db::RootDatabase;
+use lspkl_vfs::{FileError, Source, SourceLoader, StandardSourceLoader};
 use memory::{DEADLINE, Peer};
 use parking_lot::{Condvar, Mutex};
-use pkl_db::RootDatabase;
-use pkl_vfs::{FileError, Source, SourceLoader, StandardSourceLoader};
 use serde_json::{Value, json};
 use std::{
     path::Path,

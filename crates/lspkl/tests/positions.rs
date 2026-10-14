@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use support::LspClient;
 
 fn uri(path: &Path) -> String {
-    pkl_vfs::path_to_uri(path).unwrap().into_string()
+    lspkl_vfs::path_to_uri(path).unwrap().into_string()
 }
 
 // This is the client's independent wire encoding, not the server's converter.

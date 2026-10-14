@@ -8,7 +8,7 @@ use std::{fs, io::Write, path::Path};
 use support::LspClient;
 
 fn uri(path: &Path) -> String {
-    pkl_vfs::path_to_uri(path).unwrap().into_string()
+    lspkl_vfs::path_to_uri(path).unwrap().into_string()
 }
 fn position(source: &str, token: &str) -> Value {
     let offset = source.rfind(token).unwrap();
@@ -410,7 +410,7 @@ async fn stdlib_navigation_source_rpc_and_missing_source_error() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(declaration.contains("class String"), "{declaration}");
-    assert_eq!(text, pkl_vfs::stdlib::source("base").unwrap());
+    assert_eq!(text, lspkl_vfs::stdlib::source("base").unwrap());
     let missing = client
         .request("pkl/fileContents", json!({"uri":"pkl:nonexistent"}))
         .await;
@@ -493,7 +493,7 @@ async fn modulepath_archive_precedes_directory_for_completion_and_navigation() {
     let target =
         fluent_uri::Uri::parse(items[0]["data"]["targetUri"].as_str().unwrap().to_owned()).unwrap();
     assert_eq!(
-        pkl_vfs::to_editor_uri(&target).unwrap().as_str(),
+        lspkl_vfs::to_editor_uri(&target).unwrap().as_str(),
         location["uri"].as_str().unwrap()
     );
     let resolved = client
@@ -1014,9 +1014,9 @@ async fn uncached_https_import_resolves_and_clears_diagnostics_without_file_cont
     let mut origin = https::HttpsFixture::start(&ca);
     let cache = temp.path().join("cache");
     let imported = fluent_uri::Uri::parse(origin.uri.clone()).unwrap();
-    let loader = pkl_vfs::StandardSourceLoader::new();
+    let loader = lspkl_vfs::StandardSourceLoader::new();
     assert!(
-        pkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_err(),
+        lspkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_err(),
         "the HTTPS import must start uncached"
     );
     let main = uri(&temp.path().join("main.pkl"));
@@ -1058,7 +1058,7 @@ async fn uncached_https_import_resolves_and_clears_diagnostics_without_file_cont
     };
     assert_eq!(cleared["version"], 1);
     assert!(
-        pkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_ok(),
+        lspkl_vfs::SourceLoader::load(&loader, &imported, &cache).is_ok(),
         "semantic I/O must populate the HTTPS cache"
     );
     let definition = at(
@@ -1071,7 +1071,7 @@ async fn uncached_https_import_resolves_and_clears_diagnostics_without_file_cont
     .await;
     assert_eq!(
         definition["uri"],
-        pkl_vfs::to_editor_uri(&imported).unwrap().as_str()
+        lspkl_vfs::to_editor_uri(&imported).unwrap().as_str()
     );
     assert_eq!(
         definition["range"],

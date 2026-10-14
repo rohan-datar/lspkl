@@ -2,14 +2,14 @@
 
 use super::{HandlerError, Result};
 use crate::{perf, state::Snapshot};
-use lsp_features::positions::PositionConverter;
 use lsp_types::Diagnostic;
-use pkl_db::File;
-use pkl_syntax::ast::SyntaxTree;
+use lspkl_db::File;
+use lspkl_features::positions::PositionConverter;
+use lspkl_syntax::ast::SyntaxTree;
 
 pub(super) struct DocumentDiagnostics<'a> {
     pub tree: &'a SyntaxTree,
-    pub diagnostics: std::sync::Arc<[pkl_diagnostics::Diagnostic]>,
+    pub diagnostics: std::sync::Arc<[lspkl_diagnostics::Diagnostic]>,
 }
 
 pub(super) fn open_document_analysis<'a>(
@@ -19,7 +19,7 @@ pub(super) fn open_document_analysis<'a>(
     let Some(file) = snapshot.document(uri) else {
         return Ok(None);
     };
-    let tree = pkl_db::parse(&snapshot.db, file)
+    let tree = lspkl_db::parse(&snapshot.db, file)
         .as_ref()
         .map_err(|error| HandlerError::Domain(error.to_string()))?;
     Ok(Some((file, tree)))
@@ -33,7 +33,7 @@ pub(super) fn analyze_document<'a>(
         return Ok(None);
     };
     let _compute = perf::Compute::start("diagnostics");
-    let diagnostics = pkl_diagnostics::diagnostics(&snapshot.db, document.0);
+    let diagnostics = lspkl_diagnostics::diagnostics(&snapshot.db, document.0);
     Ok(Some(DocumentDiagnostics {
         tree: document.1,
         diagnostics,
@@ -47,6 +47,6 @@ pub fn diagnostics(snapshot: &Snapshot, uri: &str) -> Result<Vec<Diagnostic>> {
     let positions = PositionConverter::new(tree, snapshot.position_encoding);
     Ok(diagnostics
         .iter()
-        .map(|diag| lsp_features::diagnostics::to_lsp(diag, positions.range(diag.span)))
+        .map(|diag| lspkl_features::diagnostics::to_lsp(diag, positions.range(diag.span)))
         .collect())
 }

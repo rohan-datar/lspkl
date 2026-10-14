@@ -4,14 +4,14 @@ use std::{fs, path::Path};
 
 use fluent_uri::Uri;
 use lspkl::Workspace;
-use pkl_db::{Db, File, ImportResolution, parse, resolve_import};
-use pkl_syntax::ast::NodeKind;
+use lspkl_db::{Db, File, ImportResolution, parse, resolve_import};
+use lspkl_syntax::ast::NodeKind;
 use serde_json::json;
 
 const DEPENDENCY: &str = "package://example.com/library@1.0.0";
 
 fn uri(path: &Path) -> Uri<String> {
-    pkl_vfs::path_to_uri(path).unwrap()
+    lspkl_vfs::path_to_uri(path).unwrap()
 }
 
 fn open(state: &mut Workspace, path: &Path, text: &str) -> File {
@@ -213,7 +213,7 @@ fn watched_dependency_file_updates_routing_without_losing_modulepath() {
 #[cfg(unix)]
 #[test]
 fn full_refresh_after_successful_sync_preserves_import_routes() {
-    use pkl_project::{cli::PklCli, project_manager::ProjectManager};
+    use lspkl_project::{cli::PklCli, project_manager::ProjectManager};
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();

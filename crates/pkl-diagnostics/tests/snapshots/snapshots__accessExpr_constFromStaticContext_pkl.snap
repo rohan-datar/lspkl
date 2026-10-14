@@ -1,7 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-4:9 error: cannot access non-const property from static body
-11:18 error: cannot access non-const property from static body
-14:37 error: cannot access non-const property from static body

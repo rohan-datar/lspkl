@@ -70,8 +70,8 @@ rustPlatform.buildRustPackage {
       crates/lspkl/tests/handlers.rs \
       crates/lspkl/tests/project_reload.rs \
       crates/lspkl/tests/settings_regressions.rs \
-      crates/pkl-project/tests/cli.rs \
-      crates/pkl-project/tests/project_manager.rs \
+      crates/lspkl-project/tests/cli.rs \
+      crates/lspkl-project/tests/project_manager.rs \
       --replace-fail '#!/bin/sh' '#!${runtimeShell}'
     substituteInPlace crates/lspkl/tests/json_rpc.rs crates/lspkl/tests/stdio.rs \
       --replace-fail '/bin/sleep' '${coreutils}/bin/sleep'
@@ -92,8 +92,8 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     install -Dm644 LICENSE "$out/share/doc/lspkl/LICENSE"
     install -Dm644 NOTICE.txt "$out/share/doc/lspkl/NOTICE.txt"
-    install -Dm644 crates/pkl-stdlib/LICENSE "$out/share/doc/lspkl/stdlib/LICENSE"
-    install -Dm644 crates/pkl-stdlib/NOTICE "$out/share/doc/lspkl/stdlib/NOTICE"
+    install -Dm644 crates/lspkl-stdlib/LICENSE "$out/share/doc/lspkl/stdlib/LICENSE"
+    install -Dm644 crates/lspkl-stdlib/NOTICE "$out/share/doc/lspkl/stdlib/NOTICE"
   '';
 
   doInstallCheck = true;

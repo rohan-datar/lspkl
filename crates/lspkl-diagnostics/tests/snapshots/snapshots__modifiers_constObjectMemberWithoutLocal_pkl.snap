@@ -1,0 +1,7 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+4:3 error: invalid modifier `const` without `local`
+  fix: add modifier `local`
+    insert "local " at 4:3

@@ -1,0 +1,8 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:7 warning: expression is always true
+3:7 warning: expression is always false
+5:7 warning: expression is always true
+13:16 warning: expression is always true

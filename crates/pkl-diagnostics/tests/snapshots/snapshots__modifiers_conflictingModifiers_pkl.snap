@@ -1,6 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-1:1 error: modifer `open` conflicts with `abstract`
-1:6 error: modifer `abstract` conflicts with `open`

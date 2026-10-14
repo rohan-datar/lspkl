@@ -4,8 +4,8 @@ mod support;
 
 use lsp_types::*;
 use lspkl::{Workspace, handlers};
-use pkl_db::settings::WorkspaceSettings;
-use pkl_project::dto::{PackageMetadata, PackageUri};
+use lspkl_db::settings::WorkspaceSettings;
+use lspkl_project::dto::{PackageMetadata, PackageUri};
 use std::{collections::BTreeMap, fs, io::Write, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
@@ -74,7 +74,7 @@ fn child() {
     let expected = if let Some(home) = std::env::var_os("HOME") {
         std::path::PathBuf::from(home).join(".pkl/cache")
     } else {
-        pkl_vfs::default_cache()
+        lspkl_vfs::default_cache()
     };
     assert_eq!(cache, expected);
     let package = PackageUri::create("package://cache-regression.test/library@1.0.0").unwrap();

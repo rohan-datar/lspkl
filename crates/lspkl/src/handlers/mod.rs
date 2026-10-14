@@ -14,8 +14,8 @@ pub enum HandlerError {
     #[error("{0}")]
     Domain(String),
 }
-impl From<pkl_vfs::FileError> for HandlerError {
-    fn from(error: pkl_vfs::FileError) -> Self {
+impl From<lspkl_vfs::FileError> for HandlerError {
+    fn from(error: lspkl_vfs::FileError) -> Self {
         Self::Domain(error.to_string())
     }
 }

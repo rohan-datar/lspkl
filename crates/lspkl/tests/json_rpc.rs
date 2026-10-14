@@ -49,7 +49,7 @@ fn sync_projects_round_trip_via_jsonrpc() {
     assert!(response.get("error").is_none(), "{response}");
     let state_file = workspace.join(".lspkl/projects.json");
     wait_for(&state_file);
-    let mut manager = pkl_project::project_manager::ProjectManager::default();
+    let mut manager = lspkl_project::project_manager::ProjectManager::default();
     manager.initialize(vec![workspace]);
     manager.load_state(&state_file).unwrap();
     assert_eq!(manager.projects().count(), 1);

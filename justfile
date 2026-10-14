@@ -74,7 +74,7 @@ release-package target binary="" tag="":
     cp "$binary" "$staging/$executable"
     chmod 755 "$staging/$executable"
     cp LICENSE NOTICE.txt "$staging/"
-    cp crates/pkl-stdlib/LICENSE crates/pkl-stdlib/NOTICE "$staging/licenses/pkl-stdlib/"
+    cp crates/lspkl-stdlib/LICENSE crates/lspkl-stdlib/NOTICE "$staging/licenses/pkl-stdlib/"
     if [[ "$executable" == *.exe ]]; then
         archive="$temporary/$stem.zip"
         (cd "$temporary"; zip -q -r "$archive" "$stem")

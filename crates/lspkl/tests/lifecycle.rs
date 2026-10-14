@@ -80,7 +80,7 @@ fn did_open_then_state_has_file() {
         .expect("file should be open after did_open");
     assert_eq!(file.text(&snapshot.db).as_ref(), "foo = 1");
     assert_eq!(file.version(&snapshot.db), Some(1));
-    assert_eq!(file.status(&snapshot.db), pkl_db::FileStatus::Open);
+    assert_eq!(file.status(&snapshot.db), lspkl_db::FileStatus::Open);
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn initialization_without_settings_preserves_project_discovery_exclusions() {
     let mut backend = Workspace::new();
     let params = InitializeParams {
         workspace_folders: Some(vec![WorkspaceFolder {
-            uri: pkl_vfs::path_to_uri(temp.path())
+            uri: lspkl_vfs::path_to_uri(temp.path())
                 .unwrap()
                 .as_str()
                 .parse()

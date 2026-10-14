@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use fluent_uri::Uri;
 use lspkl::Workspace;
-use pkl_db::{File, ImportResolution, parse, resolve_import};
-use pkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
+use lspkl_db::{File, ImportResolution, parse, resolve_import};
+use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
 fn file_uri(path: &Path) -> Uri<String> {
     Uri::parse(url::Url::from_file_path(path).unwrap().to_string()).unwrap()
@@ -100,7 +100,7 @@ fn open(
     url: Uri<String>,
     text: String,
     version: Option<i32>,
-) -> pkl_db::File {
+) -> lspkl_db::File {
     state
         .apply_open(lsp_types::DidOpenTextDocumentParams {
             text_document: lsp_types::TextDocumentItem {

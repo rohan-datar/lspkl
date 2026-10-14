@@ -1,6 +1,0 @@
----
-source: crates/pkl-diagnostics/tests/snapshots.rs
-expression: rendered
----
-1:19 error: Type mismatch. Expected: Int|String. Actual: Boolean
-3:12 error: Type mismatch. Expected: Int. Actual: Null

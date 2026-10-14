@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:12 error: recursive property reference
+3:7 error: recursive property reference

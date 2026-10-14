@@ -1,0 +1,25 @@
+[package]
+name = "lspkl-vfs"
+version = "0.1.0"
+edition = "2024"
+description = "Pkl source loading and virtual file management for the lspkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+
+[dependencies]
+lspkl-stdlib.workspace = true
+url.workspace = true
+fluent-uri.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+percent-encoding.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.13"

@@ -1,0 +1,25 @@
+[package]
+name = "lspkl-types"
+version = "0.1.0"
+edition = "2024"
+description = "Pkl name resolution and type analysis for the lspkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+# These integration tests share support code with other workspace crates.
+exclude = ["tests/**"]
+
+[dependencies]
+lspkl-db.workspace = true
+lspkl-syntax.workspace = true
+thiserror.workspace = true
+salsa.workspace = true
+la-arena.workspace = true
+bitflags.workspace = true
+fluent-uri.workspace = true
+
+[dev-dependencies]
+lspkl-vfs.workspace = true
+parking_lot.workspace = true
+lspkl-project.workspace = true
+tempfile.workspace = true

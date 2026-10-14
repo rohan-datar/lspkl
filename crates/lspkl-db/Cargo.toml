@@ -1,0 +1,23 @@
+[package]
+name = "lspkl-db"
+version = "0.1.0"
+edition = "2024"
+description = "Incremental analysis database for the lspkl Pkl language server"
+license = "Apache-2.0"
+repository = "https://github.com/rohan-datar/lspkl"
+readme = "README.md"
+
+[dependencies]
+salsa.workspace = true
+parking_lot.workspace = true
+fluent-uri.workspace = true
+line-index.workspace = true
+lspkl-syntax.workspace = true
+lspkl-vfs.workspace = true
+lspkl-project.workspace = true
+lspkl-stdlib.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

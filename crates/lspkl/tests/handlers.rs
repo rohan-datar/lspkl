@@ -303,7 +303,7 @@ esac
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
     let mut workspace = Workspace::new();
     workspace.apply_settings(
-        pkl_db::settings::WorkspaceSettings::parse(serde_json::json!({"cli": {"path": cli}}))
+        lspkl_db::settings::WorkspaceSettings::parse(serde_json::json!({"cli": {"path": cli}}))
             .unwrap(),
     );
     let uri: Uri = "inmemory:///format.pkl".parse().unwrap();

@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+7:20 error: cannot access from const
+10:27 error: cannot access from const

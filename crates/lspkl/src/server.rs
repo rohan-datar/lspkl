@@ -9,8 +9,8 @@ use lsp_server::{
     Connection, Message, Notification, ReqQueue, Request, RequestId, Response, ResponseError,
 };
 use lsp_types::*;
-use pkl_db::settings::WorkspaceSettings;
-use pkl_project::project_manager::ProjectManager;
+use lspkl_db::settings::WorkspaceSettings;
+use lspkl_project::project_manager::ProjectManager;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
@@ -56,7 +56,7 @@ enum Effect {
 enum Prepared {
     Done(Effect),
     Io(IoJob),
-    Retry(Request, Vec<pkl_db::PendingIo>, Effect),
+    Retry(Request, Vec<lspkl_db::PendingIo>, Effect),
     /// An input write cancelled the computation; the request itself is intact.
     Superseded(Request),
 }
@@ -69,20 +69,20 @@ enum Event {
         Uri,
         u64,
         Option<i32>,
-        Result<(Vec<Diagnostic>, Vec<pkl_db::PendingIo>)>,
+        Result<(Vec<Diagnostic>, Vec<lspkl_db::PendingIo>)>,
     ),
     Reload(Option<LoadedFiles>),
     Restore(u64, Result<ProjectManager>),
     Settings(u64, WorkspaceSettings),
-    PendingIo(u64, Result<Vec<pkl_db::PendingIo>>),
-    LoadedIo(u64, pkl_db::PendingIo, pkl_db::IoUpdate),
+    PendingIo(u64, Result<Vec<lspkl_db::PendingIo>>),
+    LoadedIo(u64, lspkl_db::PendingIo, lspkl_db::IoUpdate),
 }
 struct Pending {
     request: Request,
     span: tracing::Span,
     queued: std::time::Instant,
     document: Option<(String, u64)>,
-    waiting: Vec<pkl_db::PendingIo>,
+    waiting: Vec<lspkl_db::PendingIo>,
     fallback: Option<Effect>,
     retries: u8,
     deadline: std::time::Instant,
@@ -233,7 +233,7 @@ pub fn run(
                                 .params
                                 .pointer("/textDocument/uri")
                                 .and_then(Value::as_str)
-                                .and_then(|uri| pkl_vfs::parse_source_uri(uri).ok())
+                                .and_then(|uri| lspkl_vfs::parse_source_uri(uri).ok())
                                 .and_then(|uri| s.db.known_file(&uri));
                             let (prepared, jobs) =
                                 s.db.discover_request_io(root, || prepare(s, request.clone()));
@@ -478,7 +478,7 @@ struct Loop {
     reloads: usize,
     io_epoch: u64,
     collect_io: bool,
-    in_flight_io: Vec<(u64, pkl_db::PendingIo)>,
+    in_flight_io: Vec<(u64, lspkl_db::PendingIo)>,
     /// Documents whose diagnostics wait for their own missing inputs, until the deadline.
     diagnostics_waiting: HashMap<Uri, std::time::Instant>,
     /// Documents whose wait expired: publish the next result even if inputs are missing.
@@ -532,7 +532,7 @@ impl Loop {
         &mut self,
         id: &RequestId,
         request: Request,
-        waiting: Vec<pkl_db::PendingIo>,
+        waiting: Vec<lspkl_db::PendingIo>,
         fallback: Option<Effect>,
     ) {
         let Some(running) = self.running.remove(id) else {
@@ -550,7 +550,7 @@ impl Loop {
             deadline: running.deadline,
         });
     }
-    fn load_inputs(&mut self, jobs: Vec<pkl_db::PendingIo>) {
+    fn load_inputs(&mut self, jobs: Vec<lspkl_db::PendingIo>) {
         let epoch = self.io_epoch;
         for job in jobs {
             // A load from an older epoch will be discarded, so it cannot satisfy this one.
