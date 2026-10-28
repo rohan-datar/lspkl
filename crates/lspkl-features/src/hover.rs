@@ -4,8 +4,8 @@ use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use lspkl_syntax::TextSize;
 use lspkl_syntax::ast::nodes::{
-    ClassMethod, ClassProperty, MethodHeader, ObjectMethod, ParameterList, TypeAnnotation,
-    TypeParameterList, TypedIdentifier,
+    ClassMethod, ClassProperty, MethodHeader, ObjectMethod, ObjectProperty, ParameterList,
+    TypeAnnotation, TypeParameterList, TypedIdentifier,
 };
 use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
 
@@ -74,7 +74,7 @@ pub fn render_markdown(
             lspkl_types::resolver::import_name(tree, node_id)?,
             lspkl_types::resolver::import_type(resolved, ctx).render(ctx.db)
         ),
-        NodeKind::ClassProperty => {
+        NodeKind::ClassProperty | NodeKind::ObjectProperty => {
             let name = tree.name(node_id)?;
             match property_type(tree, resolved, ctx) {
                 Some(ty) => format!("{}{name}: {ty}", modifiers_prefix(tree, node_id)),
@@ -108,17 +108,20 @@ pub fn render_markdown(
     Some(md)
 }
 
-/// Render the type of a `ClassProperty` for hover.
+/// Render the type of a `ClassProperty` or `ObjectProperty` for hover.
 ///
 /// Prefers the explicit annotation (`x: String`), rendered through
 /// `to_type` so aliases and generics display the same way diagnostics do.
 /// Falls back to inferring the initializer's type (`x = 1` → `Int`) via
 /// `expr_type`. Returns `None` when neither yields anything useful.
 fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) -> Option<String> {
-    let declaration = ClassProperty::cast(tree, property.value)?;
-    let annotated = declaration
-        .type_annotation(tree)
-        .and_then(|ann| TypeAnnotation::cast(tree, ann)?.ty(tree));
+    let (annotation, value) = if let Some(declaration) = ClassProperty::cast(tree, property.value) {
+        (declaration.type_annotation(tree), declaration.value(tree))
+    } else {
+        let declaration = ObjectProperty::cast(tree, property.value)?;
+        (declaration.type_annotation(tree), declaration.value(tree))
+    };
+    let annotated = annotation.and_then(|ann| TypeAnnotation::cast(tree, ann)?.ty(tree));
     if let Some(type_node) = annotated {
         let ty = NodeRef::new(property.file, type_node)
             .cast(ctx, lspkl_syntax::ast::nodes::TypeNode::cast)
@@ -129,7 +132,7 @@ fn property_type(tree: &SyntaxTree, property: NodeRef, ctx: &AnalysisContext) ->
     }
 
     // No annotation: infer from the initializer.
-    let expr = declaration.value(tree)?;
+    let expr = value?;
     let ty = NodeRef::new(property.file, expr)
         .cast(ctx, lspkl_syntax::ast::nodes::Expr::cast)
         .map_or(Type::Unknown, |expr| {

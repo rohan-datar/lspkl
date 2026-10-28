@@ -555,6 +555,47 @@ async fn close_reopen_during_edits_publishes_and_serves_the_new_epoch() {
 }
 
 #[tokio::test]
+async fn property_declaration_names_navigate_and_hover_to_themselves() {
+    let temp = tempfile::tempdir().unwrap();
+    let main = uri(&temp.path().join("properties.pkl"));
+    let source = concat!(
+        "class Settings {\n",
+        "  port: Int = 8080\n",
+        "}\n",
+        "base = 1\n",
+        "settings: Settings = new { port = base }\n",
+    );
+    let mut client = start(temp.path(), json!({})).await;
+    open(&mut client, &main, source).await;
+    let published = diagnostics(&mut client, &main).await;
+    assert_eq!(published["diagnostics"], json!([]), "{published}");
+
+    for (token, expected) in [
+        ("port: Int", range(1, 2, 18)),
+        ("base = 1", range(3, 0, 8)),
+        ("port = base", range(4, 27, 38)),
+        // The initializer reference still resolves through normal scope.
+        ("base }", range(3, 0, 8)),
+    ] {
+        let definition = at(&mut client, "textDocument/definition", &main, source, token).await;
+        assert_eq!(definition, json!({"uri":main,"range":expected}), "{token}");
+    }
+    for (token, expected) in [
+        ("port: Int", "port: Int"),
+        ("settings:", "settings: Settings"),
+        ("port = base", "port: Int"),
+    ] {
+        let hover = at(&mut client, "textDocument/hover", &main, source, token).await;
+        assert_eq!(
+            hover["contents"]["value"],
+            format!("```pkl\n{expected}\n```"),
+            "{token}: {hover}"
+        );
+    }
+    client.shutdown().await;
+}
+
+#[tokio::test]
 async fn typed_syntax_uses_if_branches_and_real_null_safe_tokens() {
     let temp = tempfile::tempdir().unwrap();
     let main = uri(&temp.path().join("typed-syntax.pkl"));

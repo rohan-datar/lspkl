@@ -221,7 +221,12 @@ pub fn resolve_reference(
                 _ => None,
             }
         }
-        // TODO(property-self-resolve)
+        NodeKind::ClassProperty | NodeKind::ObjectProperty => {
+            let name = tree.identifier(node_id)?;
+            tree.span(name)
+                .contains_inclusive(offset)
+                .then_some(node.with_value(node_id))
+        }
         // TODO(doc-comment-links)
         _ => None,
     }
