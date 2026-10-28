@@ -250,3 +250,93 @@ fn reference_after_unicode_resolves_at_its_inclusive_end() {
         );
     });
 }
+
+/// Resolve at the first byte of `token`'s `occurrence`th appearance in `src`.
+fn resolve_at(ctx: &AnalysisContext, src: &str, token: &str, occurrence: usize) -> Option<NodeRef> {
+    let offset = src
+        .match_indices(token)
+        .nth(occurrence)
+        .unwrap_or_else(|| panic!("missing occurrence {occurrence} of {token:?}"))
+        .0;
+    let file = harness::file(ctx, 1);
+    let offset = TextSize::from(offset as u32);
+    let cursor = ctx.tree(file).unwrap().find_at(offset)?;
+    resolve_reference(NodeRef::new(file, cursor), offset, ctx)
+}
+
+fn assert_declaration(
+    ctx: &AnalysisContext,
+    resolved: Option<NodeRef>,
+    kind: NodeKind,
+    name: &str,
+) {
+    let resolved = resolved.unwrap_or_else(|| panic!("`{name}` should resolve"));
+    let tree = ctx.tree(resolved.file).unwrap();
+    assert_eq!(resolved.file, harness::file(ctx, 1));
+    assert_eq!(*tree.kind(resolved.value), kind);
+    assert_eq!(tree.name(resolved.value), Some(name));
+}
+
+/// Module, class, and object property names resolve to their own declarations.
+#[test]
+fn property_declaration_names_resolve_to_themselves() {
+    let base = harness::load_test_base();
+    let src = "class Settings {\n  port: Int = 8080\n}\ncount = 1\nsettings: Settings = new { port = 9090 }\n";
+    harness::with_snippet(&base, src, |ctx| {
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "count", 0),
+            NodeKind::ClassProperty,
+            "count",
+        );
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "settings", 0),
+            NodeKind::ClassProperty,
+            "settings",
+        );
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "port", 0),
+            NodeKind::ClassProperty,
+            "port",
+        );
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "port", 1),
+            NodeKind::ObjectProperty,
+            "port",
+        );
+    });
+}
+
+/// Only the name resolves to the declaration; references inside the
+/// initializer keep resolving through ordinary scope, and other positions in
+/// the declaration resolve to nothing.
+#[test]
+fn property_self_resolution_is_limited_to_the_name() {
+    let base = harness::load_test_base();
+    let src = "other = 1\nlocal x: Int = other + 2\n";
+    harness::with_snippet(&base, src, |ctx| {
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "x", 0),
+            NodeKind::ClassProperty,
+            "x",
+        );
+        assert_declaration(
+            ctx,
+            resolve_at(ctx, src, "other", 1),
+            NodeKind::ClassProperty,
+            "other",
+        );
+        assert!(
+            resolve_at(ctx, src, "local", 0).is_none(),
+            "modifier is not the name"
+        );
+        assert!(
+            resolve_at(ctx, src, "2", 0).is_none(),
+            "initializer literal is not the name"
+        );
+    });
+}

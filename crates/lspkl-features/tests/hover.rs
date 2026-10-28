@@ -98,3 +98,28 @@ fn hover_includes_doc_comment_and_signature() {
         );
     });
 }
+
+/// Hovering a property's own name renders that declaration, for both class
+/// and object properties.
+#[test]
+fn hover_on_property_declaration_names() {
+    let base = harness::load_test_base();
+    let src = "class Settings {\n  port: Int = 8080\n}\nsettings: Settings = new { port = 9090 }\n";
+    harness::with_snippet(&base, src, |_tree, ctx| {
+        let file = harness::file(ctx, 1);
+        let tree = ctx.tree(file).unwrap();
+        for ((line, character), expected) in [
+            ((1, 2), "port: Int"),
+            ((3, 0), "settings: Settings"),
+            ((3, 27), "port: Int"),
+        ] {
+            let offset = harness::offset(tree, line, character);
+            let result = hover(ctx.db, ctx.root, lspkl_types::InFile::new(file, offset))
+                .unwrap_or_else(|| panic!("hover at {line}:{character} should resolve"));
+            let HoverContents::Markup(markup) = result.contents else {
+                panic!("expected MarkupContent");
+            };
+            assert_eq!(markup.value, format!("```pkl\n{expected}\n```"));
+        }
+    });
+}
