@@ -1,0 +1,10 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+6:17 error: Type mismatch. Expected: String. Actual: Int
+9:17 error: Type mismatch. Expected: String. Actual: Int
+10:20 error: Type mismatch. Expected: String. Actual: Int
+16:31 error: Type mismatch. Expected: String. Actual: Int
+22:38 error: Type mismatch. Expected: Int. Actual: "one"
+27:47 error: Type mismatch. Expected: Int. Actual: "two"

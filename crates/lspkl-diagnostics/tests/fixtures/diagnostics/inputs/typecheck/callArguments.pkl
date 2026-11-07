@@ -1,0 +1,27 @@
+// Argument types are checked for calls inside object bodies, where the
+// callee is resolved lexically rather than as a member of `this`.
+local function path(value: String): String = value
+local count = 5
+
+topLevel = path(count)
+
+object {
+  nested = path(count)
+  ["entry"] = path(count)
+  ok = path("fine")
+}
+
+output {
+  files {
+    ["out.txt"] { text = path(count) }
+  }
+}
+
+class Counter {
+  function add(n: Int): Int = n
+  inBody = new Dynamic { value = add("one") }
+  fine = new Dynamic { value = add(1) }
+}
+
+counter: Counter = new {}
+qualified = new Dynamic { value = counter.add("two") }
