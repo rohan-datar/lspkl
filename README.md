@@ -33,8 +33,8 @@ published archives for your system.
 | --- | --- |
 | Linux, x86-64 | `x86_64-unknown-linux-musl` |
 | Linux, ARM64 | `aarch64-unknown-linux-musl` |
-| macOS, Apple Silicon | `aarch64-apple-darwin` |
-| macOS, Intel | `x86_64-apple-darwin` |
+| macOS 26 or later, Apple Silicon | `aarch64-apple-darwin` |
+| macOS 26 or later, Intel | `x86_64-apple-darwin` |
 | Windows, x86-64 | `x86_64-pc-windows-msvc` |
 
 
