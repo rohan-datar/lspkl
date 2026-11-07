@@ -21,7 +21,11 @@ release-build target:
     case "$1" in
         x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
             cross build --release --locked -p lspkl --bin lspkl --target "$1" ;;
-        aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc)
+        aarch64-apple-darwin|x86_64-apple-darwin)
+            # Release binaries support macOS 26 (Tahoe) and later.
+            MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-26.0}" \
+                cargo build --release --locked -p lspkl --bin lspkl --target "$1" ;;
+        x86_64-pc-windows-msvc)
             cargo build --release --locked -p lspkl --bin lspkl --target "$1" ;;
         *) echo "Unsupported release target: $1" >&2; exit 1 ;;
     esac
