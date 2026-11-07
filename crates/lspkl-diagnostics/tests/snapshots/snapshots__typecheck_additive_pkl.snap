@@ -1,0 +1,8 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+14:13 error: Type mismatch. Expected: Number. Actual: "x"
+14:19 error: Type mismatch. Expected: String. Actual: Int
+15:11 error: Type mismatch. Expected: Number. Actual: List<unknown>
+15:21 error: Type mismatch. Expected: Collection. Actual: Int

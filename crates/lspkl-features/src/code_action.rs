@@ -64,6 +64,11 @@ pub fn code_action(
                         command: "pkl.downloadPackage".into(),
                         arguments: Some(vec![uri.clone().into()]),
                     },
+                    QuickFixCommand::SyncProjects => Command {
+                        title: fix.title.clone(),
+                        command: "pkl.syncProjects".into(),
+                        arguments: None,
+                    },
                 }),
                 ..Default::default()
             }));

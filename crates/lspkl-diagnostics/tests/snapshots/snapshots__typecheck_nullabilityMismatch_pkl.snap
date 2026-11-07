@@ -2,4 +2,4 @@
 source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-8:16 error: Type mismatch. Expected: Collection. Actual: Listing<String>?
+8:16 warning: Nullability mismatch. Expected: Dynamic|Bytes|IntSeq|Collection|Listing|Mapping|Map. Actual: Listing<String>?

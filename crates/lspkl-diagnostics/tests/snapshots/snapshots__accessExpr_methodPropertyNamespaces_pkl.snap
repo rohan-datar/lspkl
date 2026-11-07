@@ -1,0 +1,7 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+10:34 error: recursive property reference
+14:10 error: unresolved reference: count
+16:16 error: unresolved reference: make

@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+18:39 error: Type mismatch. Expected: Dynamic|Bytes|IntSeq|Collection|Listing|Mapping|Map. Actual: Int
+19:42 error: Type mismatch. Expected: Dynamic|Bytes|IntSeq|Collection|Listing|Mapping|Map. Actual: Point

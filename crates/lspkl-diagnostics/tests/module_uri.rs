@@ -97,9 +97,15 @@ fn known_missing_package_has_download_command_unknown_dependency_does_not() {
             })
         );
     }
+    // An undeclared or unsynced dependency offers a project sync instead.
     let diagnostics = analyze(r#"import "@unknown/main.pkl""#, &[]);
     assert_eq!(diagnostics.len(), 1);
-    assert!(diagnostics[0].quick_fixes.is_empty());
+    assert!(diagnostics[0].message.contains("pkl.syncProjects"));
+    assert_eq!(diagnostics[0].quick_fixes.len(), 1);
+    assert_eq!(
+        diagnostics[0].quick_fixes[0].command,
+        Some(QuickFixCommand::SyncProjects)
+    );
 }
 #[test]
 fn package_uri_validates_authority_path_semver_checksum_and_fragment() {

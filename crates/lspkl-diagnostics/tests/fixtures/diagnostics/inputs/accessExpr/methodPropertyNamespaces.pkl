@@ -1,0 +1,16 @@
+// Method calls and property reads use separate namespaces.
+local function labels(name: String): Mapping<String, String> = new { ["app"] = name }
+class Metadata { labels: Mapping<String, String> }
+class Resource { metadata: Metadata }
+
+// The call resolves to the local function, not the property being defined.
+resource: Resource = new { metadata { labels = labels("web") } }
+
+// Still recursive: a plain read of the property being defined.
+other: Metadata = new { labels = labels }
+
+// A property is not callable, and a method is not a property.
+count = 1
+called = count()
+function make(): Int = 1
+notAProperty = make

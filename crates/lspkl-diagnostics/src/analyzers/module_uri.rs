@@ -85,7 +85,15 @@ impl Analyzer for ModuleUriAnalyzer {
             }) => {
                 if let Some(dependency) = uri.strip_prefix('@') {
                     let name = dependency.split('/').next().unwrap_or(dependency);
-                    holder.add_warning(span, format!("cannot resolve dependency import: {name}"));
+                    // Dependency names come from synced project metadata; an
+                    // unsynced or stale project is the usual cause.
+                    holder.add_warning_with_fix(
+                        span,
+                        format!(
+                            "cannot resolve dependency import: {name} (is the project synced? run pkl.syncProjects)"
+                        ),
+                        QuickFix::sync_projects(),
+                    );
                 } else {
                     holder.add_warning(span, "cannot resolve import");
                 }
