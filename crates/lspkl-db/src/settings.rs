@@ -17,7 +17,7 @@ pub struct WorkspaceSettings {
     pub module_paths: Vec<PathBuf>,
     #[serde(skip)]
     pub resolved_cache_dir: Option<PathBuf>,
-    /// Initialized once, and retained when workspace-relative paths are rebound.
+    /// Selected on an I/O worker from the configured CLI version; retained on rebind.
     #[serde(skip)]
     pub fallback_cache_dir: PathBuf,
     /// Absolute base for relative paths outside any workspace folder. Empty when
@@ -36,10 +36,7 @@ impl Default for WorkspaceSettings {
             cache_dir: None,
             module_paths: Vec::new(),
             resolved_cache_dir: None,
-            fallback_cache_dir: std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".pkl/cache"))
-                .unwrap_or_else(lspkl_vfs::default_cache),
+            fallback_cache_dir: lspkl_project::cli::CacheDirectories::from_env().modern,
             working_directory: std::env::current_dir().unwrap_or_default(),
         }
     }

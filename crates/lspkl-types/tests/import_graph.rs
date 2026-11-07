@@ -293,7 +293,7 @@ fn imported_aliases_and_argument_context_preserve_lexical_scope() {
             }
             let library = resolve_unqualified_access(at, "library", ctx).unwrap();
             let alias = lspkl_types::find_member(ctx.db, &library.ty, "Alias").unwrap();
-            assert!(matches!(alias.ty, Type::Alias { .. }));
+            assert_eq!(alias.ty.render(ctx.db), "TypeAlias");
             assert_eq!(alias.node.file, harness::file(ctx, 2));
             fn find_argument(
                 tree: &lspkl_syntax::ast::SyntaxTree,

@@ -35,6 +35,16 @@ fn class(db: &RootDatabase, file: File, name: &str) -> DeclId {
         item: ItemId::Class(index),
     }
 }
+// Declaration values now have runtime `Class<C>` types. These tests exercise
+// instance members and type-position resolution, so extract C explicitly.
+fn instance_type(db: &RootDatabase, declaration: DeclId) -> Type {
+    match decl_type(db, declaration) {
+        Type::Class { mut type_args, .. } if type_args.len() == 1 => type_args.remove(0),
+        Type::Unknown => Type::Unknown,
+        other => panic!("expected Class<C>, got {other:?}"),
+    }
+}
+
 fn named(db: &RootDatabase, name: &str) -> TypeRef {
     TypeRef::Named {
         path: vec![Name::new(db, name.to_owned())],
@@ -109,7 +119,7 @@ fn generic_aliases_and_inherited_members_substitute_stable_parameters() {
     );
     let owner = class(&db, file, "Child");
     let int = base_module(&db).int_type().clone();
-    let child = decl_type(&db, owner).with_type_args(vec![int.clone()]);
+    let child = instance_type(&db, owner).with_type_args(vec![int.clone()]);
     assert_eq!(find_member(&db, &child, "value").unwrap().ty, int);
     let alias_index = module_items(&db, file)
         .type_aliases
@@ -146,7 +156,7 @@ fn method_type_parameters_do_not_shadow_qualified_imports() {
     };
     assert_eq!(
         resolve_type_ref(&db, method, &qualified),
-        decl_type(
+        instance_type(
             &db,
             DeclId {
                 root: file,
@@ -166,14 +176,14 @@ fn sdk_ids_are_canonical_and_headers_survive_source_displacement() {
         .unwrap();
     assert_eq!(module_id(&db, sdk, a), module_id(&db, sdk, b));
     let owner = class(&db, a, "A");
-    let before = decl_type(&db, owner);
+    let before = instance_type(&db, owner);
     let value = find_member(&db, &before, "value").unwrap().ty;
     put(
         &mut db,
         "a",
         "\n\n// displacement\nclass A { value: Int = 100 + 20 }\n",
     );
-    assert_eq!(decl_type(&db, owner), before);
+    assert_eq!(instance_type(&db, owner), before);
     assert_eq!(find_member(&db, &before, "value").unwrap().ty, value);
     let ItemId::Class(index) = owner.item else {
         unreachable!()
@@ -210,7 +220,7 @@ fn stale_metadata_ids_resolve_conservatively_after_deletion() {
         root: file,
         item: ItemId::Property(module_items(&db, file).properties.iter().next().unwrap().0),
     };
-    let old_class = decl_type(&db, owner);
+    let old_class = instance_type(&db, owner);
     put(&mut db, "stale", "");
     assert_eq!(decl_type(&db, owner), Type::Unknown);
     assert_eq!(decl_type(&db, property), Type::Unknown);
@@ -235,7 +245,7 @@ fn inferred_members_retain_receiver_substitutions_transitively() {
         base_module(&db).int_type().clone(),
         base_module(&db).string_type().clone(),
     ] {
-        let receiver = decl_type(&db, owner).with_type_args(vec![argument.clone()]);
+        let receiver = instance_type(&db, owner).with_type_args(vec![argument.clone()]);
         for name in ["copy", "another", "fromNested"] {
             assert_eq!(
                 find_member(&db, &receiver, name).unwrap().ty,
@@ -282,7 +292,7 @@ fn own_imports_name_module_types_before_local_and_base_types() {
     };
     assert_eq!(
         resolve_type_ref(&db, owner, &path),
-        decl_type(
+        instance_type(
             &db,
             DeclId {
                 root: file,
@@ -324,7 +334,7 @@ fn missing_source_invalidates_headers_and_recovers_without_text_changes() {
         root: file,
         item: ItemId::Property(module_items(&db, file).properties.iter().next().unwrap().0),
     };
-    let class_before = decl_type(&db, class_decl);
+    let class_before = instance_type(&db, class_decl);
     let property_before = decl_type(&db, property);
     let imported_before = decl_type(&db, imported_use);
     assert_eq!(
@@ -344,7 +354,7 @@ fn missing_source_invalidates_headers_and_recovers_without_text_changes() {
     assert_eq!(decl_type(&db, property), Type::Unknown);
     assert_eq!(decl_type(&db, imported_use), Type::Unknown);
     target.set_status(&mut db).to(FileStatus::Present);
-    assert_eq!(decl_type(&db, class_decl), class_before);
+    assert_eq!(instance_type(&db, class_decl), class_before);
     assert_eq!(decl_type(&db, property), property_before);
     assert_eq!(decl_type(&db, imported_use), imported_before);
 }

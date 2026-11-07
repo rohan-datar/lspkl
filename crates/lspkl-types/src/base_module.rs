@@ -71,6 +71,8 @@ pub struct BaseModule {
     module_type: Type,
     bytes_type: Type,
     int_seq_type: Type,
+    class_type: Type,
+    type_alias_type: Type,
     function_type: Type,
     varargs_type: Type,
     function_types: [Option<Type>; 6],
@@ -151,6 +153,8 @@ impl BaseModule {
             string_type: find_class(db, file, &tree, &classes, "String")?,
             bytes_type: find_class(db, file, &tree, &classes, "Bytes")?,
             int_seq_type: find_class(db, file, &tree, &classes, "IntSeq")?,
+            class_type: find_class(db, file, &tree, &classes, "Class")?,
+            type_alias_type: find_class(db, file, &tree, &classes, "TypeAlias")?,
             collection_type: find_class(db, file, &tree, &classes, "Collection")?,
             listing_type: find_class(db, file, &tree, &classes, "Listing")?,
             list_type: find_class(db, file, &tree, &classes, "List")?,
@@ -288,6 +292,12 @@ impl BaseModule {
     }
     pub fn bytes_type(&self) -> &Type {
         &self.bytes_type
+    }
+    pub fn class_type(&self) -> &Type {
+        &self.class_type
+    }
+    pub fn type_alias_type(&self) -> &Type {
+        &self.type_alias_type
     }
     pub fn int_seq_type(&self) -> &Type {
         &self.int_seq_type

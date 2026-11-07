@@ -1,0 +1,12 @@
+---
+source: crates/lspkl-diagnostics/tests/class_type.rs
+assertion_line: 11
+expression: "lspkl_diagnostics::render_diagnostics(&diagnostics,\nlspkl_db::line_index(ctx.db, ctx.root))"
+---
+6:23 error: Type mismatch. Expected: Class<Sub>. Actual: Class<Base>
+8:28 error: Type mismatch. Expected: Class<String>. Actual: Class<Int>
+9:28 error: Type mismatch. Expected: Class<Int|String>. Actual: Class<Int>
+10:25 error: Type mismatch. Expected: Class<Int?>. Actual: Class<Int>
+11:23 error: Type mismatch. Expected: Class<"x">. Actual: Class<Int>
+12:32 error: Type mismatch. Expected: Class<List<Int>>. Actual: Class<Int>
+13:26 error: Type mismatch. Expected: Class<nothing>. Actual: Class<Int>

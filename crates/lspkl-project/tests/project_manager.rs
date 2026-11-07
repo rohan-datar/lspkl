@@ -250,6 +250,8 @@ fn sync_projects_resolves_evaluates_and_loads_metadata() {
         binary_path: Some(script),
     });
     manager.initialize(vec![ws.path().to_path_buf()]);
+    let cache = ws.path().join("isolated-cache");
+    manager.set_cache_dir(cache.clone());
     manager.sync_projects().expect("sync succeeds");
 
     let calls = fs::read_to_string(calls).unwrap();
@@ -261,9 +263,18 @@ fn sync_projects_resolves_evaluates_and_loads_metadata() {
     assert_eq!(commands.len(), 2, "expected resolve and eval: {calls}");
     assert_eq!(
         commands[0],
-        ["project", "resolve", ws.path().to_str().unwrap()]
+        [
+            "project",
+            "resolve",
+            "--cache-dir",
+            cache.to_str().unwrap(),
+            ws.path().to_str().unwrap()
+        ]
     );
-    assert_eq!(commands[1][0], "eval");
+    assert_eq!(
+        &commands[1][..3],
+        &["eval", "--cache-dir", cache.to_str().unwrap()]
+    );
     assert!(commands[1].contains(&"-x"), "eval must request metadata");
     assert!(commands[1].contains(&"--module-output-separator"));
     assert_eq!(commands[1].last(), Some(&project_file.to_str().unwrap()));

@@ -9,12 +9,12 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 // Pin the source revision and both official archive formats when upgrading.
-const VERSION: &str = "0.32.1";
+const VERSION: &str = "0.33.0";
 const SOURCE_URL: &str =
-    "https://codeload.github.com/apple/pkl/zip/9ed02459c136435a50ea32619c33258c149cf95f";
-const SOURCE_PREFIX: &str = "pkl-9ed02459c136435a50ea32619c33258c149cf95f/stdlib/";
-const SOURCE_SHA256: &str = "b391f4b92e7808a58fbaed73419fc2071e29b58eaaeac9d3529c82f4f97bcba6";
-const STDLIB_SHA256: &str = "a4cbe1b4e0b36c4607b06359e68c4c8dbc01eafa569076a30eb32ea1f16be6ee";
+    "https://codeload.github.com/apple/pkl/zip/5ee1f296e3503abd8ac8e9b27d197b2f779ea408";
+const SOURCE_PREFIX: &str = "pkl-5ee1f296e3503abd8ac8e9b27d197b2f779ea408/stdlib/";
+const SOURCE_SHA256: &str = "52431e90a999872c53dfe6083d6cded5672f7194730bfee6bf1ab19d0461669e";
+const STDLIB_SHA256: &str = "62cf7d26371cc3c01a107457d312976d1857da47e9b271ae6f6a38253b103bc3";
 
 #[derive(Clone, Copy)]
 enum ArchiveLayout {

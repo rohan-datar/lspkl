@@ -12,9 +12,32 @@ pub struct Peer {
     pub connection: Connection,
     server: std::thread::JoinHandle<bool>,
     next: i32,
+    _environment: tempfile::TempDir,
 }
 impl Peer {
-    pub fn start(workspace: Workspace, params: Value) -> Self {
+    pub fn start(workspace: Workspace, mut params: Value) -> Self {
+        // Never spawn a locally installed Pkl merely to discover its version.
+        // Keep a missing explicit executable inside a private fixture directory.
+        let environment = tempfile::tempdir().unwrap();
+        if params.pointer("/initializationOptions/cli/path").is_none()
+            && params
+                .pointer("/initializationOptions/pkl/cli/path")
+                .is_none()
+        {
+            if !params["initializationOptions"].is_object() {
+                params["initializationOptions"] = json!({});
+            }
+            let options = params.get_mut("initializationOptions").unwrap();
+            let settings = if options.get("pkl").is_some() {
+                &mut options["pkl"]
+            } else {
+                options
+            };
+            if !settings["cli"].is_object() {
+                settings["cli"] = json!({});
+            }
+            settings["cli"]["path"] = json!(environment.path().join("missing-pkl"));
+        }
         let (connection, server_connection) = Connection::memory();
         let server =
             std::thread::spawn(move || lspkl::server::run(server_connection, workspace).unwrap());
@@ -22,6 +45,7 @@ impl Peer {
             connection,
             server,
             next: 1,
+            _environment: environment,
         };
         let response = peer.request("initialize", params);
         assert!(response.get("error").is_none(), "{response}");

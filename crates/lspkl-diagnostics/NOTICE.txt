@@ -50,18 +50,18 @@ limitations under the License.
 ---
 tree-sitter-pkl - https://github.com/apple/tree-sitter-pkl
 
-Apache License 2.0 - https://github.com/apple/tree-sitter-pkl/blob/v0.21.0/LICENSE.txt
+Apache License 2.0 - https://github.com/apple/tree-sitter-pkl/blob/v0.22.0/LICENSE.txt
 
 Copyright © 2024-2026 Apple Inc. and the Pkl project authors. All rights
 reserved.
 
 The generated parser, external scanner, and required tree-sitter header from
-Apple's tree-sitter-pkl v0.21.0 are bundled unmodified in
+Apple's tree-sitter-pkl v0.22.0 are bundled unmodified in
 crates/lspkl-syntax/vendor/tree-sitter-pkl and linked at build time to parse Pkl
 source files.
 
-Upstream commit: 5893fb5dc832ea51a9bff3f84462528c766ecd7d
-Source: https://github.com/apple/tree-sitter-pkl/tree/5893fb5dc832ea51a9bff3f84462528c766ecd7d
+Upstream commit: 438dc0ddd3785ffa4d173a91fa956e193957d022
+Source: https://github.com/apple/tree-sitter-pkl/tree/438dc0ddd3785ffa4d173a91fa956e193957d022
 The upstream LICENSE.txt and NOTICE.txt are included in the vendor directory.
 
 Upstream NOTICE.txt:

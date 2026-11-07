@@ -1,0 +1,2 @@
+parent: this?
+function f(): Class<this>

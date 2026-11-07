@@ -6,13 +6,13 @@
   runtimeShell,
   coreutils,
   llvmPackages,
-  stdlibUrl ? "https://codeload.github.com/apple/pkl/zip/9ed02459c136435a50ea32619c33258c149cf95f",
+  stdlibUrl ? "https://codeload.github.com/apple/pkl/zip/5ee1f296e3503abd8ac8e9b27d197b2f779ea408",
 }:
 let
   stdlibArchive = fetchurl {
     name = "pkl-stdlib-source.zip";
     url = stdlibUrl;
-    sha256 = "b391f4b92e7808a58fbaed73419fc2071e29b58eaaeac9d3529c82f4f97bcba6";
+    sha256 = "52431e90a999872c53dfe6083d6cded5672f7194730bfee6bf1ab19d0461669e";
   };
 in
 rustPlatform.buildRustPackage {
@@ -74,6 +74,7 @@ rustPlatform.buildRustPackage {
       crates/lspkl-project/tests/project_manager.rs \
       --replace-fail '#!/bin/sh' '#!${runtimeShell}'
     substituteInPlace crates/lspkl/tests/json_rpc.rs crates/lspkl/tests/stdio.rs \
+      crates/lspkl/tests/fallback_cache.rs \
       --replace-fail '/bin/sleep' '${coreutils}/bin/sleep'
     substituteInPlace crates/lspkl/tests/stdio.rs crates/lspkl/tests/settings_regressions.rs \
       --replace-fail '/bin/cat' '${coreutils}/bin/cat'

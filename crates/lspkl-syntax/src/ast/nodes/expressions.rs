@@ -201,6 +201,12 @@ impl SuperSubscriptExpr {
     }
 }
 impl UnqualifiedAccessExpr {
+    /// Explicit type arguments on a method call, if present.
+    pub fn type_arguments(self, tree: &SyntaxTree) -> Option<NodeId> {
+        of_kind(tree, self.0, NodeKind::TypeArgumentList)
+    }
+}
+impl UnqualifiedAccessExpr {
     pub fn arguments(self, tree: &SyntaxTree) -> Option<NodeId> {
         of_kind(tree, self.0, NodeKind::ArgumentList)
     }
@@ -211,6 +217,12 @@ impl UnqualifiedAccessExpr {
     }
 }
 impl QualifiedAccessExpr {
+    /// Explicit type arguments on a method call, if present.
+    pub fn type_arguments(self, tree: &SyntaxTree) -> Option<NodeId> {
+        of_kind(tree, self.0, NodeKind::TypeArgumentList)
+    }
+}
+impl QualifiedAccessExpr {
     pub fn arguments(self, tree: &SyntaxTree) -> Option<NodeId> {
         of_kind(tree, self.0, NodeKind::ArgumentList)
     }
@@ -218,6 +230,12 @@ impl QualifiedAccessExpr {
 impl QualifiedAccessExpr {
     pub fn name(self, tree: &SyntaxTree) -> Option<NodeId> {
         tree.identifier(self.0)
+    }
+}
+impl SuperAccessExpr {
+    /// Explicit type arguments on a method call, if present.
+    pub fn type_arguments(self, tree: &SyntaxTree) -> Option<NodeId> {
+        of_kind(tree, self.0, NodeKind::TypeArgumentList)
     }
 }
 impl SuperAccessExpr {

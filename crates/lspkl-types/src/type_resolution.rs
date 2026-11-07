@@ -63,6 +63,18 @@ pub(crate) fn resolve_in_file(
         ResolutionRequest::new(db, file, root, owner, ty, bindings),
     )
 }
+// A reserved substitution slot for a declaration's self type. Real parameter
+// indices are zero-based arena positions and never use this sentinel.
+fn this_binding_key(owner: DeclId) -> TypeParameterId {
+    TypeParameterId {
+        declaration: owner,
+        index: u32::MAX,
+    }
+}
+pub(crate) fn bind_this_type(bindings: &mut TypeBindings, owner: DeclId, receiver: &Type) {
+    bindings.insert(this_binding_key(owner), receiver.clone());
+}
+
 pub(crate) fn parameters(db: &dyn Db, owner: DeclId) -> &[TypeParameter] {
     let items = module_items(db, owner.file);
     match owner.item {
@@ -177,6 +189,46 @@ fn resolve_inner(
     let resolve = |ty: &TypeRef| resolve_in_file(db, file, root, owner, ty, bindings);
     match ty {
         TypeRef::Unknown => Type::Unknown,
+        TypeRef::This => {
+            if owner.is_some_and(|owner| matches!(owner.item, ItemId::TypeAlias(_))) {
+                return Type::Unknown;
+            }
+            let class = owner.and_then(|owner| {
+                if matches!(owner.item, ItemId::Class(_)) {
+                    Some(owner)
+                } else {
+                    enclosing_class(db, owner)
+                }
+            });
+            if let Some(ty) = owner
+                .and_then(|owner| bindings.get(&this_binding_key(owner)))
+                .or_else(|| class.and_then(|class| bindings.get(&this_binding_key(class))))
+            {
+                return ty.clone();
+            }
+            if let Some(class) = class
+                && let ItemId::Class(index) = class.item
+            {
+                let args = parameters(db, class)
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        bindings
+                            .get(&TypeParameterId {
+                                declaration: class,
+                                index: index as u32,
+                            })
+                            .cloned()
+                            .unwrap_or(Type::Unknown)
+                    })
+                    .collect();
+                Type::class_with_args(ClassId::new(db, module_id(db, file, root), index), args)
+            } else {
+                Type::Module {
+                    module_id: module_id(db, file, root),
+                }
+            }
+        }
         TypeRef::Nothing => Type::Nothing,
         TypeRef::Module => crate::base_module(db).module_type().clone(),
         TypeRef::StringLiteral(value) => Type::string_literal(value.clone()),

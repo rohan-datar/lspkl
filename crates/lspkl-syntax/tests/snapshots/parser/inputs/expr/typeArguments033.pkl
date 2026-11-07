@@ -1,0 +1,4 @@
+x = identity<String>("x")
+y = obj.method<Int>(1)
+z = super.m<String>("s")
+comparison = a < b

@@ -27,6 +27,7 @@ pub enum TypeRef {
     Unknown,
     Nothing,
     Module,
+    This,
     StringLiteral(String),
     Named {
         path: Vec<Name>,
@@ -168,6 +169,19 @@ pub(crate) fn lower_type(db: &dyn Db, tree: &SyntaxTree, node: NodeId) -> TypeRe
         )
     };
     match tree.kind(node) {
+        NodeKind::ThisType => {
+            // Object-local declarations are not in the declaration arena yet.
+            // Do not accidentally give them the enclosing module's self type.
+            let mut current = tree.parent(node);
+            while let Some(parent) = current {
+                match tree.kind(parent) {
+                    NodeKind::TypeAlias | NodeKind::ObjectBody => return TypeRef::Unknown,
+                    NodeKind::Class | NodeKind::Module => break,
+                    _ => current = tree.parent(parent),
+                }
+            }
+            TypeRef::This
+        }
         NodeKind::NothingType => TypeRef::Nothing,
         NodeKind::ModuleType => TypeRef::Module,
         NodeKind::StringLiteralType => TypeRef::StringLiteral(

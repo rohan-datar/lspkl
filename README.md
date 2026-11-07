@@ -19,7 +19,7 @@ lspkl --version
 
 Building from Cargo requires a Rust toolchain supporting edition 2024 and a C
 compiler for Tree-sitter and the bundled Pkl grammar. A fresh build also needs
-HTTPS access to GitHub to fetch the pinned Pkl 0.32.1 SDK archive; its SHA-256
+HTTPS access to GitHub to fetch the pinned Pkl 0.33.0 SDK archive; its SHA-256
 checksum is verified before the standard-library sources are embedded.
 To build without this fetch, set `PKL_STDLIB_ARCHIVE` to a pre-fetched supported
 archive (see below).
@@ -51,10 +51,10 @@ source location, not the accepted checksums. For a pre-fetched archive, set
 `PKL_STDLIB_ARCHIVE`:
 
 ```sh
-PKL_STDLIB_URL=https://example.com/pkl-source-0.32.1.zip \
+PKL_STDLIB_URL=https://example.com/pkl-source-0.33.0.zip \
   cargo build --release --locked -p lspkl
 
-PKL_STDLIB_ARCHIVE=/absolute/path/pkl-source-0.32.1.zip \
+PKL_STDLIB_ARCHIVE=/absolute/path/pkl-source-0.33.0.zip \
   cargo build --release --locked -p lspkl
 ```
 
@@ -228,6 +228,15 @@ existing `pkl/fileContents` loader; stdlib definitions should then open normally
 Verify with `:checkhealth vim.lsp` and `:lua vim.print(vim.lsp.get_clients({ name = "pkl" }))`.
 
 
+## Package cache
+
+Without `pkl.cacheDir`, lspkl detects the configured CLI version: Pkl 0.33+
+uses `$XDG_CACHE_HOME/pkl` (all platforms), otherwise `~/.cache/pkl` on
+macOS/Linux or `%LOCALAPPDATA%\pkl\Cache` on Windows; older CLIs use
+`~/.pkl/cache`. If CLI detection fails, an existing modern cache wins, then an
+existing legacy cache, otherwise the modern location. lspkl passes this
+effective cache path to project resolve, evaluation, and package downloads.
+
 ## Development
 
 ```sh
@@ -246,7 +255,7 @@ Licensed under [Apache 2.0](LICENSE). See [NOTICE.txt](NOTICE.txt) and the SDK
 applicable attributions.
 
 `lspkl-syntax` bundles Apple's
-[`tree-sitter-pkl` grammar at tag `v0.21.0`](https://github.com/apple/tree-sitter-pkl/tree/v0.21.0),
+[`tree-sitter-pkl` grammar at tag `v0.22.0`](https://github.com/apple/tree-sitter-pkl/tree/v0.22.0),
 including the generated C parser, scanner, and required headers. The grammar is
 compiled during the build; it is not fetched from Git and does not require a
 separate grammar crate or Tree-sitter CLI. Its upstream license and notice are

@@ -82,6 +82,7 @@ ast_node!(
     UnknownType,
     NothingType,
     ModuleType,
+    ThisType,
     StringLiteralType,
     DeclaredType,
     ParenthesizedType,
@@ -107,7 +108,7 @@ macro_rules! category { ($name:ident: $($variant:ident),* $(,)?) => {
     }
 }; }
 category!(Expr: ThisExpr, OuterExpr, ModuleExpr, NullLiteralExpr, TrueLiteralExpr, FalseLiteralExpr, IntLiteralExpr, FloatLiteralExpr, ThrowExpr, TraceExpr, ImportExpr, ReadExpr, SingleLineStringLiteral, MultiLineStringLiteral, NewExpr, AmendExpr, UnqualifiedAccessExpr, QualifiedAccessExpr, SuperAccessExpr, SuperSubscriptExpr, SubscriptExpr, NonNullExpr, UnaryMinusExpr, LogicalNotExpr, AdditiveExpr, MultiplicativeExpr, ComparisonExpr, EqualityExpr, ExponentiationExpr, LogicalAndExpr, LogicalOrExpr, NullCoalesceExpr, PipeExpr, TypeTestExpr, TypeCastExpr, IfExpr, LetExpr, FunctionLiteralExpr, ParenthesizedExpr);
-category!(TypeNode: UnknownType, NothingType, ModuleType, StringLiteralType, DeclaredType, ParenthesizedType, NullableType, ConstrainedType, UnionType, FunctionType, DefaultUnionType);
+category!(TypeNode: UnknownType, NothingType, ModuleType, ThisType, StringLiteralType, DeclaredType, ParenthesizedType, NullableType, ConstrainedType, UnionType, FunctionType, DefaultUnionType);
 category!(ObjectMember: ObjectProperty, ObjectMethod, ObjectEntry, ObjectElement, MemberPredicate, ForGenerator, WhenGenerator, ObjectSpread);
 category!(ModuleMember: Class, TypeAlias, ClassProperty, ClassMethod);
 

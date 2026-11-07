@@ -1,6 +1,72 @@
 use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType, nodes::*};
 use lspkl_syntax::parse;
 
+#[test]
+fn this_type_views_preserve_nullable_and_generic_arguments() {
+    let tree = parse("parent: this?\nfunction f(): Class<this>").unwrap();
+    let nullable = NullableType::cast(&tree, find(&tree, NodeKind::NullableType)).unwrap();
+    let inner = nullable.inner(&tree).unwrap();
+    assert!(ThisType::cast(&tree, inner).is_some());
+    assert!(TypeNode::can_cast(tree.kind(inner)));
+    assert!(!Expr::can_cast(tree.kind(inner)));
+    assert_eq!(tree.text(inner), "this");
+    let declared = DeclaredType::cast(&tree, find(&tree, NodeKind::DeclaredType)).unwrap();
+    let arguments: Vec<_> = declared.arguments(&tree).collect();
+    assert_eq!(arguments.len(), 1);
+    assert!(ThisType::cast(&tree, arguments[0]).is_some());
+}
+
+#[test]
+fn explicit_call_type_arguments_preserve_access_slots() {
+    let tree = parse("x = identity<String>(\"x\")").unwrap();
+    let call =
+        UnqualifiedAccessExpr::cast(&tree, find(&tree, NodeKind::UnqualifiedAccessExpr)).unwrap();
+    assert_eq!(text(&tree, call.name(&tree)), "identity");
+    assert_eq!(text(&tree, call.arguments(&tree)), "(\"x\")");
+    let args = TypeArgumentList::cast(&tree, call.type_arguments(&tree).unwrap()).unwrap();
+    assert_eq!(
+        args.arguments(&tree)
+            .map(|id| tree.text(id))
+            .collect::<Vec<_>>(),
+        ["String"]
+    );
+
+    for (source, null_safe) in [
+        ("x = obj.method<Int>(1)", false),
+        ("x = obj?.method<Int>(1)", true),
+    ] {
+        let tree = parse(source).unwrap();
+        let call =
+            QualifiedAccessExpr::cast(&tree, find(&tree, NodeKind::QualifiedAccessExpr)).unwrap();
+        assert_eq!(text(&tree, call.receiver(&tree)), "obj");
+        assert_eq!(text(&tree, call.name(&tree)), "method");
+        assert_eq!(text(&tree, call.arguments(&tree)), "(1)");
+        assert_eq!(text(&tree, call.type_arguments(&tree)), "<Int>");
+        assert_eq!(call.is_null_safe(&tree), null_safe);
+    }
+
+    let tree = parse("x = super.m<String>(\"s\")").unwrap();
+    let call = SuperAccessExpr::cast(&tree, find(&tree, NodeKind::SuperAccessExpr)).unwrap();
+    assert_eq!(text(&tree, call.name(&tree)), "m");
+    assert_eq!(text(&tree, call.arguments(&tree)), "(\"s\")");
+    assert_eq!(text(&tree, call.type_arguments(&tree)), "<String>");
+
+    let tree = parse("x = f(1)").unwrap();
+    let call =
+        UnqualifiedAccessExpr::cast(&tree, find(&tree, NodeKind::UnqualifiedAccessExpr)).unwrap();
+    assert!(call.type_arguments(&tree).is_none());
+    assert_eq!(text(&tree, call.arguments(&tree)), "(1)");
+}
+
+#[test]
+fn less_than_remains_a_comparison_not_type_arguments() {
+    let tree = parse("x = a < b").unwrap();
+    let binary = BinaryExpr::cast(&tree, find(&tree, NodeKind::ComparisonExpr)).unwrap();
+    assert_eq!(text(&tree, binary.left(&tree)), "a");
+    assert_eq!(text(&tree, binary.right(&tree)), "b");
+    assert_eq!(binary.operator(&tree), Some(TokenType::Less));
+}
+
 fn find(tree: &SyntaxTree, kind: NodeKind) -> NodeId {
     fn walk(tree: &SyntaxTree, id: NodeId, kind: NodeKind) -> Option<NodeId> {
         if *tree.kind(id) == kind {

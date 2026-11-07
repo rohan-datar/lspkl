@@ -63,3 +63,12 @@ fn execute_reports_missing_binary() {
         Err(PklCliError::NotFound)
     ));
 }
+
+#[test]
+fn version_detection_caches_missing_cli_as_unknown() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("does-not-exist");
+    let versions = lspkl_project::cli::CliVersionCache::default();
+    assert_eq!(versions.detect(&binary), None);
+    assert_eq!(versions.detect(&binary), None);
+}

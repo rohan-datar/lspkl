@@ -1,0 +1,15 @@
+open class Base {}
+class Sub extends Base {}
+class Foo {}
+typealias Alias = Foo
+valid: Class<Base> = Sub
+invalid: Class<Sub> = Base
+raw: Class = Foo
+unrelated: Class<String> = Int
+union: Class<Int|String> = Int
+nullable: Class<Int?> = Int
+literal: Class<"x"> = Int
+parametric: Class<List<Int>> = Int
+bottom: Class<nothing> = Int
+aliasValue: TypeAlias = Alias
+filtered = List(new Sub {}).filterIsInstance(Sub)
