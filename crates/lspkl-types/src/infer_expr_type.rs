@@ -375,17 +375,36 @@ fn infer_type_from_arg_list(
     let tree = ctx.tree(file)?;
     let node = node.value;
     let access = tree.parent(parent)?;
-    let receiver_type =
-        access_receiver_type_with_bindings(NodeRef::new(file, access), bindings, ctx)?;
+    let access_ref = NodeRef::new(file, access);
     let name = tree.name(access).unwrap_or("");
-    let method = find_member_on_type(&receiver_type, name, bindings, ctx)?;
-    let receiver_type = receiver_type.unaliased(ctx.db);
-    let member_bindings;
-    let bindings = if matches!(receiver_type.unconstrained(), Type::Class { .. }) {
-        member_bindings = crate::resolver::class_member_bindings(&receiver_type, bindings, ctx);
-        &member_bindings
+    let receiver_type = access_receiver_type_with_bindings(access_ref, bindings, ctx);
+    let on_receiver = receiver_type
+        .as_ref()
+        .and_then(|ty| find_member_on_type(ty, name, bindings, ctx));
+    // Unqualified calls resolve lexically: a local or module function called
+    // inside an object body is not a member of that object's `this` type
+    // (which may also be unavailable there). Receiver substitutions apply only
+    // when the lexical target is that receiver's member.
+    let (method, receiver_type) = if matches!(tree.kind(access), NodeKind::UnqualifiedAccessExpr) {
+        let lexical = crate::resolver::resolve_unqualified_access_with_bindings(
+            access_ref, name, bindings, ctx,
+        )?;
+        let receiver = receiver_type.filter(|_| {
+            on_receiver
+                .as_ref()
+                .is_some_and(|member| member.node == lexical.node)
+        });
+        (lexical, receiver)
     } else {
-        bindings
+        (on_receiver?, receiver_type)
+    };
+    let member_bindings;
+    let bindings = match receiver_type.map(|ty| ty.unaliased(ctx.db)) {
+        Some(receiver) if matches!(receiver.unconstrained(), Type::Class { .. }) => {
+            member_bindings = crate::resolver::class_member_bindings(&receiver, bindings, ctx);
+            &member_bindings
+        }
+        _ => bindings,
     };
     let arg_index = nodes::ArgumentList::cast(tree, parent)?
         .arguments(tree)
@@ -397,16 +416,33 @@ fn infer_type_from_arg_list(
             nodes::ObjectMethod::cast(tree, method.node.value).and_then(|n| n.header(tree))
         })?;
     let param_list = nodes::MethodHeader::cast(tree, header)?.parameters(tree)?;
-    let param_decl = nodes::ParameterList::cast(tree, param_list)?
+    let parameters: Vec<_> = nodes::ParameterList::cast(tree, param_list)?
         .parameters(tree)
-        .nth(arg_index)?;
-    let type_annotation = nodes::TypedIdentifier::cast(tree, param_decl)?.type_annotation(tree)?;
-    let type_node = nodes::TypeAnnotation::cast(tree, type_annotation)?.ty(tree)?;
-    Some(to_type_with_bindings(
-        NodeRef::new(method.node.file, type_node),
-        bindings,
-        ctx,
-    ))
+        .collect();
+    let param_type = |param_decl| {
+        let type_annotation =
+            nodes::TypedIdentifier::cast(tree, param_decl)?.type_annotation(tree)?;
+        let type_node = nodes::TypeAnnotation::cast(tree, type_annotation)?.ty(tree)?;
+        Some(to_type_with_bindings(
+            NodeRef::new(method.node.file, type_node),
+            bindings,
+            ctx,
+        ))
+    };
+    // A trailing `VarArgs<E>` parameter absorbs this and every later
+    // argument, each of which must be an `E`.
+    let last = parameters.len().checked_sub(1)?;
+    let varargs =
+        param_type(parameters[last]).filter(|ty| ty.class_equals(ctx.base.varargs_type()));
+    if arg_index >= last
+        && let Some(varargs) = varargs
+    {
+        return Some(match varargs.unconstrained() {
+            Type::Class { type_args, .. } => type_args.first().cloned().unwrap_or(Type::Unknown),
+            _ => Type::Unknown,
+        });
+    }
+    param_type(*parameters.get(arg_index)?)
 }
 
 /// The type an additive operand may have, given the other operand's type.
