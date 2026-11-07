@@ -1,0 +1,31 @@
+---
+source: crates/lspkl-syntax/tests/parser_snapshots.rs
+expression: rendered
+---
+Module
+  ClassProperty
+    UnqualifiedAccessExpr
+      TypeArgumentList
+        DeclaredType
+          QualifiedIdentifier
+      ArgumentList
+        SingleLineStringLiteral
+  ClassProperty
+    QualifiedAccessExpr
+      UnqualifiedAccessExpr
+      TypeArgumentList
+        DeclaredType
+          QualifiedIdentifier
+      ArgumentList
+        IntLiteralExpr
+  ClassProperty
+    SuperAccessExpr
+      TypeArgumentList
+        DeclaredType
+          QualifiedIdentifier
+      ArgumentList
+        SingleLineStringLiteral
+  ClassProperty
+    ComparisonExpr
+      UnqualifiedAccessExpr
+      UnqualifiedAccessExpr

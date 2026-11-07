@@ -15,7 +15,7 @@ use tree_sitter::{Node as TsNode, Parser};
 use crate::ast::{NodeEntry, NodeId, NodeKind, SyntaxTree, TokenType};
 use crate::{TextRange, TextSize};
 
-// Binding to the unmodified Apple tree-sitter-pkl v0.21.0 grammar in vendor/.
+// Binding to the unmodified Apple tree-sitter-pkl v0.22.0 grammar in vendor/.
 unsafe extern "C" {
     fn tree_sitter_pkl() -> *const ();
 }
@@ -209,6 +209,7 @@ fn ts_node_to_kind(ts_node: &TsNode<'_>) -> NodeKind {
         "unknownType" => NodeKind::UnknownType,
         "nothingType" => NodeKind::NothingType,
         "moduleType" => NodeKind::ModuleType,
+        "thisType" => NodeKind::ThisType,
         "stringLiteralType" => NodeKind::StringLiteralType,
         "declaredType" => NodeKind::DeclaredType,
         "parenthesizedType" => NodeKind::ParenthesizedType,

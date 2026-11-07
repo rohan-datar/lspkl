@@ -398,14 +398,15 @@ fn infer_type_from_arg_list(
     } else {
         (on_receiver?, receiver_type)
     };
-    let member_bindings;
-    let bindings = match receiver_type.map(|ty| ty.unaliased(ctx.db)) {
-        Some(receiver) if matches!(receiver.unconstrained(), Type::Class { .. }) => {
-            member_bindings = crate::resolver::class_member_bindings(&receiver, bindings, ctx);
-            &member_bindings
-        }
-        _ => bindings,
-    };
+    // Receiver and explicit call-site type arguments bind the callee's parameters.
+    let member_bindings = crate::compute_expr::call_bindings(
+        access_ref,
+        method.node,
+        receiver_type.as_ref(),
+        bindings,
+        ctx,
+    );
+    let bindings = &member_bindings;
     let arg_index = nodes::ArgumentList::cast(tree, parent)?
         .arguments(tree)
         .position(|c| c == node)?;

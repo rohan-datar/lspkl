@@ -1096,6 +1096,7 @@ dependencies = [
  "cc",
  "insta",
  "line-index",
+ "lspkl-stdlib",
  "smallvec",
  "text-size",
  "thiserror",

@@ -40,6 +40,7 @@ pub enum ProjectError {
 #[derive(Clone)]
 pub struct ProjectManager {
     cli: PklCli,
+    cache_dir: PathBuf,
     /// Workspace roots as sent by the client (`initialize` / workspace
     /// folder changes).
     workspace_folders: Vec<PathBuf>,
@@ -107,6 +108,7 @@ impl ProjectManager {
     pub fn new(cli: PklCli) -> Self {
         Self {
             cli,
+            cache_dir: crate::cli::CacheDirectories::from_env().modern,
             workspace_folders: Vec::new(),
             projects: BTreeMap::new(),
             excluded_directories: SKIPPED_DIRS.iter().map(|name| (*name).to_owned()).collect(),
@@ -117,6 +119,11 @@ impl ProjectManager {
     pub fn configure(&mut self, cli: PklCli, excluded_directories: Vec<String>) {
         self.cli = cli;
         self.excluded_directories = excluded_directories;
+    }
+
+    /// Keep CLI project operations aligned with the server's source cache.
+    pub fn set_cache_dir(&mut self, cache_dir: PathBuf) {
+        self.cache_dir = cache_dir;
     }
 
     /// Set the workspace roots
@@ -173,10 +180,13 @@ impl ProjectManager {
                 .collect();
             project_dirs.sort();
             project_dirs.dedup();
-            self.cli.resolve_project(&project_dirs)?;
-            let projects_metadata =
-                self.cli
-                    .eval(&project_files, Some(DEPENDENCIES_EXPR), Some(", "))?;
+            self.cli.resolve_project(&project_dirs, &self.cache_dir)?;
+            let projects_metadata = self.cli.eval(
+                &project_files,
+                &self.cache_dir,
+                Some(DEPENDENCIES_EXPR),
+                Some(", "),
+            )?;
             let projects = PklProject::parse_metadata(&format!("[{projects_metadata}]"))?;
             for mut project in projects {
                 let project_dir = project.project_dir().ok_or(ProjectError::MissingPath)?;

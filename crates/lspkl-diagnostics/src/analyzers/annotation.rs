@@ -42,7 +42,11 @@ impl Analyzer for AnnotationAnalyzer {
             return false;
         };
 
-        let class_type = resolver::definition_type(ctx.db, class_node_ref, ctx.root);
+        // Annotation names denote the annotated class's instances, not its
+        // runtime `Class<T>` metadata value.
+        let class_type = lspkl_types::class_id(ctx.db, class_node_ref, ctx.root)
+            .map(lspkl_types::Type::class)
+            .unwrap_or(lspkl_types::Type::Unknown);
 
         if !class_type.is_subtype_of(ctx.base.annotation_type(), ctx.db) {
             holder.add_error(source_tree.span(node), "invalid annotation");

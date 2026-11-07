@@ -60,6 +60,49 @@ pub enum Type {
     },
 }
 
+/// `Class<T>` retains its argument in Pkl 0.33. Only non-parametric class
+/// arguments denote a runtime class; aliases are expanded before checking.
+fn class_argument_subtype(actual: Option<&Type>, expected: Option<&Type>, db: &dyn Db) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let actual = actual.map(|ty| ty.unaliased(db));
+    if actual
+        .as_ref()
+        .is_some_and(|ty| matches!(ty.unconstrained(), Type::Unknown | Type::Variable { .. }))
+    {
+        return true;
+    }
+    let expected = expected.unaliased(db);
+    if matches!(
+        expected.unconstrained(),
+        Type::Unknown | Type::Variable { .. }
+    ) {
+        return true;
+    }
+    let Type::Class {
+        class_id: expected_id,
+        type_args,
+    } = expected.unconstrained()
+    else {
+        return false;
+    };
+    if !type_args.is_empty() {
+        return false;
+    }
+    let Some(actual) = actual else { return true };
+    match actual.unconstrained() {
+        Type::Unknown | Type::Variable { .. } => true,
+        Type::Class {
+            class_id,
+            type_args,
+        } if type_args.is_empty() => {
+            class_id == expected_id || resolver::is_subclass(*class_id, *expected_id, db)
+        }
+        _ => false,
+    }
+}
+
 impl Type {
     pub fn class(class_id: ClassId) -> Self {
         Self::class_with_args(class_id, Vec::new())
@@ -216,7 +259,22 @@ impl Type {
             (_, Self::Alias { .. }) => self.is_subtype_of(&other.unaliased(db), db),
             (Self::Union { members }, _) => members.iter().all(|ty| ty.is_subtype_of(other, db)),
             (_, Self::Union { members }) => members.iter().any(|ty| self.is_subtype_of(ty, db)),
-            (Self::Class { class_id: a, .. }, Self::Class { class_id: b, .. }) => {
+            (
+                Self::Class {
+                    class_id: a,
+                    type_args: args_a,
+                },
+                Self::Class {
+                    class_id: b,
+                    type_args: args_b,
+                },
+            ) => {
+                if a == b
+                    && (!args_a.is_empty() || !args_b.is_empty())
+                    && self.class_equals(base_module(db).class_type())
+                {
+                    return class_argument_subtype(args_a.first(), args_b.first(), db);
+                }
                 a == b || resolver::is_subclass(*a, *b, db)
             }
             (Self::StringLiteral { value: a }, Self::StringLiteral { value: b }) => a == b,
@@ -260,7 +318,23 @@ impl Type {
                 .any(|ty| self.has_common_subtype_with(ty, db)),
             (Self::StringLiteral { value: a }, Self::StringLiteral { value: b }) => a == b,
             (Self::Variable { .. }, _) | (_, Self::Variable { .. }) => true,
-            (Self::Class { class_id: a, .. }, Self::Class { class_id: b, .. }) => {
+            (
+                Self::Class {
+                    class_id: a,
+                    type_args: args_a,
+                },
+                Self::Class {
+                    class_id: b,
+                    type_args: args_b,
+                },
+            ) => {
+                if a == b
+                    && (!args_a.is_empty() || !args_b.is_empty())
+                    && self.class_equals(base_module(db).class_type())
+                {
+                    return class_argument_subtype(args_a.first(), args_b.first(), db)
+                        || class_argument_subtype(args_b.first(), args_a.first(), db);
+                }
                 resolver::is_subclass(*a, *b, db) || resolver::is_subclass(*b, *a, db)
             }
             (Self::Module { .. }, Self::Class { .. } | Self::Module { .. })

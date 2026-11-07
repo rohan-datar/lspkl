@@ -108,8 +108,18 @@ pub(crate) fn compute_expr_inner(
             let reciever_type = compute_expr_type(NodeRef::new(file, reciever), bindings, ctx);
 
             let is_null_safe = access.is_null_safe(tree);
-            let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx)
-                .map_or(Type::Unknown, |r| r.ty);
+            let member_ty = find_member_on_type(&reciever_type, name, bindings, ctx).map_or(
+                Type::Unknown,
+                |r| {
+                    call_result_type(
+                        NodeRef::new(file, node),
+                        r,
+                        Some(&reciever_type),
+                        bindings,
+                        ctx,
+                    )
+                },
+            );
             if is_null_safe {
                 member_ty.nullable(ctx.db)
             } else {
@@ -121,7 +131,23 @@ pub(crate) fn compute_expr_inner(
                 return Type::Unknown;
             };
             resolve_unqualified_access_with_bindings(NodeRef::new(file, node), name, bindings, ctx)
-                .map(|r| r.ty)
+                .map(|r| {
+                    if tree.is_property_access(node) {
+                        return r.ty;
+                    }
+                    let receiver = crate::resolver::access_receiver_type_with_bindings(
+                        NodeRef::new(file, node),
+                        bindings,
+                        ctx,
+                    );
+                    call_result_type(
+                        NodeRef::new(file, node),
+                        r,
+                        receiver.as_ref(),
+                        bindings,
+                        ctx,
+                    )
+                })
                 .unwrap_or(Type::Unknown)
         }
         NodeKind::ImportExpr => crate::resolver::import_type(NodeRef::new(file, node), ctx),
@@ -134,8 +160,8 @@ pub(crate) fn compute_expr_inner(
         .and_then(|t| {
             tree.name(node)
                 .and_then(|n| find_member_on_type(&t, n, bindings, ctx))
+                .map(|r| call_result_type(NodeRef::new(file, node), r, Some(&t), bindings, ctx))
         })
-        .map(|r| r.ty)
         .unwrap_or(Type::Unknown),
         NodeKind::SubscriptExpr => nodes::SubscriptExpr::cast(tree, node)
             .and_then(|n| n.receiver(tree))
@@ -151,6 +177,86 @@ pub(crate) fn compute_expr_inner(
             .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
+}
+
+/// Bind a method's explicit type arguments in the caller's lexical context.
+/// Receiver substitutions are retained for parameters inherited from classes.
+pub(crate) fn call_bindings(
+    access: NodeRef,
+    method: NodeRef,
+    receiver: Option<&Type>,
+    caller_bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> TypeBindings {
+    let mut bindings = receiver.map_or_else(
+        || caller_bindings.clone(),
+        |receiver| {
+            crate::resolver::class_member_bindings(
+                &receiver.unaliased(ctx.db),
+                caller_bindings,
+                ctx,
+            )
+        },
+    );
+    let Some(decl) = crate::decl_for_node(ctx.db, method, ctx.root) else {
+        return bindings;
+    };
+    if let Some(receiver) = receiver {
+        crate::type_resolution::bind_this_type(&mut bindings, decl, receiver);
+    }
+    let Some(tree) = ctx.tree(access.file) else {
+        return bindings;
+    };
+    let arguments = nodes::UnqualifiedAccessExpr::cast(tree, access.value)
+        .and_then(|n| n.type_arguments(tree))
+        .or_else(|| {
+            nodes::QualifiedAccessExpr::cast(tree, access.value)
+                .and_then(|n| n.type_arguments(tree))
+        })
+        .or_else(|| {
+            nodes::SuperAccessExpr::cast(tree, access.value).and_then(|n| n.type_arguments(tree))
+        })
+        .and_then(|n| nodes::TypeArgumentList::cast(tree, n));
+    let Some(arguments) = arguments else {
+        return bindings;
+    };
+    let arguments: Vec<_> = arguments.arguments(tree).collect();
+    let parameters = crate::type_resolution::parameters(ctx.db, decl);
+    // Incomplete/wrong-arity calls stay permissive instead of partially binding.
+    for (index, _) in parameters.iter().enumerate() {
+        let ty = if arguments.len() == parameters.len() {
+            to_type_with_bindings(access.with_value(arguments[index]), caller_bindings, ctx)
+        } else {
+            Type::Unknown
+        };
+        bindings.insert(
+            crate::TypeParameterId {
+                declaration: decl,
+                index: index as u32,
+            },
+            ty,
+        );
+    }
+    bindings
+}
+
+fn call_result_type(
+    access: NodeRef,
+    resolved: crate::resolver::ResolvedType,
+    receiver: Option<&Type>,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let Some(tree) = ctx.tree(access.file) else {
+        return Type::Unknown;
+    };
+    if tree.is_property_access(access.value) {
+        return resolved.ty;
+    }
+    let bindings = call_bindings(access, resolved.node, receiver, bindings, ctx);
+    crate::decl_for_node(ctx.db, resolved.node, ctx.root)
+        .map(|decl| crate::resolver::declaration_type_with_bindings(ctx.db, decl, &bindings))
+        .unwrap_or(resolved.ty)
 }
 
 /// Compute the type of `this` at a given AST position.

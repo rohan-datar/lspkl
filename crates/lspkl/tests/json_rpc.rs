@@ -38,12 +38,14 @@ fn sync_projects_round_trip_via_jsonrpc() {
     .unwrap();
     let metadata = json!({"projectFileUri":url::Url::from_file_path(&project_file).unwrap().as_str(),"packageUri":null,"declaredDependencies":{},"evaluatorSettings":null});
     let calls = temp.path().join("calls.txt");
+    let arguments = temp.path().join("arguments.txt");
+    let cache = temp.path().join("cache");
     let binary = temp.path().join("pkl");
-    fs::write(&binary,format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> {}\ncase \"$1\" in\nproject) exit 0;;\neval) printf '%s' {};;\n*) exit 9;;\nesac\n",shell_quote(&calls.to_string_lossy()),shell_quote(&metadata.to_string()))).unwrap();
+    fs::write(&binary,format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Pkl 0.33.0 (test)'; exit 0; fi\nprintf '%s\\n' \"$1\" >> {}\nprintf '%s\\n' '---' \"$@\" >> {}\ncase \"$1\" in\nproject) exit 0;;\neval) printf '%s' {};;\n*) exit 9;;\nesac\n",shell_quote(&calls.to_string_lossy()),shell_quote(&arguments.to_string_lossy()),shell_quote(&metadata.to_string()))).unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     let mut peer = Peer::start(
         Workspace::new(),
-        json!({"capabilities":{},"workspaceFolders":[{"uri":url::Url::from_directory_path(&workspace).unwrap().as_str(),"name":"fixture"}],"initializationOptions":{"cli":{"path":binary}}}),
+        json!({"capabilities":{},"workspaceFolders":[{"uri":url::Url::from_directory_path(&workspace).unwrap().as_str(),"name":"fixture"}],"initializationOptions":{"cli":{"path":binary},"cacheDir":cache}}),
     );
     let response = peer.request("pkl/syncProjects", Value::Null);
     assert!(response.get("error").is_none(), "{response}");
@@ -59,6 +61,20 @@ fn sync_projects_round_trip_via_jsonrpc() {
             .lines()
             .collect::<Vec<_>>(),
         ["project", "eval"]
+    );
+    let arguments = fs::read_to_string(arguments).unwrap();
+    let lines: Vec<_> = arguments.lines().collect();
+    let commands: Vec<_> = lines
+        .split(|line| *line == "---")
+        .filter(|command| !command.is_empty())
+        .collect();
+    assert_eq!(
+        &commands[0][..4],
+        &["project", "resolve", "--cache-dir", cache.to_str().unwrap()]
+    );
+    assert_eq!(
+        &commands[1][..3],
+        &["eval", "--cache-dir", cache.to_str().unwrap()]
     );
     peer.stop();
 }

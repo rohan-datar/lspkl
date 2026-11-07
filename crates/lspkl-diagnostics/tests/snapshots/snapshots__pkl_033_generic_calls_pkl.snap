@@ -1,0 +1,9 @@
+---
+source: crates/lspkl-diagnostics/tests/pkl_033.rs
+expression: rendered
+---
+3:32 error: Type mismatch. Expected: String. Actual: Int
+4:18 error: Type mismatch. Expected: Int. Actual: String
+11:35 error: Type mismatch. Expected: String. Actual: Int
+17:37 error: Type mismatch. Expected: String. Actual: Int
+29:16 error: Type mismatch. Expected: Int. Actual: SpecialNode?

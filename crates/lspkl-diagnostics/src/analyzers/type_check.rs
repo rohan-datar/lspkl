@@ -51,7 +51,20 @@ impl Analyzer for TypeCheckAnalyzer {
         let render_actual = actual.render(ctx.db);
         let render_expected = expected.render(ctx.db);
 
-        if !actual.has_common_subtype_with(&expected, ctx.db) {
+        // A class reference denotes one exact runtime class. Unlike a variable
+        // of type Class<Base>, the value Base cannot turn out to be Sub.
+        let class_value = matches!(
+            source_tree.kind(node),
+            lspkl_syntax::ast::NodeKind::UnqualifiedAccessExpr
+                | lspkl_syntax::ast::NodeKind::QualifiedAccessExpr
+        ) && lspkl_types::resolver::resolve_reference(
+            NodeRef::new(file, node),
+            span.start(),
+            ctx,
+        )
+        .and_then(|definition| lspkl_types::decl_for_node(ctx.db, definition, ctx.root))
+        .is_some_and(|decl| matches!(decl.item, lspkl_types::ItemId::Class(_)));
+        if class_value || !actual.has_common_subtype_with(&expected, ctx.db) {
             holder.add_error(
                 span,
                 format!("Type mismatch. Expected: {render_expected}. Actual: {render_actual}"),

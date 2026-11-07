@@ -71,11 +71,7 @@ fn child() {
     let snapshot = workspace.snapshot();
     assert!(snapshot.settings.resolved_cache_dir.is_none());
     let cache = snapshot.settings.effective_cache_dir().to_path_buf();
-    let expected = if let Some(home) = std::env::var_os("HOME") {
-        std::path::PathBuf::from(home).join(".pkl/cache")
-    } else {
-        lspkl_vfs::default_cache()
-    };
+    let expected = root.join("xdg/pkl");
     assert_eq!(cache, expected);
     let package = PackageUri::create("package://cache-regression.test/library@1.0.0").unwrap();
     let command =
@@ -152,4 +148,243 @@ fn child() {
             .contents(),
         "value: Int = 42\n"
     );
+}
+
+#[path = "support/memory.rs"]
+mod memory;
+
+#[test]
+fn cli_version_selects_cache_and_path_changes_reprobe() {
+    if std::env::var_os("LSPKL_VERSION_CACHE_CHILD").is_some() {
+        version_child();
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    for scenario in [
+        "modern-xdg",
+        "modern-home",
+        "legacy",
+        "unknown-modern",
+        "unknown-legacy",
+        "unknown-both",
+        "unknown-neither",
+        "override",
+        "switch",
+        "timeout",
+        "slow-probe",
+    ] {
+        let root = temp.path().join(scenario);
+        fs::create_dir(&root).unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "cli_version_selects_cache_and_path_changes_reprobe",
+                "--nocapture",
+            ])
+            .env("LSPKL_VERSION_CACHE_CHILD", scenario)
+            .env("LSPKL_CACHE_TEST_ROOT", &root)
+            .env("HOME", root.join("home"))
+            .env_remove("USERPROFILE")
+            .env_remove("LOCALAPPDATA")
+            .env_remove("XDG_CACHE_HOME")
+            .current_dir(&root);
+        if scenario != "modern-home" {
+            command.env("XDG_CACHE_HOME", root.join("xdg"));
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+fn version_child() {
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+    let scenario = std::env::var("LSPKL_VERSION_CACHE_CHILD").unwrap();
+    let root = std::path::PathBuf::from(std::env::var_os("LSPKL_CACHE_TEST_ROOT").unwrap());
+    let modern = if scenario == "modern-home" {
+        root.join("home/.cache/pkl")
+    } else {
+        root.join("xdg/pkl")
+    };
+    let legacy = root.join("home/.pkl/cache");
+    if ["unknown-modern", "unknown-both"].contains(&scenario.as_str()) {
+        fs::create_dir_all(&modern).unwrap();
+    }
+    if [
+        "unknown-legacy",
+        "unknown-both",
+        "modern-xdg",
+        "timeout",
+        "slow-probe",
+    ]
+    .contains(&scenario.as_str())
+    {
+        fs::create_dir_all(&legacy).unwrap();
+    }
+    let calls = root.join("cache-argument");
+    let probes = root.join("probes");
+    let release = root.join("release-probe");
+    let finished = root.join("finished-probe");
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    let make_cli = |name: &str, version: &str| {
+        let path = root.join(name);
+        let answer = if version == "slow-probe" {
+            format!(
+                "while [ ! -e {} ]; do /bin/sleep 0.01; done; echo done > {}; echo 'Pkl 0.33.0 (native)'; exit 0",
+                quote(&release),
+                quote(&finished)
+            )
+        } else if version == "timeout" {
+            format!(
+                "echo $$ > {}; exec /bin/sleep 30",
+                quote(&root.join("probe-pid"))
+            )
+        } else {
+            format!("printf '%s\\n' '{version}'; exit 0")
+        };
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{}' >> {}; {}; fi\nif [ \"$1\" = download-package ]; then printf '%s' \"$4\" > {}; exit 0; fi\nexit 9\n",
+            name,
+            quote(&probes),
+            answer,
+            quote(&calls)
+        );
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let version = if ["timeout", "slow-probe"].contains(&scenario.as_str()) {
+        scenario.as_str()
+    } else if scenario.starts_with("unknown") {
+        "not a version"
+    } else if scenario == "legacy" {
+        "Pkl 0.32.1 (native)"
+    } else {
+        "Pkl 0.33.0 (native)"
+    };
+    let cli = make_cli("pkl-modern", version);
+    let mut options = json!({"cli":{"path":cli}});
+    if scenario == "override" {
+        options["cacheDir"] = json!(root.join("explicit"));
+    }
+    let started = Instant::now();
+    let mut peer = memory::Peer::start(
+        Workspace::new(),
+        json!({"capabilities":{},"initializationOptions":options}),
+    );
+    let expected = if scenario == "override" {
+        root.join("explicit")
+    } else if ["legacy", "unknown-legacy", "timeout"].contains(&scenario.as_str()) {
+        legacy.clone()
+    } else {
+        modern.clone()
+    };
+    let download = |peer: &mut memory::Peer| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let response = peer.request(
+                "pkl/downloadPackage",
+                json!("package://cache-regression.test/library@1.0.0"),
+            );
+            if response["error"]["code"] == -32801 {
+                assert!(Instant::now() < deadline, "cache did not settle");
+                continue;
+            }
+            assert!(response.get("error").is_none(), "{response}");
+            break;
+        }
+        std::path::PathBuf::from(fs::read_to_string(&calls).unwrap())
+    };
+    if ["timeout", "slow-probe"].contains(&scenario.as_str()) {
+        assert_eq!(download(&mut peer), legacy);
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while download(&mut peer) != expected {
+            assert!(Instant::now() < deadline, "cache did not settle");
+        }
+    }
+    if ["timeout", "slow-probe"].contains(&scenario.as_str()) {
+        peer.open("inmemory:///timeout.pkl", 1, "value = 1\n");
+        loop {
+            if let lsp_server::Message::Notification(notification) = peer.message()
+                && notification.method == "textDocument/publishDiagnostics"
+                && notification.params["version"] == 1
+            {
+                assert_eq!(notification.params["diagnostics"], json!([]));
+                break;
+            }
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "CLI probe delayed startup diagnostics"
+        );
+    }
+    if scenario == "timeout" {
+        let pid = fs::read_to_string(root.join("probe-pid")).unwrap();
+        let alive = root.join("probe-alive");
+        fs::write(&alive, "#!/bin/sh\nkill -0 \"$1\" 2>/dev/null\n").unwrap();
+        fs::set_permissions(&alive, fs::Permissions::from_mode(0o755)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Command::new(&alive)
+            .arg(pid.trim())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "timed-out version child was not killed"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    if scenario == "slow-probe" {
+        assert!(
+            !finished.exists(),
+            "diagnostics must arrive before probe finishes"
+        );
+        fs::write(&release, "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while download(&mut peer) != modern {
+            assert!(
+                Instant::now() < deadline,
+                "version-derived cache never applied"
+            );
+        }
+        assert!(finished.exists());
+    }
+    if scenario == "switch" {
+        let old = make_cli("pkl-legacy", "Pkl 0.32.1 (native)");
+        for (path, expected) in [(old, legacy), (cli, modern)] {
+            peer.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"cli":{"path":path}}}),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while download(&mut peer) != expected {
+                assert!(Instant::now() < deadline, "cache did not update");
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(probes)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            ["pkl-modern", "pkl-legacy"]
+        );
+    } else if scenario == "override" {
+        assert!(!probes.exists(), "explicit cache does not need CLI probing");
+    } else {
+        assert_eq!(fs::read_to_string(probes).unwrap().lines().count(), 1);
+    }
+    peer.stop();
 }

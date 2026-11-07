@@ -317,7 +317,7 @@ class OwnImport extends parent.Parent {
                 .expect("base namespace remains visible");
             assert_eq!(int.kind, ScopeKind::Class);
             assert_eq!(int.node(ctx).unwrap().file, base.file_id());
-            assert_eq!(int.ty(ctx), base.int_type().clone());
+            assert_eq!(int.ty(ctx).render(ctx.db), "Class<Int>");
         },
     );
 }

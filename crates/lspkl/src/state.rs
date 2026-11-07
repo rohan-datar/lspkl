@@ -318,6 +318,7 @@ impl Workspace {
         {
             let mut projects = self.project_manager.lock();
             projects.configure(cli.clone(), settings.projects.excluded_directories.clone());
+            projects.set_cache_dir(settings.effective_cache_dir().to_owned());
         }
         if *self.settings == settings {
             return;
@@ -404,9 +405,10 @@ impl Workspace {
     }
     pub fn apply_project_manager(
         &mut self,
-        manager: lspkl_project::project_manager::ProjectManager,
+        mut manager: lspkl_project::project_manager::ProjectManager,
     ) {
         self.project_generation += 1;
+        manager.set_cache_dir(self.settings.effective_cache_dir().to_owned());
         self.project_manager = Arc::new(parking_lot::Mutex::new(manager));
         self.refresh_projects();
     }

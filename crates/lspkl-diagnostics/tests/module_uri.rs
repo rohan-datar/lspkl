@@ -135,3 +135,10 @@ fn package_uri_validates_authority_path_semver_checksum_and_fragment() {
         );
     }
 }
+#[test]
+fn new_033_stdlib_modules_resolve() {
+    for uri in ["pkl:net", "pkl:syntax"] {
+        let diagnostics = analyze(&format!("import \"{uri}\""), &[]);
+        assert!(diagnostics.is_empty(), "{uri}: {diagnostics:?}");
+    }
+}

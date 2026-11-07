@@ -1,0 +1,29 @@
+function identity<T>(x: T): T = x
+valid: String = identity<String>("a")
+badArgument = identity<String>(1)
+badResult: Int = identity<String>("a")
+omitted = identity(1)
+
+class Box {
+  function identity<T>(x: T): T = x
+}
+b = new Box {}
+badQualified = b.identity<String>(1)
+
+open class Parent {
+  function identity<T>(x: T): T = x
+}
+class Child extends Parent {
+  badSuper = super.identity<String>(1)
+}
+
+open class Node {
+  parent: this?
+  children: List<this>
+}
+class SpecialNode extends Node {
+  special: Boolean
+}
+n = new SpecialNode {}
+validChildren: List<SpecialNode> = n.children
+badSelf: Int = n.parent

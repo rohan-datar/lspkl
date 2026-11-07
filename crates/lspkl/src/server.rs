@@ -10,6 +10,7 @@ use lsp_server::{
 };
 use lsp_types::*;
 use lspkl_db::settings::WorkspaceSettings;
+use lspkl_project::cli::{CacheDirectories, CliVersionCache};
 use lspkl_project::project_manager::ProjectManager;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -74,6 +75,7 @@ enum Event {
     Reload(Option<LoadedFiles>),
     Restore(u64, Result<ProjectManager>),
     Settings(u64, WorkspaceSettings),
+    CacheDefault(u64, std::path::PathBuf, std::path::PathBuf),
     PendingIo(u64, Result<Vec<lspkl_db::PendingIo>>),
     LoadedIo(u64, lspkl_db::PendingIo, lspkl_db::IoUpdate),
 }
@@ -327,6 +329,9 @@ pub fn run(
         io: io_tx,
         persist: persist_tx,
         configuration: 0,
+        cli_versions: Arc::default(),
+        cli_cache_default: None,
+        cli_probe: None,
         shutdown: false,
         started: false,
         reloads: 0,
@@ -345,6 +350,9 @@ pub fn run(
         move || {
             let mut settings = settings;
             settings.resolve_paths(&folders);
+            if settings.cache_dir.is_none() {
+                settings.fallback_cache_dir = CacheDirectories::from_env().select(None);
+            }
             Event::Startup(
                 epoch,
                 0,
@@ -361,6 +369,7 @@ pub fn run(
             )
         },
     ));
+    server.probe_cache_default();
     let mut idle = false;
     loop {
         // Drain protocol traffic first, so control messages never sit behind work.
@@ -473,6 +482,9 @@ struct Loop {
     io: Sender<IoJob>,
     persist: Sender<ProjectManager>,
     configuration: u64,
+    cli_versions: Arc<CliVersionCache>,
+    cli_cache_default: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    cli_probe: Option<std::path::PathBuf>,
     shutdown: bool,
     started: bool,
     reloads: usize,
@@ -619,7 +631,7 @@ impl Loop {
             },
         ));
     }
-    fn resolve_settings(&self) {
+    fn resolve_settings(&mut self) {
         let epoch = self.configuration;
         let settings = self.workspace.settings().clone();
         let unresolved = settings.clone();
@@ -634,10 +646,42 @@ impl Loop {
             move || {
                 let mut settings = settings;
                 settings.resolve_paths(&folders);
+                if settings.cache_dir.is_none() {
+                    settings.fallback_cache_dir = CacheDirectories::from_env().select(None);
+                }
                 Event::Settings(epoch, settings)
             },
             move || Event::Settings(epoch, unresolved),
         ));
+        self.probe_cache_default();
+    }
+    fn probe_cache_default(&mut self) {
+        // At most one probe occupies an I/O worker, even during settings bursts.
+        if self.cli_probe.is_some() || self.workspace.settings().cache_dir.is_some() {
+            return;
+        }
+        let epoch = self.configuration;
+        let cli = self.workspace.settings().cli_path().to_owned();
+        self.cli_probe = Some(cli.clone());
+        let failed_cli = cli.clone();
+        let versions = Arc::clone(&self.cli_versions);
+        let _ = self.io.send(IoJob::new(
+            move || {
+                let cache = CacheDirectories::from_env().select(versions.detect(&cli));
+                Event::CacheDefault(epoch, cli, cache)
+            },
+            move || {
+                Event::CacheDefault(epoch, failed_cli, CacheDirectories::from_env().select(None))
+            },
+        ));
+    }
+    fn use_cached_default(&self, settings: &mut WorkspaceSettings) {
+        if let Some((cli, cache)) = &self.cli_cache_default
+            && cli == settings.cli_path()
+            && settings.cache_dir.is_none()
+        {
+            settings.fallback_cache_dir = cache.clone();
+        }
     }
     fn pull_configuration(&mut self) {
         if !self.workspace.client_configuration() {
@@ -872,7 +916,8 @@ impl Loop {
                 }
                 self.collect_io = true;
             }
-            Event::Startup(project_epoch, configuration_epoch, settings, manager) => {
+            Event::Startup(project_epoch, configuration_epoch, mut settings, manager) => {
+                self.use_cached_default(&mut settings);
                 if project_epoch == self.workspace.project_generation()
                     && let Ok(manager) = manager
                 {
@@ -968,7 +1013,29 @@ impl Loop {
             Event::Restore(_, Err(error)) => {
                 tracing::error!(?error, "project state restoration failed");
             }
-            Event::Settings(epoch, settings) if epoch == self.configuration => {
+            Event::CacheDefault(epoch, cli, cache) => {
+                self.cli_probe = None;
+                if epoch != self.configuration || cli != self.workspace.settings().cli_path() {
+                    self.probe_cache_default();
+                    return;
+                }
+                if self.workspace.settings().cache_dir.is_some() {
+                    return;
+                }
+                self.cli_cache_default = Some((cli, cache));
+                if self.started {
+                    let mut settings = self.workspace.settings().clone();
+                    self.use_cached_default(&mut settings);
+                    if self.workspace.settings() != &settings {
+                        self.workspace.apply_settings(settings);
+                        let work = self.workspace.prepare_refresh();
+                        self.reload(work);
+                        self.invalidate_io();
+                    }
+                }
+            }
+            Event::Settings(epoch, mut settings) if epoch == self.configuration => {
+                self.use_cached_default(&mut settings);
                 if self.workspace.settings() == &settings {
                     return;
                 }

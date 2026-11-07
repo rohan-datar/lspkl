@@ -824,7 +824,7 @@ async fn slow_formatters_do_not_delay_edits_cancellation_or_fresh_hover() {
     let started = temp.path().join("started");
     let release = temp.path().join("release");
     let binary = temp.path().join("formatter");
-    fs::write(&binary, format!("#!/bin/sh\necho started >> '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\n/bin/cat\n", started.display(), release.display())).unwrap();
+    fs::write(&binary, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Pkl 0.33.0 (test)'; exit 0; fi\necho started >> '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\n/bin/cat\n", started.display(), release.display())).unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     let mut client =
         LspClient::spawn_manual_configuration(Path::new(env!("CARGO_BIN_EXE_lspkl")), temp.path())

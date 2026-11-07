@@ -284,9 +284,11 @@ pub(crate) fn find_member_on_type(
                 .entries
                 .iter()
                 .find(|e| e.name.text(ctx.db) == name)?;
+            let mut bindings = bindings.clone();
+            crate::type_resolution::bind_this_type(&mut bindings, entry.declaration, ty);
             Some(ResolvedType::new(
                 crate::item_node(ctx.db, entry.declaration)?,
-                declaration_type_with_bindings(ctx.db, entry.declaration, bindings),
+                declaration_type_with_bindings(ctx.db, entry.declaration, &bindings),
             ))
         }
         Type::Alias { .. } => find_member_on_type(&ty.unaliased(ctx.db), name, bindings, ctx),
@@ -344,18 +346,17 @@ pub(crate) fn compute_decl_type(db: &dyn lspkl_db::Db, decl: crate::DeclId) -> T
     }
     match decl.item {
         ItemId::Class(index) => {
-            return Type::class(crate::ClassId::new(
+            let instance = Type::class(crate::ClassId::new(
                 db,
                 crate::module_id(db, decl.file, decl.root),
                 index,
             ));
+            return crate::base_module(db)
+                .class_type()
+                .clone()
+                .with_type_args(vec![instance]);
         }
-        ItemId::TypeAlias(_) => {
-            return Type::Alias {
-                alias_id: decl,
-                type_args: vec![],
-            };
-        }
+        ItemId::TypeAlias(_) => return crate::base_module(db).type_alias_type().clone(),
         ItemId::Import(_) => return crate::type_resolution::import_type(db, decl),
         ItemId::Property(i) => {
             if let Some(ty) = arena_item(&items.properties, i).and_then(|decl| decl.ty.as_ref()) {
@@ -499,6 +500,7 @@ pub(crate) fn class_member_bindings(
             root: module.root(ctx.db),
             item: crate::ItemId::Class(class_id.index(ctx.db)),
         };
+        crate::type_resolution::bind_this_type(&mut bindings, decl, receiver);
         for (index, arg) in type_args.iter().enumerate() {
             bindings.insert(
                 crate::items::TypeParameterId {

@@ -98,7 +98,7 @@ Nix packaging: `nix build`, `nix flake check`. Release automation is in `justfil
 
 - Rust edition 2024, Cargo, stable Rust, rustfmt, Clippy, and cargo-nextest. No explicit MSRV is declared. Node/Bun/npm are not repository build requirements; README npm commands target an external editor extension.
 - External `pkl` is needed for formatting, project operations, and package downloads, not basic embedded-stdlib analysis. Configure `pkl.cli.path` or provide it on PATH.
-- `crates/lspkl-stdlib/build.rs` downloads/checksums pinned Pkl 0.32.1 sources and generates files in `OUT_DIR`; do not edit generated output. Offline builds can set `PKL_STDLIB_ARCHIVE` to a local ZIP. `PKL_STDLIB_URL` changes the URL, not the accepted hashes.
+- `crates/lspkl-stdlib/build.rs` downloads/checksums pinned Pkl 0.33.0 sources and generates files in `OUT_DIR`; do not edit generated output. Offline builds can set `PKL_STDLIB_ARCHIVE` to a local ZIP. `PKL_STDLIB_URL` changes the URL, not the accepted hashes.
 - SDK upgrades must synchronize build-script pins/checksums with `nix/package.nix`. Grammar dependency upgrades must keep `Cargo.lock` and Nix's Git output hash coherent. Preserve SDK LICENSE/NOTICE packaging.
 - Linux release builds use `cross` and Docker; packaging requires Just >=1.32, Bash, and the utilities listed atop `justfile`. These are release-tool requirements, not server runtime dependencies.
 
