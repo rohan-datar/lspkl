@@ -21,7 +21,7 @@ release-build target:
     case "$1" in
         x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
             cross build --release --locked -p lspkl --bin lspkl --target "$1" ;;
-        aarch64-apple-darwin|x86_64-apple-darwin)
+        aarch64-apple-darwin)
             # Release binaries support macOS 26 (Tahoe) and later.
             MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-26.0}" \
                 cargo build --release --locked -p lspkl --bin lspkl --target "$1" ;;
@@ -39,7 +39,6 @@ release-validate-target binary target:
     case "$2" in
         x86_64-unknown-linux-musl) [[ "$description" == *"ELF 64-bit LSB"* && "$description" == *"x86-64"* ]]; os=linux ;;
         aarch64-unknown-linux-musl) [[ "$description" == *"ELF 64-bit LSB"* && "$description" == *"ARM aarch64"* ]]; os=linux ;;
-        x86_64-apple-darwin) [[ "$description" == *"Mach-O 64-bit"* && "$description" == *"x86_64"* ]]; os=darwin ;;
         aarch64-apple-darwin) [[ "$description" == *"Mach-O 64-bit"* && "$description" == *"arm64"* ]]; os=darwin ;;
         x86_64-pc-windows-msvc) [[ "$description" == *"PE32+ executable"* && "$description" == *"x86-64"* && "$description" == *"for MS Windows"* ]]; os=windows ;;
         *) echo "Unsupported release target: $2" >&2; exit 1 ;;
