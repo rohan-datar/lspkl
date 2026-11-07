@@ -224,6 +224,22 @@ impl Scope<'_> {
                 target: entry.target,
             })
     }
+    /// Look up `name` in one namespace: methods for a call (`f(x)`), every
+    /// other entry for a plain access (`f`). Pkl keeps the two separate, so a
+    /// call never resolves to a same-named property and vice versa.
+    pub fn lookup_in_namespace(&self, name: &str, call: bool) -> Option<ScopeEntry> {
+        self.data
+            .layers()
+            .flat_map(|layer| layer.entries(self.ctx))
+            .find(|entry| {
+                (entry.kind == ScopeKind::Method) == call && entry.name.text(self.ctx.db) == name
+            })
+            .map(|entry| ScopeEntry {
+                name: entry.name,
+                kind: entry.kind,
+                target: entry.target,
+            })
+    }
     pub fn entries(&self) -> impl Iterator<Item = ScopeEntry> + '_ {
         let mut seen = HashSet::new();
         self.data

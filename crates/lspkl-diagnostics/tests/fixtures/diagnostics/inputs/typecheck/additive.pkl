@@ -1,0 +1,15 @@
+// Additive operands are checked against the other operand's category.
+local header = "# Generated. Do not edit.\n"
+body: String = "content"
+literalLeft: String = header + body
+literalRight: String = body + header
+
+intFloat = 1 + 2.5
+floatInt = 2.5 + 1
+durations = 1.s + 2.min
+dataSizes = 1.mb + 2.kb
+lists = List(1) + Set("x")
+maps = Map("k", 1) + Map(1, "v")
+
+stringInt = "x" + 1
+listInt = List(1) + 1

@@ -279,6 +279,54 @@ fn unary_minus_operand_accepts_number_duration_and_data_size() {
     });
 }
 
+/// An additive operand expects the other operand's category, not its exact
+/// type: a string-literal-typed operand accepts any `String`, and `Int`/`Float`
+/// mix.
+#[test]
+fn additive_operand_expects_category_of_other_operand() {
+    let base = harness::load_test_base();
+    for (src, accepted, rejected) in [
+        (
+            r#"local header = "h"
+x = header + "y""#,
+            "String",
+            "Int",
+        ),
+        ("x = 1 + 2.5", "Float", "String"),
+    ] {
+        harness::with_snippet(&base, src, |ctx| {
+            let tree = ctx.tree(harness::file(ctx, 1)).unwrap();
+            let additive = harness::find_first(tree, |k| matches!(k, NodeKind::AdditiveExpr));
+            let right = *tree
+                .children(additive)
+                .iter()
+                .rev()
+                .find(|&&id| !tree.kind(id).is_terminal())
+                .expect("right operand");
+            let ty = lspkl_types::expected_type(
+                ctx.db,
+                harness::expr(lspkl_types::NodeRef::new(harness::file(ctx, 1), right), ctx)
+                    .map(|expr| expr.id()),
+                ctx.root,
+            );
+            let pick = |name: &str| match name {
+                "String" => ctx.base.string_type(),
+                "Int" => ctx.base.int_type(),
+                "Float" => ctx.base.float_type(),
+                other => panic!("unexpected {other}"),
+            };
+            assert!(
+                pick(accepted).is_subtype_of(&ty, ctx.db),
+                "{src}: {accepted} should satisfy {ty:?}"
+            );
+            assert!(
+                !pick(rejected).is_subtype_of(&ty, ctx.db),
+                "{src}: {rejected} must not satisfy {ty:?}"
+            );
+        });
+    }
+}
+
 #[test]
 fn logical_not_operand_is_boolean() {
     let base = harness::load_test_base();
@@ -364,9 +412,10 @@ fn exponentiation_operands_are_number() {
 }
 
 #[test]
-fn additive_operand_expects_other_operands_type() {
+fn additive_operand_expects_other_operands_category() {
     let base = harness::load_test_base();
-    // Left operand expects right operand's type (Int).
+    // Left operand expects the right operand's category (Number), so `Float`
+    // operands also mix with `Int`.
     harness::with_snippet(&base, "x = 1 + 2", |ctx| {
         let lhs = find_nth(ctx.tree(harness::file(ctx, 1)).unwrap(), 0, |k| {
             matches!(k, NodeKind::IntLiteralExpr)
@@ -378,8 +427,8 @@ fn additive_operand_expects_other_operands_type() {
             ctx.root,
         );
         assert!(
-            ty.class_equals(ctx.base.int_type()),
-            "expected Int (mirror other operand), got {ty:?}"
+            ty.class_equals(ctx.base.number_type()),
+            "expected Number, got {ty:?}"
         );
     });
 }
@@ -409,7 +458,7 @@ fn multiplicative_default_is_number() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn for_generator_iterable_is_collection() {
+fn for_generator_iterable_accepts_every_iterable_kind() {
     let base = harness::load_test_base();
     // Use an identifier rather than a range literal — tree-sitter-pkl
     // currently parses `..` with an Error node, which is irrelevant to this
@@ -424,9 +473,24 @@ fn for_generator_iterable_is_collection() {
                 .map(|expr| expr.id()),
             ctx.root,
         );
+        for accepted in [
+            ctx.base.list_type(),
+            ctx.base.set_type(),
+            ctx.base.map_type(),
+            ctx.base.listing_type(),
+            ctx.base.mapping_type(),
+            ctx.base.dynamic_type(),
+            ctx.base.int_seq_type(),
+            ctx.base.bytes_type(),
+        ] {
+            assert!(
+                accepted.is_subtype_of(&ty, ctx.db),
+                "expected {accepted:?} to satisfy {ty:?}"
+            );
+        }
         assert!(
-            ty.class_equals(ctx.base.collection_type()),
-            "expected Collection, got {ty:?}"
+            !ctx.base.int_type().is_subtype_of(&ty, ctx.db),
+            "Int must not satisfy {ty:?}"
         );
     });
 }

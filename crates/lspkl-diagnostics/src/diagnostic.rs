@@ -63,6 +63,7 @@ impl TextEdit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuickFixCommand {
     DownloadPackage { uri: String },
+    SyncProjects,
 }
 /// A quickfix attached to a diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,13 @@ impl QuickFix {
             title: format!("Download package `{uri}`"),
             edits: Vec::new(),
             command: Some(QuickFixCommand::DownloadPackage { uri }),
+        }
+    }
+    pub fn sync_projects() -> Self {
+        Self {
+            title: "Sync Pkl projects".into(),
+            edits: Vec::new(),
+            command: Some(QuickFixCommand::SyncProjects),
         }
     }
 }

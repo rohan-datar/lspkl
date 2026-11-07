@@ -101,11 +101,24 @@ pub(crate) fn infer_expr_type_inner(
         }
 
         // `for (binding in iterable) { body }`. Iterable expr position:
-        //   - Listing<E>, List<E>, Set<E>, Mapping<K,V>, Map<K,V>, or IntRange
+        //   - Collection (List, Set), Map, IntSeq, Bytes, or an untyped object
+        //     container (Listing, Mapping, Dynamic)
         NodeKind::ForGenerator => {
             let iterable = nodes::ForGenerator::cast(tree, parent).and_then(|n| n.iterable(tree));
             if Some(node) == iterable {
-                ctx.base.collection_type().clone()
+                let base = ctx.base;
+                Type::union(
+                    [
+                        base.collection_type().clone(),
+                        base.map_type().clone(),
+                        base.int_seq_type().clone(),
+                        base.bytes_type().clone(),
+                        base.listing_type().clone(),
+                        base.mapping_type().clone(),
+                        base.dynamic_type().clone(),
+                    ],
+                    ctx.db,
+                )
             } else {
                 Type::Unknown
             }
@@ -197,7 +210,8 @@ pub(crate) fn infer_expr_type_inner(
             let Some(other) = other_operand(tree, parent, node) else {
                 return Type::Unknown;
             };
-            compute_expr_type(NodeRef::new(file, other), bindings, ctx)
+            let other_type = compute_expr_type(NodeRef::new(file, other), bindings, ctx);
+            additive_operand_type(&other_type, ctx)
         }
 
         // `a < b`, etc. — comparable: Number, Duration, DataSize, String, ...
@@ -393,4 +407,37 @@ fn infer_type_from_arg_list(
         bindings,
         ctx,
     ))
+}
+
+/// The type an additive operand may have, given the other operand's type.
+///
+/// This is the operand *category* the operator accepts, never the other
+/// operand's exact type: `header + text` with a string-literal `header` takes
+/// any `String`, and `1 + 2.5` mixes `Int` and `Float`. Collections and maps
+/// expect their raw class so differing element types still concatenate.
+/// Returns `Unknown` (no constraint) when the other operand is not a known
+/// additive type.
+fn additive_operand_type(other: &Type, ctx: &AnalysisContext) -> Type {
+    let base = ctx.base;
+    if matches!(other, Type::Unknown) {
+        return Type::Unknown;
+    }
+    let is = |target: &Type| other.is_subtype_of(target, ctx.db);
+    if is(base.number_type()) {
+        base.number_type().clone()
+    } else if is(base.string_type()) {
+        base.string_type().clone()
+    } else if is(base.duration_type()) {
+        base.duration_type().clone()
+    } else if is(base.data_size_type()) {
+        base.data_size_type().clone()
+    } else if is(base.bytes_type()) {
+        base.bytes_type().clone()
+    } else if is(base.collection_type()) {
+        base.collection_type().clone()
+    } else if is(base.map_type()) {
+        base.map_type().clone()
+    } else {
+        Type::Unknown
+    }
 }

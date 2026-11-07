@@ -70,6 +70,7 @@ pub struct BaseModule {
     object_type: Type,
     module_type: Type,
     bytes_type: Type,
+    int_seq_type: Type,
     function_type: Type,
     varargs_type: Type,
     function_types: [Option<Type>; 6],
@@ -149,6 +150,7 @@ impl BaseModule {
             number_type: find_class(db, file, &tree, &classes, "Number")?,
             string_type: find_class(db, file, &tree, &classes, "String")?,
             bytes_type: find_class(db, file, &tree, &classes, "Bytes")?,
+            int_seq_type: find_class(db, file, &tree, &classes, "IntSeq")?,
             collection_type: find_class(db, file, &tree, &classes, "Collection")?,
             listing_type: find_class(db, file, &tree, &classes, "Listing")?,
             list_type: find_class(db, file, &tree, &classes, "List")?,
@@ -286,6 +288,9 @@ impl BaseModule {
     }
     pub fn bytes_type(&self) -> &Type {
         &self.bytes_type
+    }
+    pub fn int_seq_type(&self) -> &Type {
+        &self.int_seq_type
     }
     pub fn varargs_type(&self) -> &Type {
         &self.varargs_type

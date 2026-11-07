@@ -464,8 +464,14 @@ pub(crate) fn resolve_unqualified_access_with_bindings(
     bindings: &TypeBindings,
     ctx: &AnalysisContext,
 ) -> Option<ResolvedType> {
+    // Only an actual call (`f(x)`) looks up methods; any other node position
+    // (a plain access or a scope anchor) looks up values.
+    let call = ctx.tree(node.file).is_some_and(|tree| {
+        matches!(tree.kind(node.value), NodeKind::UnqualifiedAccessExpr)
+            && !tree.is_property_access(node.value)
+    });
     let scope = crate::scope_at(node, ctx);
-    let entry = scope.lookup(name)?;
+    let entry = scope.lookup_in_namespace(name, call)?;
     Some(ResolvedType::new(
         entry.node(ctx)?,
         entry.ty_with_bindings(bindings, ctx),

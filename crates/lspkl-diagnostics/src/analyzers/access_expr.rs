@@ -85,7 +85,10 @@ impl Analyzer for AccessExprAnalyzer {
                 }
 
                 let name = source_tree.name(node).unwrap_or("");
-                let Some(entry) = scope_at(NodeRef::new(file, node), ctx).lookup(name) else {
+                let call = !source_tree.is_property_access(node);
+                let Some(entry) =
+                    scope_at(NodeRef::new(file, node), ctx).lookup_in_namespace(name, call)
+                else {
                     // Suppression on this-type:
                     let this_ty =
                         lspkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);

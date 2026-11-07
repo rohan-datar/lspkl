@@ -1,0 +1,19 @@
+// for-generators iterate collections, maps, IntSeq, Bytes, and untyped objects.
+mapping: Mapping<String, String> = new { ["a"] = "b" }
+listing: Listing<String> = new { "x" }
+dynamic = new Dynamic { a = 1 }
+class Point { x: Int }
+point: Point = new { x = 1 }
+
+result = new Listing {
+  for (k, v in mapping) { k + v }
+  for (x in listing) { x }
+  for (i in IntSeq(0, 2)) { i }
+  for (y in List(1)) { y }
+  for (s in Set(1)) { s }
+  for (mk, mv in Map(1, 2)) { mk + mv }
+  for (dk, dv in dynamic) { dv }
+}
+
+notIterable = new Listing { for (z in 1) { z } }
+typedObject = new Listing { for (k, v in point) { v } }
