@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+2:37 error: Expected method `identity` overriding `identity` to have 1 type parameter, but got 0.

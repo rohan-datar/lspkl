@@ -1,0 +1,5 @@
+typealias Bad = this
+typealias NestedBad = List<this?>
+typealias ConstrainedBad = this(true)
+typealias Good = Int(this is Int)
+class GoodClass { value: this? }

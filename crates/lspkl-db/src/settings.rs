@@ -48,10 +48,20 @@ pub struct CliSettings {
     pub path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProjectSettings {
     pub excluded_directories: Vec<String>,
+    pub auto_sync: bool,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            excluded_directories: Vec::new(),
+            auto_sync: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]

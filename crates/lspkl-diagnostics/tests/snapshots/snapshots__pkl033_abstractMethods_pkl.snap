@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+2:1 error: Cannot define an abstract method in a non-abstract module.
+3:17 error: Cannot define an abstract method in a non-abstract class.

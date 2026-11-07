@@ -1,0 +1,3 @@
+open class Parent { function identity<T>(value: T): T = value }
+class Bad extends Parent { function identity(value: Int): Int = value }
+class Good extends Parent { function identity<T>(value: T): T = value }

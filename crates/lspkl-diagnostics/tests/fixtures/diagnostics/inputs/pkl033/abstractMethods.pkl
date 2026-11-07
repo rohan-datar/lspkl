@@ -1,0 +1,5 @@
+module Concrete
+abstract function invalid(): Int
+class Invalid { abstract function missing(): Int }
+abstract class Abstract { abstract function valid(): Int }
+class Properties { abstract value: Int }

@@ -60,7 +60,7 @@ pub fn effective_pkl_version(ctx: &AnalysisContext, file: File) -> Version {
     declared_pkl_version(ctx, file).unwrap_or(DEFAULT_PKL_VERSION)
 }
 
-fn declared_pkl_version(ctx: &AnalysisContext, file: File) -> Option<Version> {
+pub(crate) fn declared_pkl_version(ctx: &AnalysisContext, file: File) -> Option<Version> {
     let tree = ctx.tree(file)?;
     let header = nodes::Module::cast(tree, tree.root())?.header(tree)?;
     let annotation = nodes::ModuleHeader::cast(tree, header)?

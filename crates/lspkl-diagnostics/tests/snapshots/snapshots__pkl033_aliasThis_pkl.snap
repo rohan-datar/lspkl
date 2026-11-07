@@ -1,0 +1,8 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:17 error: Cannot reference `this` type within a type alias body.
+2:28 error: Cannot reference `this` type within a type alias body.
+3:28 error: Cannot reference `this` type within a type alias body.
+4:22 warning: expression is always true

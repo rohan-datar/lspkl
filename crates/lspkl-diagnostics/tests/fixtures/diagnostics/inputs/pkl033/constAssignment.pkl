@@ -1,0 +1,8 @@
+import "pkl:math"
+import "pkl:release"
+bad = (math) { pi = 1 }
+badAmend = (release) { current {} }
+good = math.pi
+open class Parent { const value: Int = 1 }
+class Derived extends Parent { const value: Int = 2 }
+instance = new Parent { value = 3 }

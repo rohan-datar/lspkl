@@ -25,7 +25,7 @@ pub fn diagnostics(db: &dyn lspkl_db::Db, file: lspkl_db::File) -> Arc<[Diagnost
 
 /// Holds the configured analyzer pipeline. Build via [`Self::new`] and
 /// [`Self::with`], or call [`Self::with_default_analyzers`] for the production
-/// pipeline of all 11.
+/// pipeline of all 12.
 pub struct DiagnosticsEngine {
     analyzers: Vec<Box<dyn Analyzer>>,
 }
@@ -45,13 +45,14 @@ impl DiagnosticsEngine {
         self
     }
 
-    /// The production pipeline, in stable registration order: all 11 analyzers.
+    /// The production pipeline, in stable registration order: all 12 analyzers.
     pub fn with_default_analyzers() -> Self {
         Self::new()
             .with(Box::new(analyzers::SyntaxAnalyzer))
             .with(Box::new(analyzers::ModifierAnalyzer))
             .with(Box::new(analyzers::AnnotationAnalyzer))
             .with(Box::new(analyzers::MemberAnalyzer))
+            .with(Box::new(analyzers::pkl_033::Pkl033Analyzer))
             .with(Box::new(analyzers::ModuleUriAnalyzer))
             .with(Box::new(analyzers::UnsupportedFeatureAnalyzer))
             .with(Box::new(analyzers::TypeCheckAnalyzer))

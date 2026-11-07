@@ -1,0 +1,5 @@
+const bad: this? = null
+const function badMethod(value: this): Int = 1
+const nested = new Dynamic { local value: this? = null }
+const good: Int = 1
+function goodMethod(value: this): this = value

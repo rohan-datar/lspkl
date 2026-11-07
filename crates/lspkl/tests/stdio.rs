@@ -1011,9 +1011,15 @@ async fn blocked_project_job(watched: Option<&str>, cancel: bool) {
                 json!({"settings":{"cli":{"path":new}}}),
             )
             .await;
-        let accepted = client.request("pkl/syncProjects", json!(null)).await;
-        assert!(accepted.get("error").is_none(), "{accepted}");
+        // Project jobs are serialized, including cancelled jobs whose CLI is
+        // still executing. Queue the replacement, then release the old process.
+        let accepted = client
+            .sender()
+            .start_request("pkl/syncProjects", json!(null))
+            .await;
         fs::write(&release, "").unwrap();
+        let accepted = client.response(accepted.id).await;
+        assert!(accepted.get("error").is_none(), "{accepted}");
         if !cancel {
             let response = client.response(request.id).await;
             assert_eq!(response["error"]["code"], -32801, "{response}");
@@ -1182,4 +1188,75 @@ async fn blocked_import_does_not_freeze_unrelated_hover_or_waiting_cancellation(
         .expect("waiting cancellation must respond promptly");
     assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
     client.shutdown().await;
+}
+
+#[path = "support/counted_https.rs"]
+mod counted_https;
+
+#[tokio::test]
+async fn https_fetch_is_coalesced_across_two_input_epochs() {
+    let temp = tempfile::tempdir().unwrap();
+    let ca = temp.path().join("fixture-ca.pem");
+    let origin = counted_https::CountedHttps::start(&ca);
+    let cache = temp.path().join("cache");
+    let main = uri(&temp.path().join("main.pkl"));
+    let mut client = LspClient::spawn_with_env(
+        Path::new(env!("CARGO_BIN_EXE_lspkl")),
+        temp.path(),
+        &[("SSL_CERT_FILE", ca.as_path())],
+    )
+    .await;
+    client.request("initialize",json!({"capabilities":{},"workspaceFolders":[{"uri":uri(temp.path()),"name":"fixture"}],"initializationOptions":{"cacheDir":cache}})).await;
+    client.notify("initialized", json!({})).await;
+    open(
+        &mut client,
+        &main,
+        &format!(
+            "import \"{}\" as library\nanswer = library.value\n",
+            origin.uri
+        ),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while origin.requests() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        client
+            .notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"cacheDir":cache}}),
+            )
+            .await;
+        // A hover for a separate, already loaded document establishes that the
+        // notification was processed without waiting for the gated HTTPS input.
+        let barrier = uri(&temp.path().join("barrier.pkl"));
+        open(&mut client, &barrier, "value = 1\n").await;
+        let response = client
+            .request(
+                "textDocument/hover",
+                json!({"textDocument":{"uri":barrier},"position":{"line":0,"character":0}}),
+            )
+            .await;
+        assert!(response.get("error").is_none(), "{response}");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let before = origin.requests();
+    origin.release();
+    loop {
+        let published = diagnostics(&mut client, &main).await;
+        if published["diagnostics"].as_array().unwrap().is_empty() {
+            break;
+        }
+    }
+    let after = origin.requests();
+    client.shutdown().await;
+    assert_eq!(
+        before, 1,
+        "duplicate network GETs before release: {before}; after: {after}"
+    );
+    assert_eq!(after, 1, "network GET count after cache replay");
 }

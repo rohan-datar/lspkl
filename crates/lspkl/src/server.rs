@@ -74,6 +74,7 @@ enum Event {
     ),
     Reload(Option<LoadedFiles>),
     Restore(u64, Result<ProjectManager>),
+    AutoSync(u64, Result<Option<ProjectManager>>),
     Settings(u64, WorkspaceSettings),
     CacheDefault(u64, std::path::PathBuf, std::path::PathBuf),
     PendingIo(u64, Result<Vec<lspkl_db::PendingIo>>),
@@ -121,6 +122,12 @@ fn value<T: Serialize>(value: T) -> Result<Prepared> {
     Ok(Prepared::Done(Effect::Value(
         serde_json::to_value(value).expect("protocol result"),
     )))
+}
+fn is_project_request(request: &Request) -> bool {
+    matches!(
+        request.method.as_str(),
+        "pkl/syncProjects" | "pkl/downloadPackage" | "workspace/executeCommand"
+    )
 }
 fn prepare(snapshot: &Snapshot, request: Request) -> Result<Prepared> {
     use handlers::{commands as c, documents as d};
@@ -329,6 +336,12 @@ pub fn run(
         io: io_tx,
         persist: persist_tx,
         configuration: 0,
+        settings_ready: false,
+        restores: 0,
+        auto_sync_due: None,
+        auto_sync_running: false,
+        project_external: HashSet::new(),
+        auto_sync_failure: None,
         cli_versions: Arc::default(),
         cli_cache_default: None,
         cli_probe: None,
@@ -379,6 +392,7 @@ pub fn run(
             }
         }
         server.expire_waiting();
+        server.start_auto_sync();
         if idle && server.started && !server.shutdown {
             if server.collect_io {
                 server.collect_io = false;
@@ -388,7 +402,14 @@ pub fn run(
                 ))?;
                 idle = false;
             }
-            while idle && let Some(index) = server.pending.iter().position(|p| p.waiting.is_empty())
+            while idle
+                && let Some(index) = server.pending.iter().position(|p| {
+                    p.waiting.is_empty()
+                        && (!is_project_request(&p.request)
+                            || (!server.auto_sync_running
+                                && server.project_external.is_empty()
+                                && !server.running.values().any(|r| r.project_job)))
+                })
             {
                 let pending = server.pending.remove(index).unwrap();
                 if server.queue.incoming.is_completed(&pending.request.id) {
@@ -446,6 +467,7 @@ pub fn run(
             .filter(|p| p.fallback.is_some())
             .map(|p| p.deadline)
             .chain(server.diagnostics_waiting.values().copied())
+            .chain(server.auto_sync_due.filter(|_| server.can_auto_sync()))
             .min();
         let timer = deadline.map_or_else(crossbeam_channel::never, |deadline| {
             crossbeam_channel::after(deadline.saturating_duration_since(std::time::Instant::now()))
@@ -482,6 +504,14 @@ struct Loop {
     io: Sender<IoJob>,
     persist: Sender<ProjectManager>,
     configuration: u64,
+    // Startup waits for the current configuration pull and owned path resolution.
+    settings_ready: bool,
+    restores: usize,
+    auto_sync_due: Option<std::time::Instant>,
+    auto_sync_running: bool,
+    // Retain serialization even if the client cancels an executing project job.
+    project_external: HashSet<RequestId>,
+    auto_sync_failure: Option<String>,
     cli_versions: Arc<CliVersionCache>,
     cli_cache_default: Option<(std::path::PathBuf, std::path::PathBuf)>,
     cli_probe: Option<std::path::PathBuf>,
@@ -565,11 +595,15 @@ impl Loop {
     fn load_inputs(&mut self, jobs: Vec<lspkl_db::PendingIo>) {
         let epoch = self.io_epoch;
         for job in jobs {
-            // A load from an older epoch will be discarded, so it cannot satisfy this one.
+            // Filesystem reads are epoch-specific. An identical HTTPS fetch
+            // (including cache directory) can finish populating the cache for a
+            // newer epoch: discard its stale completion as usual, then discovery
+            // replays the cached source without a duplicate network request.
+            let https = matches!(&job, lspkl_db::PendingIo::Source { uri, .. } if uri.scheme().as_str() == "https");
             if self
                 .in_flight_io
                 .iter()
-                .any(|(running, existing)| *running == epoch && existing == &job)
+                .any(|(running, existing)| existing == &job && (*running == epoch || https))
             {
                 continue;
             }
@@ -618,7 +652,64 @@ impl Loop {
             || Event::Reload(None),
         ));
     }
-    fn restore(&self) {
+    fn schedule_auto_sync(&mut self) {
+        self.auto_sync_due =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+    }
+    fn can_auto_sync(&self) -> bool {
+        self.started
+            && self.settings_ready
+            && self.cli_probe.is_none()
+            && !self.shutdown
+            && self.restores == 0
+            && self.reloads == 0
+            && !self.auto_sync_running
+            && self.project_external.is_empty()
+            && !self.running.values().any(|r| r.project_job)
+    }
+    fn start_auto_sync(&mut self) {
+        if !self.can_auto_sync()
+            || !self
+                .auto_sync_due
+                .is_some_and(|due| due <= std::time::Instant::now())
+        {
+            return;
+        }
+        self.auto_sync_due = None;
+        if !self.workspace.settings().projects.auto_sync {
+            return;
+        }
+        self.auto_sync_running = true;
+        let epoch = self.workspace.project_generation();
+        let mut manager = self.workspace.project_manager();
+        let _ = self.io.send(IoJob::new(
+            move || {
+                let result = (|| {
+                    if !manager.needs_sync()? {
+                        return Ok(None);
+                    }
+                    manager.sync_projects()?;
+                    Ok(Some(manager))
+                })()
+                .map_err(
+                    |error: lspkl_project::project_manager::ProjectError| {
+                        HandlerError::Domain(error.to_string())
+                    },
+                );
+                Event::AutoSync(epoch, result)
+            },
+            move || {
+                Event::AutoSync(
+                    epoch,
+                    Err(HandlerError::Domain(
+                        "automatic project sync panicked".into(),
+                    )),
+                )
+            },
+        ));
+    }
+    fn restore(&mut self) {
+        self.restores += 1;
         let epoch = self.workspace.project_generation();
         let manager = self.workspace.project_manager();
         let _ = self.io.send(IoJob::new(
@@ -632,6 +723,7 @@ impl Loop {
         ));
     }
     fn resolve_settings(&mut self) {
+        self.settings_ready = false;
         let epoch = self.configuration;
         let settings = self.workspace.settings().clone();
         let unresolved = settings.clone();
@@ -688,12 +780,14 @@ impl Loop {
             return;
         }
         self.configuration += 1;
+        self.settings_ready = false;
         let items: Vec<_> = [
             "pkl.cli.path",
             "pkl.formatter.grammarVersion",
             "pkl.modulepath",
             "pkl.projects.excludedDirectories",
             "pkl.cacheDir",
+            "pkl.projects.autoSync",
         ]
         .into_iter()
         .map(|s| json!({"section": s}))
@@ -807,11 +901,20 @@ impl Loop {
                 if let Some(Outgoing::Configuration(epoch)) =
                     self.queue.outgoing.complete(response.id)
                     && epoch == self.configuration
-                    && let Ok(Value::Array(values)) = response.response_result
-                    && values.len() == 5
                 {
-                    let values: [Value; 5] = values.try_into().unwrap();
-                    if self.workspace.apply_pulled_settings(&values).is_ok() {
+                    let previous = self.workspace.settings().clone();
+                    if let Ok(Value::Array(values)) = response.response_result
+                        && matches!(values.len(), 5 | 6)
+                        && let Err(error) = self.workspace.apply_pulled_settings(&values)
+                    {
+                        tracing::warn!(%error, "invalid client settings; retaining previous settings");
+                    }
+                    // A failed or unchanged pull unblocks startup without
+                    // invalidating input loads already using these settings.
+                    if self.workspace.settings() == &previous {
+                        self.settings_ready = true;
+                        self.schedule_auto_sync();
+                    } else {
                         self.resolve_settings();
                         self.invalidate_io();
                     }
@@ -873,7 +976,11 @@ impl Loop {
             }
             "workspace/didChangeWatchedFiles" => {
                 self.workspace.request_routing_refresh();
+                let epoch = self.workspace.project_generation();
                 let work = self.workspace.prepare_watched_files(params(n.params)?);
+                if epoch != self.workspace.project_generation() {
+                    self.schedule_auto_sync();
+                }
                 self.workspace.invalidate_analysis();
                 self.reload(work);
                 self.invalidate_io();
@@ -931,6 +1038,10 @@ impl Loop {
                 self.started = true;
                 self.register_watchers();
                 self.pull_configuration();
+                if !self.workspace.client_configuration() {
+                    self.settings_ready = true;
+                }
+                self.schedule_auto_sync();
                 self.invalidate_io();
             }
             Event::Computed(id, result) => {
@@ -962,13 +1073,19 @@ impl Loop {
                         }
                     }
                     Ok(Prepared::Io(job)) => {
+                        if self.running.get(&id).is_some_and(|r| r.project_job) {
+                            self.project_external.insert(id);
+                        }
                         let _ = self.io.send(job);
                     }
                     Ok(Prepared::Done(effect)) => self.finish(id, Ok(effect)),
                     Err(e) => self.respond(id, Err(e)),
                 }
             }
-            Event::External(id, result) => self.finish(id, result),
+            Event::External(id, result) => {
+                self.project_external.remove(&id);
+                self.finish(id, result);
+            }
             Event::Diagnostics(uri, generation, version, Ok((diagnostics, jobs)))
                 if self.workspace.is_document_open(&uri)
                     && self.workspace.generation() == generation
@@ -1006,12 +1123,51 @@ impl Loop {
                     None => tracing::error!("source reload panicked"),
                 }
             }
-            Event::Restore(epoch, Ok(manager)) if epoch == self.workspace.project_generation() => {
-                self.workspace.apply_project_manager(manager);
-                self.invalidate_io();
+            Event::Restore(epoch, result) => {
+                self.restores -= 1;
+                match result {
+                    Ok(manager) if epoch == self.workspace.project_generation() => {
+                        self.workspace.apply_project_manager(manager);
+                        self.invalidate_io();
+                    }
+                    Err(error) => tracing::error!(?error, "project state restoration failed"),
+                    _ => {}
+                }
+                self.schedule_auto_sync();
             }
-            Event::Restore(_, Err(error)) => {
-                tracing::error!(?error, "project state restoration failed");
+            Event::AutoSync(epoch, result) => {
+                self.auto_sync_running = false;
+                if self.shutdown {
+                    return;
+                }
+                if epoch != self.workspace.project_generation() {
+                    self.schedule_auto_sync();
+                    return;
+                }
+                match result {
+                    Ok(manager) => {
+                        self.auto_sync_failure = None;
+                        if let Some(manager) = manager {
+                            let _ = self.persist.send(manager.clone());
+                            self.workspace.apply_project_manager(manager);
+                            self.workspace.request_routing_refresh();
+                            let work = self.workspace.prepare_refresh();
+                            self.reload(work);
+                            self.invalidate_io();
+                        }
+                    }
+                    Err(error) => {
+                        let failure = error.to_string();
+                        if self.auto_sync_failure.as_ref() != Some(&failure) {
+                            tracing::warn!(%error, "automatic project synchronization failed");
+                            self.send(Notification::new("window/showMessage".into(), ShowMessageParams {
+                                typ: MessageType::WARNING,
+                                message: format!("Automatic Pkl project sync failed: {failure}. Check pkl.cli.path; you can retry with pkl.syncProjects."),
+                            }));
+                            self.auto_sync_failure = Some(failure);
+                        }
+                    }
+                }
             }
             Event::CacheDefault(epoch, cli, cache) => {
                 self.cli_probe = None;
@@ -1035,6 +1191,8 @@ impl Loop {
                 }
             }
             Event::Settings(epoch, mut settings) if epoch == self.configuration => {
+                self.settings_ready = true;
+                self.schedule_auto_sync();
                 self.use_cached_default(&mut settings);
                 if self.workspace.settings() == &settings {
                     return;
@@ -1077,6 +1235,7 @@ impl Loop {
                 Ok(Value::String(contents.source.contents().to_owned()))
             }
             Effect::Projects(manager) => {
+                self.auto_sync_failure = None;
                 self.workspace.request_routing_refresh();
                 if let Some(manager) = manager {
                     let _ = self.persist.send(manager.clone());
