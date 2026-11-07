@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:12 error: Cannot reference `this` type from const property `bad`.
+2:33 error: Cannot reference `this` type from const method `badMethod`.

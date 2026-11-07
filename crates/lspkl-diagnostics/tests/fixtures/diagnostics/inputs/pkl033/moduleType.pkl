@@ -1,0 +1,7 @@
+value: module?
+typealias Bad = module?
+class BadClass { value: module? }
+const bad: module? = null
+const function badMethod(value: module): Int = 1
+@ModuleInfo { minPklVersion = if (null is module) "0.33.0" else "0.33.0" }
+class Annotated {}

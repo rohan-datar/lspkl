@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+3:7 error: Class `Missing` should either be declared `abstract`, or should implement method `required`.
+6:7 error: Class `SdkMissing` should either be declared `abstract`, or should implement method `renderReference`.

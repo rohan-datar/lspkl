@@ -168,6 +168,35 @@ impl ProjectManager {
         Ok(project_files)
     }
 
+    /// Check saved metadata against project inputs. Call only on an I/O worker.
+    pub fn needs_sync(&self) -> Result<bool, ProjectError> {
+        for file in self.discover_project_files()? {
+            if !self.projects.contains_key(&file) {
+                return Ok(true);
+            }
+            let root = self
+                .workspace_folders
+                .iter()
+                .filter(|root| file.starts_with(root))
+                .max_by_key(|root| root.components().count())
+                .ok_or(ProjectError::MissingPath)?;
+            let state = root.join(".lspkl/projects.json");
+            let Ok(saved) = std::fs::metadata(state).and_then(|m| m.modified()) else {
+                return Ok(true);
+            };
+            for input in [file.clone(), file.with_file_name("PklProject.deps.json")] {
+                match std::fs::metadata(input).and_then(|m| m.modified()) {
+                    Ok(modified) if modified > saved => return Ok(true),
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error.into());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Discover all `.pkl-project` files under the workspace folders, run
     /// `pkl project resolve`, and parse the resulting metadata + deps files.
     pub fn sync_projects(&mut self) -> Result<(), ProjectError> {
@@ -227,7 +256,7 @@ impl ProjectManager {
 
     /// Install a watched project input already read and decoded by a blocking worker.
     /// Missing or invalid dependency contents are represented by None, clearing stale data.
-    /// Project changes invalidate metadata until the next explicit CLI sync.
+    /// Project changes invalidate metadata until the next CLI sync.
     pub fn apply_watched_file(&mut self, path: &Path, deps: Option<ProjectDeps>) -> bool {
         match path.file_name().and_then(|name| name.to_str()) {
             Some("PklProject") => self.projects.remove(path).is_some(),

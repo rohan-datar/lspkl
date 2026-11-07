@@ -4,6 +4,7 @@ pub mod expr;
 pub mod member;
 pub mod modifier;
 pub mod module_uri;
+pub mod pkl_033;
 pub mod syntax;
 pub mod type_analyzer;
 pub mod type_check;

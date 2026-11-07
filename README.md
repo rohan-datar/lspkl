@@ -227,6 +227,16 @@ existing `pkl/fileContents` loader; stdlib definitions should then open normally
 Verify with `:checkhealth vim.lsp` and `:lua vim.print(vim.lsp.get_clients({ name = "pkl" }))`.
 
 
+## Project synchronization
+
+`pkl.projects.autoSync` defaults to `true`. lspkl resolves projects automatically
+when saved metadata is missing or stale, when `PklProject` changes, and when
+workspace folders are added. This invokes `pkl project resolve`, which may update
+`PklProject.deps.json`; configure `pkl.cli.path` if Pkl is not on PATH.
+Set nested settings to `{"pkl":{"projects":{"autoSync":false}}}` to keep
+synchronization manual with `pkl.syncProjects`. `pkl.projects.excludedDirectories`
+controls directories skipped during project discovery.
+
 ## Package cache
 
 Without `pkl.cacheDir`, lspkl detects the configured CLI version: Pkl 0.33+

@@ -254,10 +254,17 @@ impl Workspace {
         self.apply_settings(settings);
     }
     /// A null pull section means no client value, not an explicit reset.
+    /// The optional sixth section is projects.autoSync; five-section callers
+    /// retain the explicit/default value for compatibility.
     pub fn apply_pulled_settings(
         &mut self,
-        values: &[serde_json::Value; 5],
+        values: &[serde_json::Value],
     ) -> std::result::Result<(), serde_json::Error> {
+        if values.len() < 5 {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "expected at least five configuration sections",
+            ));
+        }
         let mut settings = self.explicit_settings.clone();
         if !values[0].is_null() {
             settings.cli.path = serde_json::from_value(values[0].clone())?;
@@ -273,6 +280,9 @@ impl Workspace {
         }
         if !values[4].is_null() {
             settings.cache_dir = serde_json::from_value(values[4].clone())?;
+        }
+        if let Some(value) = values.get(5).filter(|value| !value.is_null()) {
+            settings.projects.auto_sync = serde_json::from_value(value.clone())?;
         }
         settings.module_paths.clear();
         settings.resolved_cache_dir = None;
