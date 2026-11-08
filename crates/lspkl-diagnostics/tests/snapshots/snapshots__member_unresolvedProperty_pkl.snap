@@ -2,4 +2,4 @@
 source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-(no diagnostics)
+7:3 warning: unresolved property: fooey

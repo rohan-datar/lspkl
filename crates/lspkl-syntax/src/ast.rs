@@ -531,7 +531,12 @@ impl SyntaxTree {
     }
 
     pub fn is_property_access(&self, node: NodeId) -> bool {
-        if !matches!(self.kind(node), NodeKind::UnqualifiedAccessExpr) {
+        if !matches!(
+            self.kind(node),
+            NodeKind::UnqualifiedAccessExpr
+                | NodeKind::QualifiedAccessExpr
+                | NodeKind::SuperAccessExpr
+        ) {
             return false;
         }
         self.child(node, |k| matches!(k, NodeKind::ArgumentList))

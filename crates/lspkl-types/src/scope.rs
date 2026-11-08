@@ -444,6 +444,14 @@ fn scope_data(db: &dyn Db, root: File, node: NodeRef) -> Arc<ScopeData> {
                         )
                     }));
                     result.locals.push(Layer::Locals(entries));
+                    result.own.push(Layer::Receiver {
+                        owner,
+                        inherited: false,
+                    });
+                    result.inherited.push(Layer::Receiver {
+                        owner,
+                        inherited: true,
+                    });
                 }
             }
             NodeKind::ClassBody => {

@@ -133,7 +133,13 @@ pub(crate) fn compute_expr_inner(
             resolve_unqualified_access_with_bindings(NodeRef::new(file, node), name, bindings, ctx)
                 .map(|r| {
                     if tree.is_property_access(node) {
-                        return r.ty;
+                        return guarded_access_type(
+                            NodeRef::new(file, node),
+                            name,
+                            r,
+                            bindings,
+                            ctx,
+                        );
                     }
                     let receiver = crate::resolver::access_receiver_type_with_bindings(
                         NodeRef::new(file, node),
@@ -174,9 +180,66 @@ pub(crate) fn compute_expr_inner(
         NodeKind::NewExpr => nodes::NewExpr::cast(tree, node)
             .and_then(|n| n.ty(tree))
             .map(|tn| to_type_with_bindings(NodeRef::new(file, tn), bindings, ctx))
+            .unwrap_or_else(|| {
+                crate::infer_expr_type::infer_expr_type_from_context(
+                    NodeRef::new(file, node),
+                    bindings,
+                    ctx,
+                )
+                .non_null(ctx.db)
+            }),
+        NodeKind::AmendExpr => nodes::AmendExpr::cast(tree, node)
+            .and_then(|n| n.parent(tree))
+            .map(|parent| compute_expr_type(NodeRef::new(file, parent), bindings, ctx))
             .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
+}
+
+/// A tested receiver can be used at its tested type in the true branch.
+/// Compare declaration identities as well as names so a nested binding cannot
+/// accidentally inherit a guard on an outer variable. Body boundaries reset
+/// the receiver/lexical environment and are deliberately not crossed.
+fn guarded_access_type(
+    access: NodeRef,
+    name: &str,
+    resolved: crate::resolver::ResolvedType,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let Some(tree) = ctx.tree(access.file) else {
+        return resolved.ty;
+    };
+    let mut child = access.value;
+    while let Some(parent) = tree.parent(child) {
+        if matches!(
+            tree.kind(parent),
+            NodeKind::ObjectBody | NodeKind::FunctionLiteralExpr
+        ) {
+            break;
+        }
+        if let Some(branch) = nodes::IfExpr::cast(tree, parent)
+            && branch.then_branch(tree) == Some(child)
+            && let Some(condition) = branch.condition(tree)
+            && matches!(tree.kind(condition), NodeKind::TypeTestExpr)
+            && let Some(test) = nodes::BinaryExpr::cast(tree, condition)
+            && let (Some(operand), Some(target)) = (test.left(tree), test.right(tree))
+            && matches!(tree.kind(operand), NodeKind::UnqualifiedAccessExpr)
+            && tree.name(operand) == Some(name)
+            && tree.is_property_access(operand)
+            && resolve_unqualified_access_with_bindings(
+                access.with_value(operand),
+                name,
+                bindings,
+                ctx,
+            )
+            .is_some_and(|tested| tested.node == resolved.node)
+        {
+            return to_type_with_bindings(access.with_value(target), bindings, ctx);
+        }
+        child = parent;
+    }
+    resolved.ty
 }
 
 /// Bind a method's explicit type arguments in the caller's lexical context.
@@ -278,7 +341,6 @@ pub(crate) fn compute_this_type_inner(
         return Type::Unknown;
     };
     let node = node.value;
-    let _ = bindings;
     let mut current = Some(node);
     while let Some(id) = current {
         match tree.kind(id) {
@@ -301,7 +363,55 @@ pub(crate) fn compute_this_type_inner(
                 return to_type_with_bindings(NodeRef::new(file, inner), bindings, ctx);
             }
             NodeKind::TypeAlias => return Type::Unknown,
-            NodeKind::AmendExpr | NodeKind::NewExpr | NodeKind::ObjectBody => return Type::Unknown, // TODO properly handle these cases
+            NodeKind::NewExpr => {
+                return compute_expr_type(NodeRef::new(file, id), bindings, ctx);
+            }
+            NodeKind::AmendExpr => {
+                // The receiver expression is evaluated in the *outer* scope.
+                // Only the amendment body introduces the amended receiver.
+                if id == node {
+                    return compute_expr_type(NodeRef::new(file, id), bindings, ctx);
+                }
+                current = tree.parent(id);
+            }
+            NodeKind::ObjectBody => {
+                let Some(parent) = tree.parent(id) else {
+                    return Type::Unknown;
+                };
+                let owner = NodeRef::new(file, parent);
+                match tree.kind(parent) {
+                    NodeKind::NewExpr | NodeKind::AmendExpr => {
+                        return compute_expr_type(owner, bindings, ctx);
+                    }
+                    NodeKind::ClassProperty | NodeKind::ObjectProperty => {
+                        return crate::infer_expr_type::property_body_type(owner, bindings, ctx)
+                            .non_null(ctx.db);
+                    }
+                    NodeKind::ObjectEntry | NodeKind::MemberPredicate => {
+                        let receiver = compute_this_type(owner, bindings, ctx);
+                        return crate::resolver::container_value_type(&receiver, ctx)
+                            .unwrap_or(Type::Unknown);
+                    }
+                    NodeKind::Annotation => {
+                        let Some(name) = nodes::Annotation::cast(tree, parent)
+                            .and_then(|annotation| annotation.name(tree))
+                        else {
+                            return Type::Unknown;
+                        };
+                        return crate::resolver::resolve_type_name(
+                            ctx,
+                            &tree.qualified_identifier_segments(name),
+                            NodeRef::new(file, name),
+                        )
+                        .and_then(|node| crate::class_id(ctx.db, node, ctx.root))
+                        .map(Type::class)
+                        .unwrap_or(Type::Unknown);
+                    }
+                    // Generator bodies do not introduce a new receiver.
+                    NodeKind::WhenGenerator | NodeKind::ForGenerator => current = Some(parent),
+                    _ => return Type::Unknown,
+                }
+            }
             _ => current = tree.parent(id),
         }
     }

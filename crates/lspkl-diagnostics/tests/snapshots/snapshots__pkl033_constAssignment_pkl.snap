@@ -3,5 +3,6 @@ source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
 3:16 error: Cannot assign to const property `pi`.
+3:21 error: Type mismatch. Expected: Float. Actual: Int
 4:24 error: Cannot amend const property `current`.
 8:25 error: Cannot assign to const property `value`.

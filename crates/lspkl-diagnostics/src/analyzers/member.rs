@@ -49,6 +49,11 @@ impl Analyzer for MemberAnalyzer {
         }
         let node = node.value;
 
+        // Local properties define lexical bindings, not receiver overrides.
+        if source_tree.has_modifier(node, lspkl_syntax::ast::TokenType::Local) {
+            return true;
+        }
+
         // Defining (has TypeAnnotation child) — never flag.
         if nodes::ClassProperty::cast(source_tree, node)
             .and_then(|property| property.type_annotation(source_tree))
@@ -66,7 +71,8 @@ impl Analyzer for MemberAnalyzer {
             return true;
         }
 
-        let this_type = lspkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);
+        let this_type =
+            lspkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root).unaliased(ctx.db);
 
         // Unknown, Dynamic, and non-Object receivers have no analyzable members.
         if matches!(this_type, Type::Unknown) {
@@ -236,11 +242,7 @@ fn check_const_assignment(
     let Some(name) = tree.name(node.value) else {
         return;
     };
-    let mut ty = if *tree.kind(node.value) == NodeKind::ObjectProperty {
-        object_parent_type(node.file, node.value, tree, ctx)
-    } else {
-        lspkl_types::this_type(ctx.db, node, ctx.root)
-    };
+    let mut ty = lspkl_types::this_type(ctx.db, node, ctx.root);
     if *tree.kind(node.value) == NodeKind::ClassProperty {
         ty = lspkl_types::resolver::super_type(&ty, ctx.db).unwrap_or(Type::Unknown);
     }
@@ -269,59 +271,6 @@ fn check_const_assignment(
             format!("Cannot assign to const property `{name}`.")
         },
     );
-}
-
-// this_type deliberately recovers object-local scopes as Unknown. For this
-// check we only need the explicit parent, not the object's inferred members.
-fn object_parent_type(
-    file: lspkl_db::File,
-    property: NodeId,
-    tree: &SyntaxTree,
-    ctx: &AnalysisContext,
-) -> Type {
-    let Some(body) = tree.ancestor(property, |kind| matches!(kind, NodeKind::ObjectBody)) else {
-        return Type::Unknown;
-    };
-    let Some(parent) = tree.parent(body) else {
-        return Type::Unknown;
-    };
-    let expression = if let Some(amend) = nodes::AmendExpr::cast(tree, parent) {
-        amend.parent(tree)
-    } else if nodes::NewExpr::cast(tree, parent).is_some() {
-        Some(parent)
-    } else if matches!(
-        tree.kind(parent),
-        NodeKind::ObjectProperty | NodeKind::ClassProperty
-    ) {
-        // Each recursive call moves to a strict ancestor body, so recursion is
-        // bounded by syntax nesting, not inheritance or import graph size.
-        let value = nodes::ObjectProperty::cast(tree, parent)
-            .and_then(|p| p.value(tree))
-            .or_else(|| nodes::ClassProperty::cast(tree, parent).and_then(|p| p.value(tree)));
-        if let Some(value) = value {
-            Some(value)
-        } else {
-            let receiver = if *tree.kind(parent) == NodeKind::ObjectProperty {
-                object_parent_type(file, parent, tree, ctx)
-            } else {
-                // The declaration being amended shadows its inherited member
-                // with an unavailable body type. Resolve on the superclass.
-                let this = lspkl_types::this_type(ctx.db, NodeRef::new(file, parent), ctx.root);
-                lspkl_types::resolver::super_type(&this, ctx.db).unwrap_or(Type::Unknown)
-            };
-            return tree
-                .name(parent)
-                .and_then(|name| lspkl_types::find_member(ctx.db, &receiver, name))
-                .map(|member| member.ty.unaliased(ctx.db))
-                .unwrap_or(Type::Unknown);
-        }
-    } else {
-        None
-    };
-    expression
-        .and_then(|id| NodeRef::new(file, id).cast(ctx, nodes::Expr::cast))
-        .map(|expr| lspkl_types::expr_type(ctx.db, expr, ctx.root).unaliased(ctx.db))
-        .unwrap_or(Type::Unknown)
 }
 
 // MemberTable serves name lookup across all declaration kinds. Method obligations
