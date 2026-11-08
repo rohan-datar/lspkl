@@ -67,6 +67,7 @@ rustPlatform.buildRustPackage {
       crates/lspkl/tests/json_rpc.rs \
       crates/lspkl/tests/stdio.rs \
       crates/lspkl/tests/fallback_cache.rs \
+      crates/lspkl/tests/auto_sync.rs \
       crates/lspkl/tests/handlers.rs \
       crates/lspkl/tests/project_reload.rs \
       crates/lspkl/tests/settings_regressions.rs \
@@ -74,9 +75,10 @@ rustPlatform.buildRustPackage {
       crates/lspkl-project/tests/project_manager.rs \
       --replace-fail '#!/bin/sh' '#!${runtimeShell}'
     substituteInPlace crates/lspkl/tests/json_rpc.rs crates/lspkl/tests/stdio.rs \
-      crates/lspkl/tests/fallback_cache.rs \
+      crates/lspkl/tests/fallback_cache.rs crates/lspkl/tests/auto_sync.rs \
       --replace-fail '/bin/sleep' '${coreutils}/bin/sleep'
     substituteInPlace crates/lspkl/tests/stdio.rs crates/lspkl/tests/settings_regressions.rs \
+      crates/lspkl/tests/auto_sync.rs \
       --replace-fail '/bin/cat' '${coreutils}/bin/cat'
   '';
 
