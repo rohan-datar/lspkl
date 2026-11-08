@@ -172,6 +172,12 @@ impl ObjectElement {
     }
 }
 impl ObjectSpread {
+    pub fn is_null_safe(self, tree: &SyntaxTree) -> bool {
+        // Spread punctuation is not retained as arena children. The grammar
+        // starts this node at its contiguous `...`/`...?` marker.
+        tree.text(self.0).starts_with("...?")
+    }
+
     pub fn value(self, tree: &SyntaxTree) -> Option<NodeId> {
         expression(tree, self.0, 0)
     }

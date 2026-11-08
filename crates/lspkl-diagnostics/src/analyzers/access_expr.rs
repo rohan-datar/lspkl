@@ -39,7 +39,8 @@ impl Analyzer for AccessExprAnalyzer {
                     .cast(ctx, lspkl_syntax::ast::nodes::Expr::cast)
                     .map_or(Type::Unknown, |expr| {
                         lspkl_types::expr_type(ctx.db, expr, ctx.root)
-                    });
+                    })
+                    .unaliased(ctx.db);
 
                 // Suppression: receiver type unknown, or Dynamic on property access
                 if matches!(receiver_type, Type::Unknown) {
@@ -91,7 +92,8 @@ impl Analyzer for AccessExprAnalyzer {
                 else {
                     // Suppression on this-type:
                     let this_ty =
-                        lspkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root);
+                        lspkl_types::this_type(ctx.db, NodeRef::new(file, node), ctx.root)
+                            .unaliased(ctx.db);
                     if matches!(this_ty, Type::Unknown) {
                         return true;
                     }

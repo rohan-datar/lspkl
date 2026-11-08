@@ -2,4 +2,4 @@
 source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-(no diagnostics)
+23:6 error: Type mismatch. Expected: Dynamic|Collection<String>|Listing<String>. Actual: Bytes

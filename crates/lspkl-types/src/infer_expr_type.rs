@@ -90,7 +90,45 @@ pub(crate) fn infer_expr_type_inner(
 
         // `...other` inside an ObjectBody. `other` should be an Object/Listing/
         // Mapping (whichever matches the enclosing this-type).
-        NodeKind::ObjectSpread => compute_this_type(NodeRef::new(file, parent), bindings, ctx),
+        NodeKind::ObjectSpread => {
+            let receiver = compute_this_type(NodeRef::new(file, parent), bindings, ctx);
+            let Some(element) = container_value_type(&receiver, ctx) else {
+                // Dynamic and unavailable receiver shapes stay open.
+                return Type::Unknown;
+            };
+            let mut sources = vec![receiver.clone(), ctx.base.dynamic_type().clone()];
+            if receiver.is_subtype_of(ctx.base.listing_type(), ctx.db) {
+                sources.push(
+                    ctx.base
+                        .collection_type()
+                        .clone()
+                        .with_type_args(vec![element.clone()]),
+                );
+                if ctx.base.int_type().is_subtype_of(&element, ctx.db) {
+                    sources.push(ctx.base.bytes_type().clone());
+                }
+            } else if receiver.is_subtype_of(ctx.base.mapping_type(), ctx.db) {
+                let key = container_key_type(&receiver, ctx).unwrap_or(Type::Unknown);
+                sources.push(
+                    ctx.base
+                        .map_type()
+                        .clone()
+                        .with_type_args(vec![key, element]),
+                );
+            }
+            let expected = Type::union(sources, ctx.db);
+            if nodes::ObjectSpread::cast(tree, parent)
+                .is_some_and(|spread| spread.is_null_safe(tree))
+            {
+                expected.nullable(ctx.db)
+            } else {
+                expected
+            }
+        }
+        NodeKind::ObjectElement => {
+            let receiver = compute_this_type(NodeRef::new(file, parent), bindings, ctx);
+            container_value_type(&receiver, ctx).unwrap_or(Type::Unknown)
+        }
 
         // `[[predicate]] = value`. Children: [conditionExpr, valueExpr].
         //   - conditionExpr → Boolean
@@ -377,7 +415,13 @@ fn parent_declared_type(
     let file = parent.file;
     let tree = ctx.tree(file)?;
     let parent = parent.value;
-    let annotation = crate::resolver::member_type_annotation(tree, parent)?;
+    let Some(annotation) = crate::resolver::member_type_annotation(tree, parent) else {
+        return matches!(
+            tree.kind(parent),
+            NodeKind::ClassProperty | NodeKind::ObjectProperty
+        )
+        .then(|| inherited_property_type(NodeRef::new(file, parent), bindings, ctx));
+    };
     let type_node = nodes::TypeAnnotation::cast(tree, annotation)?.ty(tree)?;
 
     Some(to_type_with_bindings(
@@ -385,6 +429,57 @@ fn parent_declared_type(
         bindings,
         ctx,
     ))
+}
+
+/// A property amendment uses its annotation, value, or inherited declaration,
+/// never inference of the body itself.
+pub(crate) fn property_body_type(
+    property: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let Some(tree) = ctx.tree(property.file) else {
+        return Type::Unknown;
+    };
+    if crate::resolver::member_type_annotation(tree, property.value).is_some() {
+        return parent_declared_type(property, bindings, ctx).unwrap_or(Type::Unknown);
+    }
+    let value = nodes::ClassProperty::cast(tree, property.value)
+        .and_then(|p| p.value(tree))
+        .or_else(|| nodes::ObjectProperty::cast(tree, property.value).and_then(|p| p.value(tree)));
+    if let Some(value) = value {
+        return compute_expr_type(property.with_value(value), bindings, ctx);
+    }
+    inherited_property_type(property, bindings, ctx)
+}
+
+pub(crate) fn inherited_property_type(
+    property: NodeRef,
+    bindings: &TypeBindings,
+    ctx: &AnalysisContext,
+) -> Type {
+    let Some(tree) = ctx.tree(property.file) else {
+        return Type::Unknown;
+    };
+    let Some(name) = tree.name(property.value) else {
+        return Type::Unknown;
+    };
+    let receiver = compute_this_type(property, bindings, ctx);
+    // A lowered override shadows the inherited declaration; do not infer its
+    // own initializer to discover that initializer's contextual type.
+    let receiver = if crate::decl_for_node(ctx.db, property, ctx.root).is_some() {
+        let parent = crate::resolver::super_type(&receiver, ctx.db).or_else(|| {
+            matches!(receiver.unconstrained(), Type::Module { .. })
+                .then(|| ctx.base.module_type().clone())
+        });
+        let Some(parent) = parent else {
+            return Type::Unknown;
+        };
+        parent
+    } else {
+        receiver
+    };
+    find_member_on_type(&receiver, name, bindings, ctx).map_or(Type::Unknown, |member| member.ty)
 }
 
 fn infer_type_from_arg_list(

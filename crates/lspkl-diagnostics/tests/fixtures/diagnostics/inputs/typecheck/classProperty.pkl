@@ -1,4 +1,4 @@
-// Known gap: the String override of `prop` is not reported against `Int(this > 3)`.
+// The String override must be checked against the inherited constrained Int.
 open class Baz {
   prop: Int(this > 3)
 }

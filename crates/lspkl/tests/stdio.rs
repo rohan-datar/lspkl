@@ -1260,3 +1260,47 @@ async fn https_fetch_is_coalesced_across_two_input_epochs() {
     );
     assert_eq!(after, 1, "network GET count after cache replay");
 }
+
+#[tokio::test]
+async fn contextual_object_this_supports_hover_completion_and_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = uri(&temp.path().join("contextual.pkl"));
+    let source = concat!(
+        "class Inner { number: Int = 42 }\n",
+        "class Outer { inner: Inner }\n",
+        "value: Outer = new { inner { local result = this.number } }\n",
+    );
+    let mut client = start(temp.path(), json!({})).await;
+    open(&mut client, &document, source).await;
+    assert_eq!(
+        diagnostics(&mut client, &document).await["diagnostics"],
+        json!([])
+    );
+    let hover = at(
+        &mut client,
+        "textDocument/hover",
+        &document,
+        source,
+        "number",
+    )
+    .await;
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.contains("number: Int"), "{hover}");
+    let completion = at(
+        &mut client,
+        "textDocument/completion",
+        &document,
+        source,
+        "number",
+    )
+    .await;
+    assert!(
+        completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "number"),
+        "{completion}"
+    );
+    client.shutdown().await;
+}

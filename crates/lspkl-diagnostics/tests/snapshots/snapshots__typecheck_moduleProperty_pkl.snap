@@ -2,4 +2,4 @@
 source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-(no diagnostics)
+4:8 error: Type mismatch. Expected: Int(this > 3). Actual: "Hello there"

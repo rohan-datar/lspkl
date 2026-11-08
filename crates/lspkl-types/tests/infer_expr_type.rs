@@ -496,13 +496,10 @@ fn for_generator_iterable_accepts_every_iterable_kind() {
 }
 
 // ---------------------------------------------------------------------------
-// Container value types require compute_this_type_inner to resolve object bodies.
-// It currently returns Unknown for NewExpr, AmendExpr, and ObjectBody, so the
-// expected value type cannot yet be extracted.
+// Container value types are extracted from the enclosing object receiver.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "compute_this_type_inner returns Unknown for NewExpr/ObjectBody receivers"]
 fn object_entry_value_uses_mapping_value_type() {
     let base = harness::load_test_base();
     harness::with_snippet(
@@ -528,7 +525,6 @@ fn object_entry_value_uses_mapping_value_type() {
 }
 
 #[test]
-#[ignore = "compute_this_type_inner returns Unknown for NewExpr/ObjectBody receivers"]
 fn member_predicate_value_uses_container_value_type() {
     let base = harness::load_test_base();
     harness::with_snippet(&base, r#"x: Listing<Int> = new { [[true]] = 1 }"#, |ctx| {

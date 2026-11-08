@@ -1,4 +1,4 @@
-// Known gap: the String value of `prop` is not reported against Foo's `Int(this > 3)`.
+// Check the String value against Foo's inherited constrained Int.
 amends ".../inputHelpers/typecheck/Foo.pkl"
 
 prop = "Hello there"

@@ -1,4 +1,4 @@
-// `foo` and the Listing element are reported; contextual object-property and Mapping-key checks remain gaps.
+// Check declared property, nested object, Listing element, and Mapping key types.
 foo: String = 15
 
 class Person {

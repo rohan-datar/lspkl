@@ -131,6 +131,11 @@ pub fn import_type(node: NodeRef, ctx: &AnalysisContext) -> Type {
 }
 
 pub fn is_subclass(mut a: crate::ClassId, b: crate::ClassId, db: &dyn lspkl_db::Db) -> bool {
+    // Any is the universal top type, including for classes whose implicit
+    // superclass is not represented in the lowered inheritance table.
+    if Type::class(b).class_equals(crate::base_module(db).any_type()) {
+        return true;
+    }
     let mut seen = std::collections::HashSet::new();
     while seen.insert(a) {
         if a == b {
@@ -334,7 +339,7 @@ pub(crate) fn declaration_type_with_bindings(
         };
         return member_value(tree, node.value)
             .map(|expr| compute_expr_type(node.with_value(expr), bindings, &ctx))
-            .unwrap_or(Type::Unknown);
+            .unwrap_or_else(|| amended_property_type(node, bindings, &ctx));
     }
     crate::inference::decl_type(db, decl)
 }
@@ -388,7 +393,7 @@ pub(crate) fn compute_decl_type(db: &dyn lspkl_db::Db, decl: crate::DeclId) -> T
     };
     member_value(tree, node.value)
         .map(|expr| compute_expr_type(node.with_value(expr), &TypeBindings::new(), &ctx))
-        .unwrap_or(Type::Unknown)
+        .unwrap_or_else(|| amended_property_type(node, &TypeBindings::new(), &ctx))
 }
 pub(crate) fn definition_type_with_bindings(
     node: NodeRef,
@@ -406,10 +411,33 @@ pub(crate) fn definition_type_with_bindings(
     {
         return to_type_with_bindings(node.with_value(annotation), bindings, ctx);
     }
+    if matches!(tree.kind(node.value), NodeKind::ObjectProperty)
+        && !tree.has_modifier(node.value, lspkl_syntax::ast::TokenType::Local)
+    {
+        let inherited = crate::infer_expr_type::inherited_property_type(node, bindings, ctx);
+        if !matches!(inherited, Type::Unknown) {
+            return inherited;
+        }
+    }
     member_value(tree, node.value)
         .map(|expr| compute_expr_type(node.with_value(expr), bindings, ctx))
-        .unwrap_or(Type::Unknown)
+        .unwrap_or_else(|| amended_property_type(node, bindings, ctx))
 }
+
+fn amended_property_type(node: NodeRef, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    let Some(tree) = ctx.tree(node.file) else {
+        return Type::Unknown;
+    };
+    let body = nodes::ClassProperty::cast(tree, node.value)
+        .and_then(|p| p.body(tree))
+        .or_else(|| nodes::ObjectProperty::cast(tree, node.value).and_then(|p| p.body(tree)));
+    if body.is_some() {
+        crate::infer_expr_type::property_body_type(node, bindings, ctx).non_null(ctx.db)
+    } else {
+        Type::Unknown
+    }
+}
+
 pub fn super_type(ty: &Type, db: &dyn lspkl_db::Db) -> Option<Type> {
     use crate::items::*;
     match ty.unconstrained() {

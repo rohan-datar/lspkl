@@ -1,4 +1,4 @@
-// Known gap: spreading nullable `bar` without `...?`, spreading an Int, and spreading Bytes into `Listing<String>` are not reported.
+// Known gap: unknown receivers cannot constrain spreads; Bytes work in Listing<Int>, not Listing<String>.
 bar: Mapping?
 
 myNum: Int

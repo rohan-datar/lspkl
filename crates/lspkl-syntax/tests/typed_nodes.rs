@@ -316,3 +316,41 @@ fn variance_tokens_survive_comments_and_identifier_prefixes() {
             .any(|&id| tree.text(id) == "out")
     );
 }
+
+#[test]
+fn qualified_and_super_accesses_distinguish_properties_from_calls() {
+    for (source, kind, property) in [
+        ("x = this.value", NodeKind::QualifiedAccessExpr, true),
+        ("x = this.method()", NodeKind::QualifiedAccessExpr, false),
+        ("x = super.value", NodeKind::SuperAccessExpr, true),
+        ("x = super.method()", NodeKind::SuperAccessExpr, false),
+    ] {
+        let tree = parse(source).unwrap();
+        assert_eq!(
+            tree.is_property_access(find(&tree, kind)),
+            property,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn spread_views_preserve_null_safe_marker() {
+    for (source, null_safe) in [
+        ("x = new { ...items }", false),
+        ("x = new { ...?items }", true),
+    ] {
+        let tree = parse(source).unwrap();
+        let spread = ObjectSpread::cast(&tree, find(&tree, NodeKind::ObjectSpread)).unwrap();
+        assert_eq!(
+            spread.is_null_safe(&tree),
+            null_safe,
+            "{:?}",
+            tree.children(spread.id())
+                .iter()
+                .map(|id| (tree.kind(*id), tree.text(*id)))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(tree.text(spread.value(&tree).unwrap()), "items");
+    }
+}
