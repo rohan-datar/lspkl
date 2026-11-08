@@ -52,7 +52,7 @@ impl DiagnosticsEngine {
             .with(Box::new(analyzers::ModifierAnalyzer))
             .with(Box::new(analyzers::AnnotationAnalyzer))
             .with(Box::new(analyzers::MemberAnalyzer))
-            .with(Box::new(analyzers::pkl_033::Pkl033Analyzer))
+            .with(Box::new(analyzers::SelfTypeAnalyzer))
             .with(Box::new(analyzers::ModuleUriAnalyzer))
             .with(Box::new(analyzers::UnsupportedFeatureAnalyzer))
             .with(Box::new(analyzers::TypeCheckAnalyzer))
