@@ -1,0 +1,6 @@
+open class Base {}
+class Sub extends Base {}
+c2 = Base as Class<Sub>
+t2 = Base is Class<Sub>
+function possibleCast(value: Class<Base>) = value as Class<Sub>
+function possibleTest(value: Class<Base>) = value is Class<Sub>

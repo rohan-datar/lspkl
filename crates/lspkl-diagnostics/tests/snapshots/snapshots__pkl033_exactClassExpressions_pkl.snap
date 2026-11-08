@@ -1,0 +1,6 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+3:6 error: type cast cannot succeed
+4:6 warning: expression is always false

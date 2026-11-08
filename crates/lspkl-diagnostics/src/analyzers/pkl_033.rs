@@ -161,9 +161,49 @@ fn check_type(
             .iter()
             .any(|own| own.name == member.name && !own.modifiers.contains(Modifiers::LOCAL));
         if !overridden && member.modifiers.contains(Modifiers::ABSTRACT) {
-            holder.add_error(span, format!("Class `{name}` should either be declared `abstract`, or should implement method `{}`.", member.name.text(ctx.db)));
+            holder.add_error(span, format!("Class `{name}` should either be declared `abstract`, or should implement method `{}`.", method_call_signature(member, ctx)));
         }
     }
+}
+
+fn method_call_signature(member: &lspkl_types::MemberDecl, ctx: &AnalysisContext) -> String {
+    let lspkl_types::ItemId::Method(index) = member.declaration.item else {
+        return member.name.text(ctx.db).to_owned();
+    };
+    let parameters = module_items(ctx.db, member.declaration.file).methods[index]
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.map_or("_", |name| name.text(ctx.db)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}({parameters})", member.name.text(ctx.db))
+}
+
+// Pkl flattens lambdas nested in lambdas when numbering their display names.
+fn lambda_scope_name(tree: &SyntaxTree, member: NodeId, lambda: NodeId) -> String {
+    let mut pending = vec![member];
+    let mut count = 0;
+    while let Some(node) = pending.pop() {
+        if *tree.kind(node) == NodeKind::FunctionLiteralExpr {
+            count += 1;
+        }
+        if node == lambda {
+            break;
+        }
+        if node != member
+            && matches!(
+                tree.kind(node),
+                NodeKind::ClassProperty
+                    | NodeKind::ObjectProperty
+                    | NodeKind::ClassMethod
+                    | NodeKind::ObjectMethod
+            )
+        {
+            continue;
+        }
+        pending.extend(tree.children(node).iter().rev().copied());
+    }
+    format!("{}.<function#{count}>", tree.name(member).unwrap_or(""))
 }
 
 fn check_self_type(node: NodeRef, tree: &SyntaxTree, holder: &mut DiagnosticsHolder) {
@@ -176,10 +216,66 @@ fn check_self_type(node: NodeRef, tree: &SyntaxTree, holder: &mut DiagnosticsHol
     let mut context = None;
     let mut object_scope = false;
     let mut custom_this = false;
+    // Eager generator expressions execute outside their immediately enclosing
+    // object. Lambdas/lets/methods do not introduce a const-depth barrier.
+    let mut skip_object = false;
+    let mut method_scope = false;
+    let mut lambda_scope = None;
     while let Some(parent) = current {
         match tree.kind(parent) {
-            NodeKind::ObjectBody => object_scope = true,
-            // Constraints give `this` a new receiver, but do not relax `module`.
+            NodeKind::ObjectBody => {
+                if skip_object {
+                    skip_object = false;
+                } else if !tree.parent(parent).is_some_and(|owner| {
+                    matches!(
+                        tree.kind(owner),
+                        NodeKind::ForGenerator | NodeKind::WhenGenerator
+                    )
+                }) {
+                    object_scope = true;
+                }
+            }
+            NodeKind::FunctionLiteralExpr => {
+                method_scope = true;
+                lambda_scope.get_or_insert(parent);
+            }
+            NodeKind::ObjectEntry
+                if nodes::ObjectEntry::cast(tree, parent).and_then(|entry| entry.key(tree))
+                    == Some(child) =>
+            {
+                skip_object = true;
+                method_scope = true;
+            }
+            NodeKind::ObjectSpread => {
+                skip_object = true;
+                method_scope = true;
+            }
+            NodeKind::WhenGenerator
+                if nodes::WhenGenerator::cast(tree, parent)
+                    .and_then(|generator| generator.condition(tree))
+                    == Some(child) =>
+            {
+                skip_object = true;
+                method_scope = true;
+            }
+            NodeKind::ForGenerator
+                if nodes::ForGenerator::cast(tree, parent)
+                    .and_then(|generator| generator.iterable(tree))
+                    == Some(child) =>
+            {
+                skip_object = true;
+                method_scope = true;
+            }
+            NodeKind::MemberPredicate
+                if nodes::MemberPredicate::cast(tree, parent)
+                    .and_then(|predicate| predicate.condition(tree))
+                    == Some(child) =>
+            {
+                custom_this = true;
+                skip_object = true;
+                method_scope = true;
+            }
+            // Custom-this scopes reset the inherited const level in Pkl.
             NodeKind::ConstrainedType => {
                 if nodes::ConstrainedType::cast(tree, parent).and_then(|ty| ty.inner(tree))
                     != Some(child)
@@ -191,7 +287,7 @@ fn check_self_type(node: NodeRef, tree: &SyntaxTree, holder: &mut DiagnosticsHol
             | NodeKind::ClassMethod
             | NodeKind::ObjectProperty
             | NodeKind::ObjectMethod => {
-                if tree.has_modifier(parent, TokenType::Const) {
+                if !custom_this && tree.has_modifier(parent, TokenType::Const) {
                     const_member = Some(parent);
                     if !object_scope && !custom_this {
                         invalid_const_this = true;
@@ -199,19 +295,19 @@ fn check_self_type(node: NodeRef, tree: &SyntaxTree, holder: &mut DiagnosticsHol
                 }
             }
             NodeKind::TypeAlias => {
-                if module_type || (!object_scope && !custom_this) {
+                if !custom_this && (module_type || !object_scope) {
                     context = Some("a type alias body");
                 }
                 break;
             }
             NodeKind::Class => {
-                if module_type {
+                if module_type && !custom_this {
                     context = Some("a class body");
                 }
                 break;
             }
             NodeKind::Annotation => {
-                if module_type {
+                if module_type && !custom_this {
                     context = Some("an annotation body");
                 }
                 break;
@@ -222,17 +318,21 @@ fn check_self_type(node: NodeRef, tree: &SyntaxTree, holder: &mut DiagnosticsHol
         current = tree.parent(parent);
     }
     let message = if let Some(member) = const_member.filter(|_| module_type || invalid_const_this) {
-        let kind = if matches!(
-            tree.kind(member),
-            NodeKind::ClassMethod | NodeKind::ObjectMethod
-        ) {
+        let kind = if (!module_type && method_scope)
+            || matches!(
+                tree.kind(member),
+                NodeKind::ClassMethod | NodeKind::ObjectMethod
+            ) {
             "method"
         } else {
             "property"
         };
         Some(format!(
             "Cannot reference `{word}` type from const {kind} `{}`.",
-            tree.name(member).unwrap_or("")
+            lambda_scope.filter(|_| !module_type).map_or_else(
+                || tree.name(member).unwrap_or("").to_owned(),
+                |lambda| lambda_scope_name(tree, member, lambda)
+            )
         ))
     } else {
         context.map(|context| format!("Cannot reference `{word}` type within {context}."))
@@ -314,6 +414,32 @@ fn object_parent_type(
         amend.parent(tree)
     } else if nodes::NewExpr::cast(tree, parent).is_some() {
         Some(parent)
+    } else if matches!(
+        tree.kind(parent),
+        NodeKind::ObjectProperty | NodeKind::ClassProperty
+    ) {
+        // Each recursive call moves to a strict ancestor body, so recursion is
+        // bounded by syntax nesting, not inheritance or import graph size.
+        let value = nodes::ObjectProperty::cast(tree, parent)
+            .and_then(|p| p.value(tree))
+            .or_else(|| nodes::ClassProperty::cast(tree, parent).and_then(|p| p.value(tree)));
+        if let Some(value) = value {
+            Some(value)
+        } else {
+            let receiver = if *tree.kind(parent) == NodeKind::ObjectProperty {
+                object_parent_type(file, parent, tree, ctx)
+            } else {
+                // The declaration being amended shadows its inherited member
+                // with an unavailable body type. Resolve on the superclass.
+                let this = lspkl_types::this_type(ctx.db, NodeRef::new(file, parent), ctx.root);
+                lspkl_types::resolver::super_type(&this, ctx.db).unwrap_or(Type::Unknown)
+            };
+            return tree
+                .name(parent)
+                .and_then(|name| lspkl_types::find_member(ctx.db, &receiver, name))
+                .map(|member| member.ty.unaliased(ctx.db))
+                .unwrap_or(Type::Unknown);
+        }
     } else {
         None
     };

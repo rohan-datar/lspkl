@@ -362,7 +362,12 @@ fn target_is_const(target: NodeRef, ctx: &AnalysisContext) -> bool {
     let Some(tree) = ctx.tree(target.file) else {
         return false;
     };
-    tree.has_modifier(target.value, TokenType::Const)
+    // Lexical bindings (parameters, let/for bindings) are not receiver members
+    // and remain available in const methods and lambdas.
+    matches!(
+        tree.kind(target.value),
+        NodeKind::TypedIdentifier | NodeKind::BlankIdentifier
+    ) || tree.has_modifier(target.value, TokenType::Const)
 }
 
 /// Returns `(is_const, is_in_const_scope)` for the given access node.
@@ -370,9 +375,24 @@ fn const_scope(access: NodeId, file: lspkl_db::File, ctx: &AnalysisContext) -> (
     let Some(source_tree) = ctx.tree(file) else {
         return (false, false);
     };
+    let mut child = access;
     let mut current = source_tree.parent(access);
     while let Some(id) = current {
         match source_tree.kind(id) {
+            NodeKind::ConstrainedType
+                if nodes::ConstrainedType::cast(source_tree, id)
+                    .and_then(|ty| ty.inner(source_tree))
+                    != Some(child) =>
+            {
+                return (false, false);
+            }
+            NodeKind::MemberPredicate
+                if nodes::MemberPredicate::cast(source_tree, id)
+                    .and_then(|predicate| predicate.condition(source_tree))
+                    == Some(child) =>
+            {
+                return (false, false);
+            }
             NodeKind::ClassProperty | NodeKind::ClassMethod => {
                 return (source_tree.has_modifier(id, TokenType::Const), false);
             }
@@ -389,7 +409,10 @@ fn const_scope(access: NodeId, file: lspkl_db::File, ctx: &AnalysisContext) -> (
                 }
                 return (false, false);
             }
-            _ => current = source_tree.parent(id),
+            _ => {
+                child = id;
+                current = source_tree.parent(id);
+            }
         }
     }
     (false, false)

@@ -43,8 +43,16 @@ fn inherited_abstract_methods_cross_files_and_sdk() {
         .with(Box::new(Pkl033Analyzer))
         .analyze(&AnalysisContext::for_root(&*db, file), file);
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-    assert!(diagnostics.iter().any(|d| d.message.contains("method `f`")));
-    assert!(diagnostics.iter().any(|d| d.message.contains("method `g`")));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("method `f()`"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("method `g()`"))
+    );
 }
 
 #[test]
@@ -100,7 +108,7 @@ fn local_methods_do_not_implement_inherited_abstract_methods() {
         "abstract class A { abstract function f(): Int }\nclass B extends A { local function f(): Int = 1 }\n",
     );
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert!(diagnostics[0].message.contains("implement method `f`"));
+    assert!(diagnostics[0].message.contains("implement method `f()`"));
 }
 
 #[test]
@@ -116,5 +124,63 @@ fn amending_module_cannot_assign_inherited_const_properties() {
     assert_eq!(
         diagnostics[0].message,
         "Cannot assign to const property `value`."
+    );
+}
+
+#[test]
+fn upstream_this_type_const_depth_cases() {
+    assert!(
+        analyze(include_str!(
+            "fixtures/diagnostics/inputs/pkl033/thisType9.pkl"
+        ))
+        .is_empty()
+    );
+    let key = analyze(include_str!(
+        "fixtures/diagnostics/inputs/pkl033/thisType10.pkl"
+    ));
+    assert_eq!(key.len(), 1, "{key:?}");
+    assert_eq!(
+        key[0].message,
+        "Cannot reference `this` type from const method `foo`."
+    );
+    let lambda = analyze(include_str!(
+        "fixtures/diagnostics/inputs/pkl033/thisType11.pkl"
+    ));
+    assert_eq!(lambda.len(), 1, "{lambda:?}");
+    assert_eq!(
+        lambda[0].message,
+        "Cannot reference `this` type from const method `func.<function#1>`."
+    );
+    assert!(
+        analyze(include_str!(
+            "fixtures/diagnostics/inputs/pkl033/memberPredicateThis.pkl"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn nested_amendments_resolve_property_receivers_conservatively() {
+    let diagnostics = analyze(include_str!(
+        "fixtures/diagnostics/inputs/pkl033/nestedConstAssignment.pkl"
+    ));
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message == "Cannot assign to const property `secret`.")
+    );
+}
+
+#[test]
+fn abstract_method_obligations_include_parameter_names() {
+    let diagnostics = analyze(include_str!(
+        "fixtures/diagnostics/inputs/pkl033/abstractMethodParameters.pkl"
+    ));
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("method `foo(first, second)`")
     );
 }

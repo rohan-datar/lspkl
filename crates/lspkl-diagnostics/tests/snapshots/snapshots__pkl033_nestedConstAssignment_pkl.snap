@@ -1,0 +1,7 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+7:26 error: Cannot assign to const property `secret`.
+8:40 error: Cannot assign to const property `secret`.
+9:40 error: Cannot assign to const property `secret`.
