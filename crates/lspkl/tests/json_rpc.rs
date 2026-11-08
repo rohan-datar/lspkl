@@ -45,8 +45,10 @@ fn sync_projects_round_trip_via_jsonrpc() {
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     let mut peer = Peer::start(
         Workspace::new(),
-        json!({"capabilities":{},"workspaceFolders":[{"uri":url::Url::from_directory_path(&workspace).unwrap().as_str(),"name":"fixture"}],"initializationOptions":{"cli":{"path":binary},"cacheDir":cache}}),
+        json!({"capabilities":{},"workspaceFolders":[{"uri":url::Url::from_directory_path(&workspace).unwrap().as_str(),"name":"fixture"}],"initializationOptions":{"cli":{"path":binary},"cacheDir":cache,"projects":{"autoSync":false}}}),
     );
+    // This test covers the explicit command; automatic sync could otherwise
+    // run first and record a second resolve/eval pair.
     let response = peer.request("pkl/syncProjects", Value::Null);
     assert!(response.get("error").is_none(), "{response}");
     let state_file = workspace.join(".lspkl/projects.json");
