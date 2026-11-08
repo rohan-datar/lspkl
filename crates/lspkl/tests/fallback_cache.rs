@@ -384,6 +384,14 @@ fn version_child() {
     } else if scenario == "override" {
         assert!(!probes.exists(), "explicit cache does not need CLI probing");
     } else {
+        // When the startup default already equals the version-derived cache,
+        // the loop above can finish before the background probe runs. Wait for
+        // the probe to be recorded, then require exactly one.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !probes.exists() {
+            assert!(Instant::now() < deadline, "version probe never ran");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(fs::read_to_string(probes).unwrap().lines().count(), 1);
     }
     peer.stop();
