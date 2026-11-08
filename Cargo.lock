@@ -1116,6 +1116,7 @@ dependencies = [
  "lspkl-syntax",
  "lspkl-vfs",
  "parking_lot",
+ "regex",
  "salsa",
  "tempfile",
  "thiserror",

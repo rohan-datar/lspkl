@@ -34,7 +34,36 @@ fn annotation_type(db: &dyn Db, request: AnnotationRequest) -> Type {
     let ty = lower_type(db, tree, node.value);
     let owner = owner_for_node(db, node, request.root(db));
     let bindings = request.bindings(db);
-    crate::type_resolution::resolve_in_file(db, node.file, request.root(db), owner, &ty, bindings)
+    // A header annotation has only type/header wrappers before its owning
+    // declaration. Body-local annotations can see locals absent from metadata.
+    let mut ancestor = tree.parent(node.value);
+    let mut declaration_header = false;
+    while let Some(id) = ancestor {
+        use lspkl_syntax::ast::NodeKind;
+        match tree.kind(id) {
+            NodeKind::ClassProperty | NodeKind::ClassMethod | NodeKind::TypeAlias => {
+                declaration_header =
+                    decl_for_node(db, node.with_value(id), request.root(db)).is_some();
+                break;
+            }
+            NodeKind::ObjectBody
+            | NodeKind::TypeCastExpr
+            | NodeKind::LetExpr
+            | NodeKind::FunctionLiteralExpr
+            | NodeKind::NewExpr
+            | NodeKind::AmendExpr => break,
+            _ => ancestor = tree.parent(id),
+        }
+    }
+    crate::type_resolution::resolve_in_file(
+        db,
+        node.file,
+        request.root(db),
+        owner,
+        &ty,
+        bindings,
+        declaration_header,
+    )
 }
 pub(crate) fn to_type_with_bindings(
     node: NodeRef,

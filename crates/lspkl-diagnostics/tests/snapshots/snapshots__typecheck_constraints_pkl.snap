@@ -2,4 +2,30 @@
 source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
-(no diagnostics)
+2:30 error: Type constraint `isBetween(5, 10)` violated.
+4:24 error: Type constraint `this > 10` violated.
+6:21 error: Type constraint `isEven` violated.
+8:20 error: Type constraint `isOdd` violated.
+10:24 error: Type constraint `isNonZero` violated.
+12:25 error: Type constraint `this == 10` violated.
+14:34 error: Type constraint `isBetween(5, 10)` violated.
+16:28 error: Type constraint `this > 10` violated.
+18:28 error: Type constraint `isNonZero` violated.
+20:29 error: Type constraint `this == 10` violated.
+22:24 error: Type constraint `isEmpty` violated.
+24:28 error: Type constraint `length == 3` violated.
+26:22 error: Type constraint `isEmpty` violated.
+28:23 error: Type constraint `!isEmpty` violated.
+30:26 error: Type constraint `length == 3` violated.
+32:22 error: Type constraint `isEmpty` violated.
+34:23 error: Type constraint `!isEmpty` violated.
+36:26 error: Type constraint `length == 3` violated.
+38:25 error: Type constraint `length > 3` violated.
+40:48 error: Type constraint `this == "hi" || this == "bye"` violated.
+42:46 error: Type constraint `this == "hi"` violated.
+44:46 error: Type constraint `isBetween(1.kb, 1.tb)` violated.
+46:36 error: Type constraint `this > 5.mb` violated.
+48:35 error: Type constraint `isPositive` violated.
+54:28 error: Type constraint `isEmpty` violated.
+61:3 error: Type constraint `matches(Regex(#"\d*"#))` violated.
+65:3 error: Type constraint `matches(Regex(#"\d*"#))` violated.
