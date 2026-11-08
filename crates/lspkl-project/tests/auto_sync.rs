@@ -1,8 +1,6 @@
-use lspkl_project::cli::PklCli;
 use lspkl_project::project_manager::ProjectManager;
 use serde_json::json;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn missing_project_entry_is_stale_even_when_state_file_is_newer() {
@@ -36,6 +34,8 @@ fn workspace_without_projects_is_not_stale() {
 #[cfg(unix)]
 #[test]
 fn just_synced_projects_are_fresh_before_persistence_until_inputs_change() {
+    use lspkl_project::cli::PklCli;
+    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let project = root.join("PklProject");
