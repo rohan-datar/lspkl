@@ -139,3 +139,23 @@ shadowed = if (value is Child) let (value = new Parent {}) value.number else 0
         "{diagnostics:?}"
     );
 }
+
+/// `[[condition]]` binds `this` to each member's value, not the enclosing
+/// object, so tests on it are neither always true nor always false.
+#[test]
+fn member_predicate_conditions_use_member_values_as_this() {
+    let base = harness::load_test_base();
+    let source = r#"
+open class Base
+class Sub extends Base
+dynamic = new Dynamic { [[this is this]] = 5; [[this is module]] = 6 }
+typed: Listing<Base> = new { new Sub {}; [[this is Sub]] { } }
+numbers: Listing<Int> = new { 1; [[this > 0]] = 2 }
+"#;
+    let file = base.add(1, source);
+    let db = base.db.borrow();
+    let ctx = AnalysisContext::for_root(&*db, file);
+    let diagnostics = DiagnosticsEngine::with_default_analyzers().analyze(&ctx, file);
+    let rendered = render_diagnostics(&diagnostics, lspkl_db::line_index(&*db, file));
+    assert!(diagnostics.is_empty(), "{rendered}");
+}

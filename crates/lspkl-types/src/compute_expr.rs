@@ -342,8 +342,21 @@ pub(crate) fn compute_this_type_inner(
     };
     let node = node.value;
     let mut current = Some(node);
+    let mut previous = None;
     while let Some(id) = current {
         match tree.kind(id) {
+            // `[[condition]]` evaluates its condition with `this` bound to each
+            // member's value (a custom-this scope), not the enclosing object.
+            NodeKind::MemberPredicate
+                if previous.is_some()
+                    && nodes::MemberPredicate::cast(tree, id)
+                        .and_then(|predicate| predicate.condition(tree))
+                        == previous =>
+            {
+                let receiver = compute_this_type(NodeRef::new(file, id), bindings, ctx);
+                return crate::resolver::container_value_type(&receiver, ctx)
+                    .unwrap_or(Type::Unknown);
+            }
             NodeKind::Module => {
                 return Type::Module {
                     module_id: crate::module_id(ctx.db, file, ctx.root),
@@ -414,6 +427,7 @@ pub(crate) fn compute_this_type_inner(
             }
             _ => current = tree.parent(id),
         }
+        previous = Some(id);
     }
     Type::Unknown
 }
