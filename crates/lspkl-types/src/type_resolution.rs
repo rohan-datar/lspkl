@@ -234,7 +234,23 @@ fn resolve_inner(
         TypeRef::StringLiteral(value) => Type::string_literal(value.clone()),
         TypeRef::Parenthesized(inner) | TypeRef::Default(inner) => resolve(inner),
         TypeRef::Nullable(inner) => resolve(inner).nullable(db),
-        TypeRef::Union(left, right) => Type::union([resolve(left), resolve(right)], db),
+        TypeRef::Union(_, _) => {
+            // Resolve a binary union as a single set, rather than repeatedly
+            // normalizing every prefix of a left-deep syntax tree.
+            let mut pending = vec![ty];
+            let mut alternatives = Vec::new();
+            while let Some(ty) = pending.pop() {
+                match ty {
+                    TypeRef::Union(left, right) => {
+                        pending.push(right);
+                        pending.push(left);
+                    }
+                    TypeRef::Parenthesized(inner) | TypeRef::Default(inner) => pending.push(inner),
+                    ty => alternatives.push(resolve(ty)),
+                }
+            }
+            Type::union(alternatives, db)
+        }
         TypeRef::Constrained { base, constraints } => Type::constrained(
             resolve(base),
             constraints.iter().map(ConstraintExpr::opaque).collect(),

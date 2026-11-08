@@ -1,0 +1,2 @@
+abstract class Parent { abstract function foo(first: Int, second: String): Int }
+class Child extends Parent {}

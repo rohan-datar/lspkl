@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+1:21 error: Cannot reference `this` type from const method `func.<function#1>`.

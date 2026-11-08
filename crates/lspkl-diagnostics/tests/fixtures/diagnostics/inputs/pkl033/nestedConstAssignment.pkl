@@ -1,0 +1,10 @@
+open class Child {
+  const secret: Int = 1
+  value: Int = 1
+}
+open class Parent { child: Child = new Child {} }
+open class Grandparent { parent: Parent = new Parent {} }
+p = new Parent { child { secret = 2; value = 2 } }
+g = new Grandparent { parent { child { secret = 2 } } }
+class Derived extends Parent { child { secret = 2 } }
+unresolved = new Dynamic { child { secret = 2 } }

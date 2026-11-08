@@ -61,7 +61,7 @@ pub enum Type {
 }
 
 /// `Class<T>` retains its argument in Pkl 0.33. Only non-parametric class
-/// arguments denote a runtime class; aliases are expanded before checking.
+/// or module arguments denote a runtime class; aliases are expanded before checking.
 fn class_argument_subtype(actual: Option<&Type>, expected: Option<&Type>, db: &dyn Db) -> bool {
     let Some(expected) = expected else {
         return true;
@@ -69,38 +69,24 @@ fn class_argument_subtype(actual: Option<&Type>, expected: Option<&Type>, db: &d
     let actual = actual.map(|ty| ty.unaliased(db));
     if actual
         .as_ref()
-        .is_some_and(|ty| matches!(ty.unconstrained(), Type::Unknown | Type::Variable { .. }))
+        .is_some_and(|ty| matches!(ty, Type::Unknown | Type::Variable { .. }))
     {
         return true;
     }
     let expected = expected.unaliased(db);
-    if matches!(
-        expected.unconstrained(),
-        Type::Unknown | Type::Variable { .. }
-    ) {
+    if matches!(expected, Type::Unknown | Type::Variable { .. }) {
         return true;
     }
-    let Type::Class {
-        class_id: expected_id,
-        type_args,
-    } = expected.unconstrained()
-    else {
-        return false;
+    let is_runtime_class = |ty: &Type| match ty {
+        Type::Class { type_args, .. } => type_args.is_empty(),
+        Type::Module { .. } => true,
+        _ => false,
     };
-    if !type_args.is_empty() {
+    if !is_runtime_class(&expected) {
         return false;
     }
     let Some(actual) = actual else { return true };
-    match actual.unconstrained() {
-        Type::Unknown | Type::Variable { .. } => true,
-        Type::Class {
-            class_id,
-            type_args,
-        } if type_args.is_empty() => {
-            class_id == expected_id || resolver::is_subclass(*class_id, *expected_id, db)
-        }
-        _ => false,
-    }
+    is_runtime_class(&actual) && actual.is_subtype_of(&expected, db)
 }
 
 impl Type {
@@ -159,11 +145,26 @@ impl Type {
         }
         alternatives.sort_unstable();
         alternatives.dedup();
+        // Distinct bare literals cannot absorb one another. Excluding those
+        // pairs makes literal-only unions O(n log n), including SDK aliases
+        // such as syntax.NodeType and repeated expansion/substitution. Keep
+        // other pairs (including aliases and constrained literals) intact.
+        let all_indices: Vec<_> = (0..alternatives.len()).collect();
+        let non_literals: Vec<_> = all_indices
+            .iter()
+            .copied()
+            .filter(|&i| !matches!(alternatives[i], Self::StringLiteral { .. }))
+            .collect();
         for i in 0..alternatives.len() {
             if matches!(alternatives[i], Self::Nothing) {
                 continue;
             }
-            for j in 0..alternatives.len() {
+            let candidates = if matches!(alternatives[i], Self::StringLiteral { .. }) {
+                &non_literals
+            } else {
+                &all_indices
+            };
+            for &j in candidates {
                 if i == j || matches!(alternatives[j], Self::Nothing) {
                     continue;
                 }
@@ -360,8 +361,15 @@ impl Type {
                 type_args,
             } => render_declaration(db, *alias_id, type_args, out),
             Self::Module { module_id } => {
-                if let Some(name) = module_items(db, module_id.file(db)).name {
+                let file = module_id.file(db);
+                if let Some(name) = module_items(db, file).name
+                    && !name.text(db).is_empty()
+                {
                     out.push_str(name.text(db));
+                } else {
+                    let uri = file.uri(db).as_str();
+                    let name = resolver::module_uri_name(uri);
+                    out.push_str(if name.is_empty() { uri } else { name });
                 }
             }
             Self::Variable { type_param } => {
@@ -533,6 +541,17 @@ fn resolved_for_normalization<'a>(
     }
 }
 fn can_absorb(sub: &Type, sup: &Type, db: &dyn Db, aliases: &mut HashSet<DeclId>) -> bool {
+    // Avoid SDK queries and alias work for pairs that cannot be subtypes.
+    // Equal literals have already been deduplicated by union_inner.
+    match (sub.unconstrained(), sup.unconstrained()) {
+        (Type::StringLiteral { value: a }, Type::StringLiteral { value: b }) if a != b => {
+            return false;
+        }
+        (Type::Class { .. } | Type::Module { .. }, Type::StringLiteral { .. }) => {
+            return false;
+        }
+        _ => {}
+    }
     let sub = resolved_for_normalization(sub, db, aliases);
     let sup = resolved_for_normalization(sup, db, aliases);
     if matches!(sub.unconstrained(), Type::Unknown) || matches!(sup.unconstrained(), Type::Unknown)

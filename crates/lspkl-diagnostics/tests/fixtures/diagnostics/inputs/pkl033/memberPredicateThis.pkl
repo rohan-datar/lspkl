@@ -1,0 +1,3 @@
+const foo = new Dynamic { [[this is this]] = 5 }
+const bar = new Dynamic { [[this is module]] = 5 }
+const constrained: Int(let (v: module? = null) true) = 1

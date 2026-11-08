@@ -1,0 +1,6 @@
+import "pkl:math"
+c1: Class<module> = getClass()
+c2: Class<math> = math.getClass()
+c3: Class<this> = getClass()
+class Base {}
+bad: Class<Base> = getClass()

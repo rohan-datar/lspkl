@@ -1,0 +1,5 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+2:7 error: Class `Child` should either be declared `abstract`, or should implement method `foo(first, second)`.

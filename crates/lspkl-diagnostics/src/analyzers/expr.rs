@@ -61,7 +61,12 @@ impl Analyzer for ExprAnalyzer {
                         && expr_type.is_subtype_of(&tested_type, ctx.db)
                     {
                         holder.add_warning(source_tree.span(node), "expression is always true");
-                    } else if !tested_type.is_subtype_of(&expr_type, ctx.db) {
+                    } else if super::type_check::is_exact_class_value(
+                        NodeRef::new(file, expr_node),
+                        ctx,
+                    ) && !matches!(tested_type, Type::Unknown)
+                        || !tested_type.is_subtype_of(&expr_type, ctx.db)
+                    {
                         holder.add_warning(source_tree.span(node), "expression is always false");
                     }
                 }
@@ -98,8 +103,13 @@ impl Analyzer for ExprAnalyzer {
                 {
                     holder.add_error(source_tree.span(node), "type cast is redundant");
                     // TODO: add quickfix
-                } else if !tested_type.is_subtype_of(&expr_type, ctx.db)
-                    && !tested_type.has_common_subtype_with(&expr_type, ctx.db)
+                } else if (super::type_check::is_exact_class_value(
+                    NodeRef::new(file, expr_node),
+                    ctx,
+                ) && !matches!(tested_type, Type::Unknown)
+                    && !expr_type.is_subtype_of(&tested_type, ctx.db))
+                    || (!tested_type.is_subtype_of(&expr_type, ctx.db)
+                        && !tested_type.has_common_subtype_with(&expr_type, ctx.db))
                 {
                     holder.add_error(source_tree.span(node), "type cast cannot succeed");
                 }
