@@ -1,6 +1,6 @@
 [package]
 name = "lspkl-vfs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Pkl source loading and virtual file management for the lspkl language server"
 license = "Apache-2.0"
