@@ -1,6 +1,6 @@
 [package]
 name = "lspkl-db"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Incremental analysis database for the lspkl Pkl language server"
 license = "Apache-2.0"

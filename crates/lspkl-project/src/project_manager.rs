@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::cli::PklCli;
 use crate::dto::{DerivedProjectMetadata, PklProject, PklWorkspaceState, ProjectDeps};
@@ -47,6 +48,19 @@ pub struct ProjectManager {
     /// Discovered projects keyed by their `PklProject` file path.
     projects: BTreeMap<PathBuf, Arc<PklProject>>,
     excluded_directories: Vec<String>,
+    /// Modification times of each project's inputs (`PklProject`,
+    /// `PklProject.deps.json`) observed right after this session's last
+    /// successful sync. Lets freshness checks run before the state file is
+    /// persisted on its own thread.
+    synced_inputs: BTreeMap<PathBuf, [Option<SystemTime>; 2]>,
+}
+
+fn input_times(project_file: &Path) -> [Option<SystemTime>; 2] {
+    let modified = |path: PathBuf| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    [
+        modified(project_file.to_path_buf()),
+        modified(project_file.with_file_name("PklProject.deps.json")),
+    ]
 }
 
 static SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
@@ -112,6 +126,7 @@ impl ProjectManager {
             workspace_folders: Vec::new(),
             projects: BTreeMap::new(),
             excluded_directories: SKIPPED_DIRS.iter().map(|name| (*name).to_owned()).collect(),
+            synced_inputs: BTreeMap::new(),
         }
     }
 
@@ -174,6 +189,15 @@ impl ProjectManager {
             if !self.projects.contains_key(&file) {
                 return Ok(true);
             }
+            // Synced in this session and untouched since: fresh, even if the
+            // state file has not been written yet.
+            if self
+                .synced_inputs
+                .get(&file)
+                .is_some_and(|times| *times == input_times(&file))
+            {
+                continue;
+            }
             let root = self
                 .workspace_folders
                 .iter()
@@ -235,6 +259,12 @@ impl ProjectManager {
                 synced.insert(project_file, Arc::new(project));
             }
         }
+        // Observed after `project resolve` rewrote PklProject.deps.json, so the
+        // sync's own write never makes the result look stale.
+        self.synced_inputs = synced
+            .keys()
+            .map(|file| (file.clone(), input_times(file)))
+            .collect();
         self.projects = synced;
         Ok(())
     }
@@ -313,10 +343,16 @@ impl ProjectManager {
             pkl_projects,
         };
         let json = serde_json::to_vec_pretty(&state)?;
-        if let Some(parent) = state_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(state_file, json)?;
+        let parent = state_file.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        // Write a sibling temporary file and rename it into place, so a reader
+        // (startup restore, another lspkl, a test) never sees a truncated file.
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::Write::write_all(&mut temporary, &json)?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(state_file)
+            .map_err(|error| ProjectError::from(error.error))?;
         Ok(())
     }
 
