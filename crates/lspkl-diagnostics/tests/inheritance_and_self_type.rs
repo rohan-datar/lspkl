@@ -1,19 +1,25 @@
 mod harness;
 
-use lspkl_diagnostics::{DiagnosticsEngine, analyzers::pkl_033::Pkl033Analyzer};
+use lspkl_diagnostics::DiagnosticsEngine;
+use lspkl_diagnostics::analyzers::{MemberAnalyzer, SelfTypeAnalyzer};
 use lspkl_types::AnalysisContext;
+
+/// The analyzers that own the inheritance, const-override and self-type rules.
+fn engine() -> DiagnosticsEngine {
+    DiagnosticsEngine::new()
+        .with(Box::new(MemberAnalyzer))
+        .with(Box::new(SelfTypeAnalyzer))
+}
 
 fn analyze(source: &str) -> Vec<lspkl_diagnostics::Diagnostic> {
     let base = harness::load_test_base();
     let file = base.add(1, source);
     let db = base.db.borrow();
-    DiagnosticsEngine::new()
-        .with(Box::new(Pkl033Analyzer))
-        .analyze(&AnalysisContext::for_root(&*db, file), file)
+    engine().analyze(&AnalysisContext::for_root(&*db, file), file)
 }
 
 #[test]
-fn new_errors_apply_without_version_but_respect_explicit_older_target() {
+fn pkl_033_rules_apply_without_version_but_respect_explicit_older_target() {
     let body = "class C { abstract function f(): Int }\ntypealias Bad = this\n";
     assert_eq!(analyze(body).len(), 2);
     for version in ["0.32.0", "0.32", "0.31.0"] {
@@ -39,9 +45,7 @@ fn inherited_abstract_methods_cross_files_and_sdk() {
     base.add_path("Parent.pkl", "abstract module Parent\nabstract function f(): Int\nabstract class A { abstract function g(): String }\n");
     let file = base.add_path("Child.pkl", "module Child\nextends \"Parent.pkl\"\nimport \"Parent.pkl\"\nimport \"pkl:reflect\"\nclass Missing extends Parent.A {}\nclass Done extends Parent.A { function g() = \"ok\" }\n");
     let db = base.db.borrow();
-    let diagnostics = DiagnosticsEngine::new()
-        .with(Box::new(Pkl033Analyzer))
-        .analyze(&AnalysisContext::for_root(&*db, file), file);
+    let diagnostics = engine().analyze(&AnalysisContext::for_root(&*db, file), file);
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     assert!(
         diagnostics
@@ -56,7 +60,7 @@ fn inherited_abstract_methods_cross_files_and_sdk() {
 }
 
 #[test]
-fn embedded_sdk_has_none_of_the_new_diagnostics() {
+fn embedded_sdk_has_no_inheritance_or_self_type_diagnostics() {
     use lspkl_db::Db;
     let base = harness::load_test_base();
     let mut db = base.db.borrow_mut();
@@ -68,7 +72,7 @@ fn embedded_sdk_has_none_of_the_new_diagnostics() {
         );
     }
     harness::input_support::preload(&mut db);
-    let engine = DiagnosticsEngine::new().with(Box::new(Pkl033Analyzer));
+    let engine = engine();
     for file in modules {
         let diagnostics = engine.analyze(&AnalysisContext::for_root(&*db, file), file);
         assert!(
@@ -117,9 +121,7 @@ fn amending_module_cannot_assign_inherited_const_properties() {
     base.add_path("Parent.pkl", "open module Parent\nconst value: Int = 1\n");
     let file = base.add_path("Child.pkl", "amends \"Parent.pkl\"\nvalue = 2\n");
     let db = base.db.borrow();
-    let diagnostics = DiagnosticsEngine::new()
-        .with(Box::new(Pkl033Analyzer))
-        .analyze(&AnalysisContext::for_root(&*db, file), file);
+    let diagnostics = engine().analyze(&AnalysisContext::for_root(&*db, file), file);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(
         diagnostics[0].message,
@@ -183,4 +185,22 @@ fn abstract_method_obligations_include_parameter_names() {
             .message
             .contains("method `foo(first, second)`")
     );
+}
+
+/// Assigning a const property was already an error before Pkl 0.33, so the
+/// check is not version-gated.
+#[test]
+fn const_assignments_apply_regardless_of_declared_version() {
+    let body = "class C { const x: Int = 1 }\nc = new C { x = 2 }\n";
+    for header in [
+        "",
+        "@ModuleInfo { minPklVersion = \"0.31.0\" }\nmodule Example\n",
+    ] {
+        let diagnostics = analyze(&format!("{header}{body}"));
+        assert_eq!(diagnostics.len(), 1, "{header}: {diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].message,
+            "Cannot assign to const property `x`."
+        );
+    }
 }
