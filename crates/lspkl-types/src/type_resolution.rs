@@ -15,6 +15,8 @@ struct ResolutionRequest {
     ty: TypeRef,
     #[returns(ref)]
     bindings: TypeBindings,
+    /// Body-local annotations may bind Regex through locals not in headers.
+    declaration_header: bool,
 }
 fn cycle_unknown(_: &dyn Db, _: salsa::Id, _: ResolutionRequest) -> Type {
     Type::Unknown
@@ -35,6 +37,7 @@ fn resolve_request(db: &dyn Db, request: ResolutionRequest) -> Type {
         request.owner(db),
         request.ty(db),
         bindings,
+        *request.declaration_header(db),
     )
 }
 /// Resolve a lowered type reference without caller-owned substitutions.
@@ -48,7 +51,7 @@ pub(crate) fn resolve_type_ref_with_bindings(
     ty: &TypeRef,
     bindings: &TypeBindings,
 ) -> Type {
-    resolve_in_file(db, owner.file, owner.root, Some(owner), ty, bindings)
+    resolve_in_file(db, owner.file, owner.root, Some(owner), ty, bindings, true)
 }
 pub(crate) fn resolve_in_file(
     db: &dyn Db,
@@ -57,10 +60,11 @@ pub(crate) fn resolve_in_file(
     owner: Option<DeclId>,
     ty: &TypeRef,
     bindings: &TypeBindings,
+    declaration_header: bool,
 ) -> Type {
     resolve_request(
         db,
-        ResolutionRequest::new(db, file, root, owner, ty, bindings),
+        ResolutionRequest::new(db, file, root, owner, ty, bindings, declaration_header),
     )
 }
 // A reserved substitution slot for a declaration's self type. Real parameter
@@ -185,8 +189,10 @@ fn resolve_inner(
     owner: Option<DeclId>,
     ty: &TypeRef,
     bindings: &TypeBindings,
+    declaration_header: bool,
 ) -> Type {
-    let resolve = |ty: &TypeRef| resolve_in_file(db, file, root, owner, ty, bindings);
+    let resolve =
+        |ty: &TypeRef| resolve_in_file(db, file, root, owner, ty, bindings, declaration_header);
     match ty {
         TypeRef::Unknown => Type::Unknown,
         TypeRef::This => {
@@ -253,7 +259,21 @@ fn resolve_inner(
         }
         TypeRef::Constrained { base, constraints } => Type::constrained(
             resolve(base),
-            constraints.iter().map(ConstraintExpr::opaque).collect(),
+            constraints
+                .iter()
+                .map(|text| {
+                    let constraint = ConstraintExpr::opaque(text);
+                    if constraint.has_implicit_members()
+                        && !(declaration_header && receiver_is_unshadowed(db, owner))
+                        || text.contains("Regex")
+                            && !(declaration_header && regex_is_builtin(db, file, owner))
+                    {
+                        ConstraintExpr::uninterpreted(text)
+                    } else {
+                        constraint
+                    }
+                })
+                .collect(),
         ),
         TypeRef::Function { parameters, result } => {
             let base = crate::base_module(db);
@@ -402,4 +422,43 @@ pub fn resolve_alias(db: &dyn Db, alias: DeclId, args: &[Type]) -> Type {
         })
         .collect();
     substitute(db, template, &bindings).unaliased(db)
+}
+
+/// Header-only evidence that the lexical Regex constructor is pkl:base's.
+/// Other scopes may shadow it through parameters, inheritance or body locals;
+/// do not execute a user-defined constructor by interpreting its spelling.
+fn regex_is_builtin(db: &dyn Db, file: File, owner: Option<DeclId>) -> bool {
+    let base_file = crate::base_module(db).file_id();
+    if file == base_file {
+        return true;
+    }
+    let Some(owner) = owner else {
+        return false;
+    };
+    if !matches!(owner.item, ItemId::TypeAlias(_) | ItemId::Property(_))
+        || enclosing_class(db, owner).is_some()
+    {
+        return false;
+    }
+    let items = module_items(db, file);
+    if items.extends.is_some()
+        || items
+            .imports
+            .iter()
+            .any(|(_, import)| import.glob || import.name.text(db) == "Regex")
+    {
+        return false;
+    }
+    !items.declarations.iter().any(|item| {
+        items
+            .declaration(*item)
+            .is_some_and(|(decl, _)| decl.name.text(db) == "Regex")
+    })
+}
+
+fn receiver_is_unshadowed(db: &dyn Db, owner: Option<DeclId>) -> bool {
+    owner.is_some_and(|owner| {
+        matches!(owner.item, ItemId::TypeAlias(_) | ItemId::Property(_))
+            && enclosing_class(db, owner).is_none()
+    })
 }

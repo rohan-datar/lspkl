@@ -197,6 +197,64 @@ impl Type {
             _ => &[],
         }
     }
+    /// Remove refinements for a base-type compatibility check. This is not a
+    /// subtype proof: callers must separately handle undecidable constraints.
+    pub fn without_constraints(&self, db: &dyn Db) -> Self {
+        match self.unaliased(db) {
+            Self::Constrained { base, .. } => base.without_constraints(db),
+            Self::Union { members } => Self::union(
+                members.iter().map(|member| member.without_constraints(db)),
+                db,
+            ),
+            ty => ty,
+        }
+    }
+
+    /// Return a violated constraint only when every base-compatible union
+    /// alternative is definitely rejected. An unknown branch keeps the value
+    /// acceptable; lack of a subtype proof is not evidence of a runtime error.
+    pub fn constraint_violation(
+        &self,
+        actual: &Self,
+        value: &crate::constraint::StaticValue,
+        db: &dyn Db,
+    ) -> Option<String> {
+        fn check(
+            expected: &Type,
+            actual: &Type,
+            value: &crate::constraint::StaticValue,
+            db: &dyn Db,
+        ) -> Option<Option<String>> {
+            if !actual
+                .without_constraints(db)
+                .is_subtype_of(&expected.without_constraints(db), db)
+            {
+                return None;
+            }
+            if let Type::Constrained { base, constraints } = expected {
+                for constraint in constraints {
+                    if constraint.evaluate(value) == crate::constraint::Truth::False {
+                        return Some(Some(constraint.to_string()));
+                    }
+                }
+                return check(base, actual, value, db);
+            }
+            if let Type::Union { members } = expected {
+                let mut violation = None;
+                for member in members.iter() {
+                    match check(member, actual, value, db) {
+                        Some(None) => return Some(None),
+                        Some(Some(text)) => violation = Some(text),
+                        None => {}
+                    }
+                }
+                return Some(violation);
+            }
+            Some(None)
+        }
+        check(&self.unaliased(db), actual, value, db).flatten()
+    }
+
     pub fn has_constraints(&self, db: &dyn Db) -> bool {
         self.has_constraints_inner(db, &mut HashSet::new())
     }
@@ -252,6 +310,46 @@ impl Type {
             (Self::Class { class_id: a, .. }, Self::Class { class_id: b, .. }) if a == b)
     }
     pub fn is_subtype_of(&self, other: &Self, db: &dyn Db) -> bool {
+        // Expand aliases before comparing refinements: alias bodies can carry
+        // constraints of their own, including constraints on union branches.
+        if matches!(self.unconstrained(), Self::Alias { .. }) {
+            return self.unaliased(db).is_subtype_of(other, db);
+        }
+        if matches!(other.unconstrained(), Self::Alias { .. }) {
+            return self.is_subtype_of(&other.unaliased(db), db);
+        }
+        if matches!(self.unconstrained(), Self::Unknown | Self::Nothing)
+            || matches!(other.unconstrained(), Self::Unknown)
+        {
+            return true;
+        }
+        if let Self::Union { members } = self.unconstrained() {
+            return members.iter().all(|member| {
+                Self::constrained(member.clone(), self.constraints().to_vec())
+                    .is_subtype_of(other, db)
+            });
+        }
+        if let Self::Union { members } = other.unconstrained() {
+            return members.iter().any(|member| {
+                self.is_subtype_of(
+                    &Self::constrained(member.clone(), other.constraints().to_vec()),
+                    db,
+                )
+            });
+        }
+        if !other.constraints().is_empty() {
+            let proven = if let Self::StringLiteral { value } = self.unconstrained() {
+                other.constraints().iter().all(|constraint| {
+                    constraint.evaluate(&crate::constraint::StaticValue::String(value.clone()))
+                        == crate::constraint::Truth::True
+                })
+            } else {
+                crate::constraint::constraints_imply(self.constraints(), other.constraints())
+            };
+            if !proven {
+                return false;
+            }
+        }
         match (self.unconstrained(), other.unconstrained()) {
             (Self::Unknown, _) | (_, Self::Unknown) => true,
             (Self::Nothing, _) => true,
@@ -433,7 +531,11 @@ impl Type {
         }
     }
     pub fn is_nullable(&self, db: &dyn Db) -> bool {
-        base_module(db).null_type().is_subtype_of(self, db)
+        // Nullability asks whether null is possible, not whether an opaque
+        // refinement has been proved for null.
+        base_module(db)
+            .null_type()
+            .is_subtype_of(&self.without_constraints(db), db)
     }
     pub fn non_null(&self, db: &dyn Db) -> Self {
         match self {

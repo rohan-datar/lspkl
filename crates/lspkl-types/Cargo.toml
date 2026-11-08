@@ -17,6 +17,7 @@ salsa.workspace = true
 la-arena.workspace = true
 bitflags.workspace = true
 fluent-uri.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 lspkl-vfs.workspace = true

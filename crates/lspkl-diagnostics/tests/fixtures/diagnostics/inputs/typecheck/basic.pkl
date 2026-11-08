@@ -1,4 +1,4 @@
-// Known gap: only `foo` is reported; the mismatches for `name`, the Listing element, and the Mapping key are not.
+// `foo` and the Listing element are reported; contextual object-property and Mapping-key checks remain gaps.
 foo: String = 15
 
 class Person {

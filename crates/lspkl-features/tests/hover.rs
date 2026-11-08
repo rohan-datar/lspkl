@@ -123,3 +123,26 @@ fn hover_on_property_declaration_names() {
         }
     });
 }
+
+#[test]
+fn hover_preserves_statically_evaluated_constraints() {
+    let base = harness::load_test_base();
+    let src = "value: Int(this > 5, isEven) = 8\nreference = value\n";
+    harness::with_snippet(&base, src, |_tree, ctx| {
+        let offset = harness::offset(ctx.tree(harness::file(ctx, 1)).unwrap(), 1, 13);
+        let result = hover(
+            ctx.db,
+            ctx.root,
+            lspkl_types::InFile::new(harness::file(ctx, 1), offset),
+        )
+        .unwrap();
+        let HoverContents::Markup(markup) = result.contents else {
+            panic!("expected markup")
+        };
+        assert!(
+            markup.value.contains("Int(this > 5, isEven)"),
+            "{}",
+            markup.value
+        );
+    });
+}

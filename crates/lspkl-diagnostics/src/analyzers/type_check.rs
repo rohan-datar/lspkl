@@ -43,7 +43,28 @@ impl Analyzer for TypeCheckAnalyzer {
             .map_or(Type::Unknown, |expr| {
                 lspkl_types::expr_type(ctx.db, expr, ctx.root)
             });
-        if actual.is_subtype_of(&expected, ctx.db) {
+        // Static checks are deliberately separate from subtype proofs. A
+        // broad Int value need not prove an Int constraint to remain valid.
+        let has_constraints = expected.has_constraints(ctx.db);
+        let value = has_constraints
+            .then(|| static_value(NodeRef::new(file, node), &actual, ctx))
+            .flatten();
+        if let Some(constraint) = value
+            .as_ref()
+            .and_then(|value| expected.constraint_violation(&actual, value, ctx.db))
+        {
+            holder.add_error(
+                source_tree.span(node),
+                format!("Type constraint `{constraint}` violated."),
+            );
+            return true;
+        }
+        if actual.is_subtype_of(&expected, ctx.db)
+            || has_constraints
+                && actual
+                    .without_constraints(ctx.db)
+                    .is_subtype_of(&expected.without_constraints(ctx.db), ctx.db)
+        {
             return true;
         }
 
@@ -89,4 +110,96 @@ pub(super) fn is_exact_class_value(node: NodeRef, ctx: &AnalysisContext) -> bool
     ) && lspkl_types::resolver::resolve_reference(node, tree.span(node.value).start(), ctx)
         .and_then(|definition| lspkl_types::decl_for_node(ctx.db, definition, ctx.root))
         .is_some_and(|decl| matches!(decl.item, lspkl_types::ItemId::Class(_)))
+}
+
+/// Read only values whose runtime value is known without executing Pkl. In
+/// particular, never follow overridable properties or execute user functions.
+fn static_value(
+    node: NodeRef,
+    actual: &Type,
+    ctx: &AnalysisContext,
+) -> Option<lspkl_types::constraint::StaticValue> {
+    use lspkl_types::constraint::{StaticValue, parse_literal};
+    let tree = ctx.tree(node.file)?;
+    // The inner expression receives the same expected type, so only it should
+    // report the violation of a transparent parenthesized expression.
+    if nodes::ParenthesizedExpr::cast(tree, node.value).is_some() {
+        return None;
+    }
+    if let Type::StringLiteral { value } = actual.unaliased(ctx.db).unconstrained() {
+        return Some(StaticValue::String(value.clone()));
+    }
+    if let Some(value) = parse_literal(tree.text(node.value)) {
+        return Some(value);
+    }
+    let mut literal_node = node.value;
+    let mut negative = false;
+    loop {
+        if let Some(inner) = nodes::ParenthesizedExpr::cast(tree, literal_node)
+            .and_then(|parenthesized| parenthesized.inner(tree))
+        {
+            literal_node = inner;
+        } else if tree.kind(literal_node) == &lspkl_syntax::ast::NodeKind::UnaryMinusExpr {
+            literal_node = nodes::UnaryExpr::cast(tree, literal_node)?.operand(tree)?;
+            negative = !negative;
+        } else {
+            break;
+        }
+    }
+    if let Some(value) = parse_literal(tree.text(literal_node)) {
+        return if negative {
+            match value {
+                StaticValue::Int(value) => value.checked_neg().map(StaticValue::Int),
+                StaticValue::Float(value) => Some(StaticValue::Float(-value)),
+                StaticValue::Duration(value) => Some(StaticValue::Duration(-value)),
+                StaticValue::DataSize(value) => Some(StaticValue::DataSize(-value)),
+                _ => None,
+            }
+        } else {
+            Some(value)
+        };
+    }
+    let access = nodes::UnqualifiedAccessExpr::cast(tree, node.value)?;
+    let name = tree.name(node.value)?;
+    if !matches!(name, "List" | "Set" | "Map") {
+        return None;
+    }
+    let definition =
+        lspkl_types::resolver::resolve_reference(node, tree.span(node.value).start(), ctx)?;
+    if definition.file != ctx.base.file_id() {
+        return None;
+    }
+    let arguments = nodes::ArgumentList::cast(tree, access.arguments(tree)?)?;
+    let arguments: Vec<_> = arguments.arguments(tree).collect();
+    if name == "List" {
+        return Some(StaticValue::CollectionLength(arguments.len()));
+    }
+    if name == "Map" && !arguments.len().is_multiple_of(2) {
+        return None;
+    }
+    // Set and Map constructors deduplicate elements/keys. Only count keys of
+    // one literal kind; heterogeneous numeric equality needs runtime rules.
+    #[derive(PartialEq, Eq, Hash)]
+    enum LiteralKey {
+        Int(i64),
+        String(String),
+        Boolean(bool),
+    }
+    let mut keys = std::collections::HashSet::new();
+    let mut kind = None;
+    for argument in arguments.iter().step_by(if name == "Map" { 2 } else { 1 }) {
+        let key = match parse_literal(tree.text(*argument))? {
+            StaticValue::Int(value) => LiteralKey::Int(value),
+            StaticValue::String(value) => LiteralKey::String(value),
+            StaticValue::Boolean(value) => LiteralKey::Boolean(value),
+            _ => return None,
+        };
+        let key_kind = std::mem::discriminant(&key);
+        if kind.is_some_and(|kind| kind != key_kind) {
+            return None;
+        }
+        kind = Some(key_kind);
+        keys.insert(key);
+    }
+    Some(StaticValue::CollectionLength(keys.len()))
 }

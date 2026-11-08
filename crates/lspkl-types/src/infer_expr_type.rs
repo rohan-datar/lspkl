@@ -45,6 +45,28 @@ pub(crate) fn infer_expr_type_inner(
         // Object body contexts
         // ===================================================================
 
+        // Plain Listing elements have the same value expectation as entries.
+        NodeKind::ObjectElement => {
+            let Some(body) = tree.parent(parent) else {
+                return Type::Unknown;
+            };
+            let Some(object) = tree.parent(body) else {
+                return Type::Unknown;
+            };
+            let Some(new) = nodes::NewExpr::cast(tree, object) else {
+                return Type::Unknown;
+            };
+            if new.body(tree) != Some(body) {
+                return Type::Unknown;
+            }
+            let container = if let Some(ty) = new.ty(tree) {
+                to_type_with_bindings(NodeRef::new(file, ty), bindings, ctx)
+            } else {
+                infer_expr_type_from_context(NodeRef::new(file, object), bindings, ctx)
+            };
+            container_value_type(&container, ctx).unwrap_or(Type::Unknown)
+        }
+
         // `[key] = value` inside an ObjectBody.
         //
         // Children order: [keyExpr, valueExpr].

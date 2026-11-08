@@ -3,3 +3,4 @@ source: crates/lspkl-diagnostics/tests/snapshots.rs
 expression: rendered
 ---
 2:15 error: Type mismatch. Expected: String. Actual: Int
+12:33 error: Type mismatch. Expected: Person. Actual: Int
