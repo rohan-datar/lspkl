@@ -5,7 +5,7 @@
 //! Inheritance checks reuse the semantic member tables (including imported and
 //! SDK ancestors) and never walk another file's syntax with local node IDs.
 
-use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType, nodes};
+use lspkl_syntax::ast::{NodeKind, SyntaxTree, TokenType, nodes};
 use lspkl_types::{
     AnalysisContext, MemberKind, MemberTable, Modifiers, NodeRef, Type, class_id, class_members,
     find_member, module_id, module_items, module_members,
