@@ -26,3 +26,32 @@ fn inferred_metadata_values_render_in_hover() {
         },
     );
 }
+
+#[test]
+fn implicit_typed_members_are_available_in_completion_and_hover() {
+    let base = harness::load_test_base();
+    let source = "class Foo {}\nvalue = new Foo {}\nresult = value.toMap()\n";
+    harness::with_snippet(&base, source, |tree, ctx| {
+        let offset = lspkl_syntax::TextSize::try_from(source.find("toMap").unwrap() + 2).unwrap();
+        let position = lspkl_types::InFile::new(harness::file(ctx, 1), offset);
+        let Some(lsp_types::CompletionResponse::Array(items)) =
+            lspkl_features::completion::completion(ctx.db, ctx.root, position, |r| {
+                harness::range(tree, r)
+            })
+        else {
+            panic!("completions")
+        };
+        assert!(items.iter().any(|i| i.label == "toMap"));
+        let hover = lspkl_features::hover::hover(ctx.db, ctx.root, position).unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("markdown")
+        };
+        assert!(
+            markup
+                .value
+                .contains("function toMap(): Map<String, unknown>"),
+            "{}",
+            markup.value
+        );
+    });
+}

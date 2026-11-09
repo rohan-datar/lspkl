@@ -479,6 +479,9 @@ pub fn super_type(ty: &Type, db: &dyn lspkl_db::Db) -> Option<Type> {
                 && class.declaration.name.text(db) != "Any"
             {
                 Some(crate::base_module(db).any_type().clone())
+            } else if !class.declaration.modifiers.contains(Modifiers::EXTERNAL) {
+                // SDK contract: non-external classes implicitly extend Typed.
+                Some(crate::base_module(db).typed_type().clone())
             } else {
                 None
             }

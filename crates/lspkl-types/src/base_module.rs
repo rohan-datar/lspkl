@@ -68,6 +68,7 @@ pub struct BaseModule {
     mapping_type: Type,
     map_type: Type,
     object_type: Type,
+    typed_type: Type,
     module_type: Type,
     bytes_type: Type,
     int_seq_type: Type,
@@ -162,6 +163,7 @@ impl BaseModule {
             mapping_type: find_class(db, file, &tree, &classes, "Mapping")?,
             map_type: find_class(db, file, &tree, &classes, "Map")?,
             object_type: find_class(db, file, &tree, &classes, "Object")?,
+            typed_type: find_class(db, file, &tree, &classes, "Typed")?,
             module_type: find_class(db, file, &tree, &classes, "Module")?,
             function_type: find_class(db, file, &tree, &classes, "Function")?,
             non_null_type: find_alias(db, file, &tree, &aliases, "NonNull")?,
@@ -286,6 +288,9 @@ impl BaseModule {
     }
     pub fn object_type(&self) -> &Type {
         &self.object_type
+    }
+    pub fn typed_type(&self) -> &Type {
+        &self.typed_type
     }
     pub fn module_type(&self) -> &Type {
         &self.module_type
