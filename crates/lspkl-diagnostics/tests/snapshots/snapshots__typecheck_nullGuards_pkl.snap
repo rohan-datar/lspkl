@@ -1,0 +1,14 @@
+---
+source: crates/lspkl-diagnostics/tests/snapshots.rs
+expression: rendered
+---
+8:21 warning: Nullability mismatch. Expected: String. Actual: String?
+24:20 warning: Nullability mismatch. Expected: String. Actual: (String|"none")?
+24:47 warning: Nullability mismatch. Expected: String. Actual: String?
+25:23 warning: Nullability mismatch. Expected: String. Actual: (String|"some")?
+25:54 warning: Nullability mismatch. Expected: String. Actual: String?
+27:25 warning: Nullability mismatch. Expected: String. Actual: (String|"none")?
+27:44 warning: Nullability mismatch. Expected: String. Actual: String?
+28:20 warning: Nullability mismatch. Expected: String. Actual: (String|"none")?
+28:39 warning: Nullability mismatch. Expected: String. Actual: String?
+28:67 warning: Nullability mismatch. Expected: String. Actual: String?

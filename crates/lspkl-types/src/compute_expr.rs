@@ -1,7 +1,7 @@
 //! Type inference for expressions.
 
 use lspkl_syntax::ast::nodes;
-use lspkl_syntax::ast::{NodeKind, TokenType};
+use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType};
 
 use crate::NodeRef;
 use crate::context::AnalysisContext;
@@ -122,6 +122,8 @@ pub(crate) fn compute_expr_inner(
             );
             if is_null_safe {
                 member_ty.nullable(ctx.db)
+            } else if tree.is_property_access(node) {
+                null_guarded(NodeRef::new(file, node), member_ty, bindings, ctx)
             } else {
                 member_ty
             }
@@ -133,13 +135,9 @@ pub(crate) fn compute_expr_inner(
             resolve_unqualified_access_with_bindings(NodeRef::new(file, node), name, bindings, ctx)
                 .map(|r| {
                     if tree.is_property_access(node) {
-                        return guarded_access_type(
-                            NodeRef::new(file, node),
-                            name,
-                            r,
-                            bindings,
-                            ctx,
-                        );
+                        let ty =
+                            guarded_access_type(NodeRef::new(file, node), name, r, bindings, ctx);
+                        return null_guarded(NodeRef::new(file, node), ty, bindings, ctx);
                     }
                     let receiver = crate::resolver::access_receiver_type_with_bindings(
                         NodeRef::new(file, node),
@@ -194,6 +192,131 @@ pub(crate) fn compute_expr_inner(
             .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
+}
+
+/// A property path (`name`, `a.b.c`) rooted at an unqualified property or
+/// binding: the root access node and the member names that follow it.
+fn property_path(tree: &SyntaxTree, mut node: NodeId) -> Option<(NodeId, Vec<&str>)> {
+    let mut names = Vec::new();
+    loop {
+        while let Some(inner) =
+            nodes::ParenthesizedExpr::cast(tree, node).and_then(|n| n.inner(tree))
+        {
+            node = inner;
+        }
+        match tree.kind(node) {
+            NodeKind::UnqualifiedAccessExpr if tree.is_property_access(node) => {
+                names.push(tree.name(node)?);
+                names.reverse();
+                return Some((node, names));
+            }
+            NodeKind::QualifiedAccessExpr if tree.is_property_access(node) => {
+                let access = nodes::QualifiedAccessExpr::cast(tree, node)?;
+                if access.is_null_safe(tree) {
+                    return None;
+                }
+                names.push(tree.name(node)?);
+                node = access.receiver(tree)?;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Paths in `condition` that it proves non-null when it evaluates to `truth`:
+/// `p != null` (or `null != p`) when true, `p == null` when false, and every
+/// conjunct of a true `&&`.
+fn non_null_paths(tree: &SyntaxTree, condition: NodeId, truth: bool, out: &mut Vec<NodeId>) {
+    let mut condition = condition;
+    while let Some(inner) =
+        nodes::ParenthesizedExpr::cast(tree, condition).and_then(|n| n.inner(tree))
+    {
+        condition = inner;
+    }
+    let Some(binary) = nodes::BinaryExpr::cast(tree, condition) else {
+        return;
+    };
+    match (tree.kind(condition), binary.operator(tree), truth) {
+        (NodeKind::LogicalAndExpr, _, true) => {
+            for side in [binary.left(tree), binary.right(tree)]
+                .into_iter()
+                .flatten()
+            {
+                non_null_paths(tree, side, true, out);
+            }
+        }
+        (NodeKind::EqualityExpr, Some(TokenType::NotEqual), true)
+        | (NodeKind::EqualityExpr, Some(TokenType::Equal), false) => {
+            let (Some(left), Some(right)) = (binary.left(tree), binary.right(tree)) else {
+                return;
+            };
+            let is_null = |id: NodeId| matches!(tree.kind(id), NodeKind::NullLiteralExpr);
+            if is_null(right) {
+                out.push(left);
+            } else if is_null(left) {
+                out.push(right);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Inside the branch of an `if`/`when` whose condition proves a property path
+/// non-null, an access to the same path is non-null. Property values never
+/// change once evaluated, so this holds across nested object bodies and
+/// lambdas. Paths compare by member names and by the declaration their root
+/// resolves to, so a shadowing binding never inherits an outer guard.
+fn null_guarded(access: NodeRef, ty: Type, bindings: &TypeBindings, ctx: &AnalysisContext) -> Type {
+    if !ty.is_nullable(ctx.db) {
+        return ty;
+    }
+    let Some(tree) = ctx.tree(access.file) else {
+        return ty;
+    };
+    let Some((root, names)) = property_path(tree, access.value) else {
+        return ty;
+    };
+    let resolve = |id: NodeId| {
+        tree.name(id).and_then(|name| {
+            resolve_unqualified_access_with_bindings(access.with_value(id), name, bindings, ctx)
+                .map(|resolved| resolved.node)
+        })
+    };
+    // Resolved lazily: most accesses are not inside a null guard at all.
+    let mut target: Option<Option<NodeRef>> = None;
+    let mut child = access.value;
+    let mut guarded = Vec::new();
+    while let Some(parent) = tree.parent(child) {
+        guarded.clear();
+        if let Some(branch) = nodes::IfExpr::cast(tree, parent)
+            && let Some(condition) = branch.condition(tree)
+        {
+            if branch.then_branch(tree) == Some(child) {
+                non_null_paths(tree, condition, true, &mut guarded);
+            } else if branch.else_branch(tree) == Some(child) {
+                non_null_paths(tree, condition, false, &mut guarded);
+            }
+        } else if let Some(generator) = nodes::WhenGenerator::cast(tree, parent)
+            && let Some(condition) = generator.condition(tree)
+        {
+            if generator.then_body(tree) == Some(child) {
+                non_null_paths(tree, condition, true, &mut guarded);
+            } else if generator.else_body(tree) == Some(child) {
+                non_null_paths(tree, condition, false, &mut guarded);
+            }
+        }
+        for &candidate in &guarded {
+            if let Some((other_root, other_names)) = property_path(tree, candidate)
+                && other_names == names
+                && let Some(root_decl) = *target.get_or_insert_with(|| resolve(root))
+                && resolve(other_root) == Some(root_decl)
+            {
+                return ty.non_null(ctx.db);
+            }
+        }
+        child = parent;
+    }
+    ty
 }
 
 /// A tested receiver can be used at its tested type in the true branch.
