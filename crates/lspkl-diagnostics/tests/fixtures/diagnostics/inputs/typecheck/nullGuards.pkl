@@ -1,0 +1,28 @@
+class Spec {
+  local self = this
+  node: String?
+  labels: Mapping<String, String> = new {
+    // Guarded through a when generator, with the use in a nested body.
+    when (self.node != null) { ["hostname"] = self.node }
+    // Unguarded: still a nullability mismatch.
+    ["unguarded"] = self.node
+  }
+}
+
+class Holder { spec: Spec? }
+
+value: String? = null
+holder: Holder? = null
+
+thenBranch: String = if (value != null) value else "none"
+reversed: String = if (null != value) value else "none"
+elseBranch: String = if (value == null) "none" else value
+conjunct: String = if (holder != null && holder.spec != null && holder.spec.node != null) holder.spec.node else "none"
+parenthesized: String = if ((value != null)) value else "none"
+
+// Negatives: these stay warned.
+disjunct: String = if (value != null || true) value else "none"
+wrongBranch: String = if (value != null) "some" else value
+other: String? = null
+differentPath: String = if (other != null) value else "none"
+shadowed: String = if (value != null) let (value: String? = null) value else "none"
