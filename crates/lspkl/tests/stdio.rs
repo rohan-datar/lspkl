@@ -555,7 +555,7 @@ async fn close_reopen_during_edits_publishes_and_serves_the_new_epoch() {
 }
 
 #[tokio::test]
-async fn property_declaration_names_navigate_and_hover_to_themselves() {
+async fn property_names_navigate_to_declarations_or_overridden_members() {
     let temp = tempfile::tempdir().unwrap();
     let main = uri(&temp.path().join("properties.pkl"));
     let source = concat!(
@@ -564,6 +564,8 @@ async fn property_declaration_names_navigate_and_hover_to_themselves() {
         "}\n",
         "base = 1\n",
         "settings: Settings = new { port = base }\n",
+        "ports: Mapping<String, Int> = new { default = (_) -> 0 }\n",
+        "dyn = new Dynamic { extra = 1 }\n",
     );
     let mut client = start(temp.path(), json!({})).await;
     open(&mut client, &main, source).await;
@@ -573,25 +575,61 @@ async fn property_declaration_names_navigate_and_hover_to_themselves() {
     for (token, expected) in [
         ("port: Int", range(1, 2, 18)),
         ("base = 1", range(3, 0, 8)),
-        ("port = base", range(4, 27, 38)),
+        // Assigning an inherited member navigates to the member it overrides.
+        ("port = base", range(1, 2, 18)),
+        // A Dynamic member has nothing to override and is its own declaration.
+        ("extra = 1", range(6, 20, 29)),
         // The initializer reference still resolves through normal scope.
         ("base }", range(3, 0, 8)),
     ] {
         let definition = at(&mut client, "textDocument/definition", &main, source, token).await;
         assert_eq!(definition, json!({"uri":main,"range":expected}), "{token}");
     }
+    // A container's `default` navigates into the standard library.
+    let definition = at(
+        &mut client,
+        "textDocument/definition",
+        &main,
+        source,
+        "default = (",
+    )
+    .await;
+    assert!(
+        definition["uri"]
+            .as_str()
+            .is_some_and(|uri| uri.starts_with("lspkl://") && uri.ends_with("base.pkl")),
+        "{definition}"
+    );
     for (token, expected) in [
         ("port: Int", "port: Int"),
         ("settings:", "settings: Settings"),
         ("port = base", "port: Int"),
+        // The overridden member's type, with the receiver's type arguments.
+        ("default = (", "hidden default: Function1<String, Int>"),
+        ("extra = 1", "extra: Int"),
     ] {
         let hover = at(&mut client, "textDocument/hover", &main, source, token).await;
-        assert_eq!(
-            hover["contents"]["value"],
-            format!("```pkl\n{expected}\n```"),
+        // The signature block comes first; SDK members add their doc comment.
+        let value = hover["contents"]["value"].as_str().unwrap_or_default();
+        assert!(
+            value.starts_with(&format!("```pkl\n{expected}\n```")),
             "{token}: {hover}"
         );
     }
+    let hover = at(
+        &mut client,
+        "textDocument/hover",
+        &main,
+        source,
+        "default = (",
+    )
+    .await;
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .is_some_and(|value| value.contains("default value for a mapping entry")),
+        "{hover}"
+    );
     client.shutdown().await;
 }
 

@@ -277,7 +277,8 @@ fn assert_declaration(
     assert_eq!(tree.name(resolved.value), Some(name));
 }
 
-/// Module, class, and object property names resolve to their own declarations.
+/// Declaration names resolve to themselves; an object member that assigns an
+/// inherited property resolves to the property it overrides.
 #[test]
 fn property_declaration_names_resolve_to_themselves() {
     let base = harness::load_test_base();
@@ -301,11 +302,63 @@ fn property_declaration_names_resolve_to_themselves() {
             NodeKind::ClassProperty,
             "port",
         );
+        let overridden = resolve_at(ctx, src, "port", 1).expect("port override");
+        assert_eq!(
+            overridden,
+            resolve_at(ctx, src, "port", 0).unwrap(),
+            "`port = 9090` resolves to `Settings.port`"
+        );
+    });
+}
+
+/// Amendments and assignments resolve to the member they override, through
+/// classes, nested object bodies and the standard library. Declarations
+/// (`local`, typed members) and names the receiver lacks resolve to themselves.
+#[test]
+fn overriding_property_names_resolve_to_the_overridden_member() {
+    let base = harness::load_test_base();
+    let src = concat!(
+        "class Base { label: String = \"x\"; count: Int = 0 }\n",
+        "class Box extends Base { items: Mapping<String, Int>; count = 1 }\n",
+        "box: Box = new {\n",
+        "  items { default = 0 }\n",
+        "  label = \"b\"\n",
+        "  local helper = 1\n",
+        "  extra: Int = 2\n",
+        "}\n",
+        "dyn = new Dynamic { anything = 1 }\n",
+    );
+    harness::with_snippet(&base, src, |ctx| {
+        let at = |needle: &str, nth: usize| resolve_at(ctx, src, needle, nth).expect(needle);
+        // Object members assign the class members they override.
+        assert_eq!(at("label", 1), at("label", 0));
+        assert_eq!(at("items", 1), at("items", 0));
+        // An untyped subclass property overrides the parent's.
+        assert_eq!(at("count", 1), at("count", 0));
+        // `default` in a Mapping body is the standard library's member.
+        let default = at("default", 0);
+        assert_ne!(
+            default.file,
+            harness::file(ctx, 1),
+            "default resolves into pkl:base"
+        );
+        assert_eq!(
+            ctx.tree(default.file).unwrap().name(default.value),
+            Some("default")
+        );
+        // Declarations and unmatched names are their own targets.
         assert_declaration(
             ctx,
-            resolve_at(ctx, src, "port", 1),
+            Some(at("helper", 0)),
             NodeKind::ObjectProperty,
-            "port",
+            "helper",
+        );
+        assert_declaration(ctx, Some(at("extra", 0)), NodeKind::ObjectProperty, "extra");
+        assert_declaration(
+            ctx,
+            Some(at("anything", 0)),
+            NodeKind::ObjectProperty,
+            "anything",
         );
     });
 }

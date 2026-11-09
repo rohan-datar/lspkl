@@ -2,7 +2,7 @@
 
 use lspkl_syntax::TextSize;
 use lspkl_syntax::ast::nodes;
-use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree};
+use lspkl_syntax::ast::{NodeId, NodeKind, SyntaxTree, TokenType};
 
 use crate::compute_expr::{compute_expr_type, compute_this_type};
 use crate::context::AnalysisContext;
@@ -228,13 +228,46 @@ pub fn resolve_reference(
         }
         NodeKind::ClassProperty | NodeKind::ObjectProperty => {
             let name = tree.identifier(node_id)?;
-            tree.span(name)
-                .contains_inclusive(offset)
-                .then_some(node.with_value(node_id))
+            if !tree.span(name).contains_inclusive(offset) {
+                return None;
+            }
+            // An amendment or assignment navigates to the member it overrides;
+            // a declaration (or an unmatched member) is its own target.
+            let property = node.with_value(node_id);
+            Some(overridden_member(property, ctx).map_or(property, |member| member.node))
         }
         // TODO(doc-comment-links)
         _ => None,
     }
+}
+
+/// The inherited member that a property amends or assigns, with the receiver's
+/// generic arguments applied.
+///
+/// Object members (`new Foo { port = 1 }`, `items { default = 0 }`) look the
+/// name up on the enclosing object's type. Untyped class and module properties
+/// (`class B extends A { x = 2 }`, `foo = 1` in an amending module) look it up
+/// on the parent type. Declarations are not overrides: `local` members and
+/// members with a type annotation return `None`, as do names the receiver does
+/// not have.
+pub fn overridden_member(property: NodeRef, ctx: &AnalysisContext) -> Option<ResolvedType> {
+    let tree = ctx.tree(property.file)?;
+    let id = property.value;
+    if tree.has_modifier(id, TokenType::Local) || member_type_annotation(tree, id).is_some() {
+        return None;
+    }
+    let name = tree.name(id)?;
+    let this = crate::this_type(ctx.db, property, ctx.root);
+    let receiver = match tree.kind(id) {
+        NodeKind::ObjectProperty => this,
+        NodeKind::ClassProperty => super_type(&this, ctx.db)?,
+        _ => return None,
+    };
+    if matches!(receiver, Type::Unknown) {
+        return None;
+    }
+    find_member_on_type(&receiver, name, &TypeBindings::new(), ctx)
+        .filter(|member| member.node != property)
 }
 
 /// Find the `TypeAnnotation` child of a class/object member declaration.
