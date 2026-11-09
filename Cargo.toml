@@ -32,14 +32,14 @@ sha2 = "0.10"
 percent-encoding = "2"
 
 # Path deps
-lspkl-stdlib = { version = "0.2.1", path = "crates/lspkl-stdlib" }
-lspkl-db = { version = "0.2.1", path = "crates/lspkl-db" }
-lspkl-syntax = { version = "0.2.1", path = "crates/lspkl-syntax" }
-lspkl-vfs = { version = "0.2.1", path = "crates/lspkl-vfs" }
-lspkl-types = { version = "0.2.1", path = "crates/lspkl-types" }
-lspkl-diagnostics = { version = "0.2.1", path = "crates/lspkl-diagnostics" }
-lspkl-project = { version = "0.2.1", path = "crates/lspkl-project" }
-lspkl-features = { version = "0.2.1", path = "crates/lspkl-features" }
+lspkl-stdlib = { version = "0.2.2", path = "crates/lspkl-stdlib" }
+lspkl-db = { version = "0.2.2", path = "crates/lspkl-db" }
+lspkl-syntax = { version = "0.2.2", path = "crates/lspkl-syntax" }
+lspkl-vfs = { version = "0.2.2", path = "crates/lspkl-vfs" }
+lspkl-types = { version = "0.2.2", path = "crates/lspkl-types" }
+lspkl-diagnostics = { version = "0.2.2", path = "crates/lspkl-diagnostics" }
+lspkl-project = { version = "0.2.2", path = "crates/lspkl-project" }
+lspkl-features = { version = "0.2.2", path = "crates/lspkl-features" }
 
 [profile.release]
 lto = "thin"

@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-db"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fluent-uri 0.4.1",
  "line-index",
@@ -1031,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-diagnostics"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fluent-uri 0.4.1",
  "insta",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-features"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fluent-uri 0.4.1",
  "lsp-types",
@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-project"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fluent-uri 0.4.1",
  "globset",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-stdlib"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "reqwest",
  "sha2",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-syntax"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cc",
  "insta",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bitflags 2.11.1",
  "fluent-uri 0.4.1",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "lspkl-vfs"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fluent-uri 0.4.1",
  "lspkl-stdlib",
