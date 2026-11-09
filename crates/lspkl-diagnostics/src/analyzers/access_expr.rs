@@ -69,7 +69,15 @@ impl Analyzer for AccessExprAnalyzer {
                 if !source_tree.is_property_access(node) {
                     check_argument_count(node, r.node, holder, file, ctx);
                 }
-                check_const_access(node, r.node, holder, file, ctx);
+                // Pkl only requires const members through an implicit-scope
+                // receiver (`this.`, `module.`, `outer.`); `param.member` and
+                // other explicit receivers are unrestricted in const code.
+                if matches!(
+                    source_tree.kind(receiver),
+                    NodeKind::ThisExpr | NodeKind::ModuleExpr | NodeKind::OuterExpr
+                ) {
+                    check_const_access(node, r.node, holder, file, ctx);
+                }
                 check_static_body_access(node, r.node, holder, file, ctx);
                 check_redundant_conversion(receiver, &receiver_type, r.node, holder, file, ctx);
             }

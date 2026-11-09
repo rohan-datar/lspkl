@@ -1,0 +1,10 @@
+// In const code, members of explicit receivers (parameters, let bindings,
+// call results) may be accessed freely; only implicit-scope receivers
+// (`this.`, `module.`, `outer.`) require const members.
+class Spec { name: String }
+const function label(s: Spec): String = s.name
+const function key(path: String): String = path.dropWhile((c) -> c == "/").replaceAll("/", "_")
+const function lengthOf(text: String): Int = let (t = text) t.length
+
+nonConst = 1
+const viaModule = module.nonConst
