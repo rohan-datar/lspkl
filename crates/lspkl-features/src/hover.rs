@@ -114,6 +114,16 @@ fn contextual_property_type(original: NodeRef, ctx: &AnalysisContext) -> Option<
     while tree.kind(node).is_terminal() {
         node = tree.parent(node)?;
     }
+    // An amended or assigned property: show the overridden member's declared
+    // type with the receiver's generic arguments (`default` in a
+    // `Mapping<String, Int>` is `(String) -> Int`, not `(K) -> V`).
+    if matches!(
+        tree.kind(node),
+        NodeKind::ObjectProperty | NodeKind::ClassProperty
+    ) {
+        let member = lspkl_types::resolver::overridden_member(original.with_value(node), ctx)?;
+        return (member.ty != Type::Unknown).then(|| member.ty.render(ctx.db));
+    }
     if !matches!(
         tree.kind(node),
         NodeKind::QualifiedAccessExpr | NodeKind::SuperAccessExpr
