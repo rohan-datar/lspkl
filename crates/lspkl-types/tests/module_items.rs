@@ -32,6 +32,8 @@ fn names(db: &RootDatabase, class: ClassId) -> Vec<String> {
     class_members(db, class)
         .entries
         .iter()
+        // These tests assert user declaration changes, not inherited SDK members.
+        .filter(|m| m.declaration.file.uri(db).scheme().as_str() != "pkl")
         .map(|m| m.name.text(db).clone())
         .collect()
 }

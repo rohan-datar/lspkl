@@ -59,9 +59,6 @@ pub fn render_markdown(
     original: NodeRef,
     ctx: &AnalysisContext,
 ) -> Option<String> {
-    // The original cursor node is reserved for type-parameter substitution.
-    let _ = original;
-
     // `resolved` may live in another file (e.g. pkl:base), so look up its
     // tree — never use the request source tree directly here.
     let tree = ctx.tree(resolved.file)?;
@@ -76,7 +73,9 @@ pub fn render_markdown(
         ),
         NodeKind::ClassProperty | NodeKind::ObjectProperty => {
             let name = tree.name(node_id)?;
-            match property_type(tree, resolved, ctx) {
+            match contextual_property_type(original, ctx)
+                .or_else(|| property_type(tree, resolved, ctx))
+            {
                 Some(ty) => format!("{}{name}: {ty}", modifiers_prefix(tree, node_id)),
                 None => format!("{}{name}", modifiers_prefix(tree, node_id)),
             }
@@ -106,6 +105,26 @@ pub fn render_markdown(
         md.push_str(&docs);
     }
     Some(md)
+}
+
+/// Resolve property accesses at the use site, retaining receiver generic bindings.
+fn contextual_property_type(original: NodeRef, ctx: &AnalysisContext) -> Option<String> {
+    let tree = ctx.tree(original.file)?;
+    let mut node = original.value;
+    while tree.kind(node).is_terminal() {
+        node = tree.parent(node)?;
+    }
+    if !matches!(
+        tree.kind(node),
+        NodeKind::QualifiedAccessExpr | NodeKind::SuperAccessExpr
+    ) {
+        return None;
+    }
+    let expr = original
+        .with_value(node)
+        .cast(ctx, lspkl_syntax::ast::nodes::Expr::cast)?;
+    let ty = lspkl_types::expr_type(ctx.db, expr, ctx.root);
+    (ty != Type::Unknown).then(|| ty.render(ctx.db))
 }
 
 /// Render the type of a `ClassProperty` or `ObjectProperty` for hover.

@@ -60,3 +60,16 @@ fn int_extends_number() {
         "Number must NOT be a subtype of Int"
     );
 }
+
+#[test]
+fn metadata_types_are_canonical_sdk_classes() {
+    let base = harness::load_test_base();
+    let db = base.db.borrow();
+    for (ty, name) in [(base.class_type(), "Class"), (base.typed_type(), "Typed")] {
+        let Type::Class { class_id, .. } = ty else {
+            panic!("SDK class")
+        };
+        assert_eq!(class_id.module(&*db).file(&*db), base.file_id());
+        assert_eq!(ty.render(&*db), name);
+    }
+}

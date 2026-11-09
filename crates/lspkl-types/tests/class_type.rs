@@ -106,3 +106,50 @@ fn qualified_class_and_alias_values_use_sdk_metadata_types() {
         },
     );
 }
+
+#[test]
+fn implicit_typed_superclass_supplies_members_and_metadata() {
+    let base = harness::load_test_base();
+    harness::with_snippet(
+        &base,
+        "class Foo {}\na = new Foo {}\nmeta = a.getClass()\n",
+        |ctx| {
+            let instance = property(ctx, "a");
+            assert!(instance.is_subtype_of(base.typed_type(), ctx.db));
+            assert!(instance.is_subtype_of(base.object_type(), ctx.db));
+            assert!(!base.int_type().is_subtype_of(base.typed_type(), ctx.db));
+            assert_eq!(
+                lspkl_types::find_member(ctx.db, &instance, "toMap")
+                    .unwrap()
+                    .ty
+                    .render(ctx.db),
+                "Map<String, unknown>"
+            );
+            assert_eq!(property(ctx, "meta").render(ctx.db), "Class<Foo>");
+        },
+    );
+}
+
+#[test]
+fn implicit_typed_inheritance_preserves_nominal_assignability() {
+    let base = harness::load_test_base();
+    harness::with_snippet(
+        &base,
+        "open class Parent {}\nclass Child extends Parent {}\nclass Other {}\nparent = new Parent {}\nchild = new Child {}\nother = new Other {}\n",
+        |ctx| {
+            let parent = property(ctx, "parent");
+            let child = property(ctx, "child");
+            let other = property(ctx, "other");
+            for instance in [&parent, &child, &other] {
+                for target in [base.any_type(), base.object_type(), base.typed_type()] {
+                    assert!(instance.is_subtype_of(target, ctx.db));
+                }
+            }
+            assert!(child.is_subtype_of(&parent, ctx.db));
+            assert!(!parent.is_subtype_of(&child, ctx.db));
+            assert!(!child.is_subtype_of(&other, ctx.db));
+            assert!(!other.is_subtype_of(&child, ctx.db));
+            assert!(!child.has_common_subtype_with(&other, ctx.db));
+        },
+    );
+}

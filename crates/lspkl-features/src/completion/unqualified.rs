@@ -79,7 +79,11 @@ fn add_definition_completions(
         }
         // Typed objects: class instances and modules. Typed objects cannot
         // have elements, so property amendments/assignments are all there is.
-        ty @ (Type::Class { .. } | Type::Module { .. }) => {
+        ty @ (Type::Class { .. } | Type::Module { .. })
+            if !ty.class_equals(ctx.base.mapping_type())
+                && !ty.class_equals(ctx.base.listing_type())
+                && !ty.class_equals(ctx.base.dynamic_type()) =>
+        {
             let is_class_def = enclosing_def_is_class(node, tree);
             add_typed_completions(already_defined, is_class_def, ty, ctx, out);
             out.extend(super::definition_level_keywords());
