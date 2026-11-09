@@ -437,15 +437,16 @@ impl Workspace {
             .into_iter()
             .filter_map(|event| parse_source_uri(event.uri.as_str()).ok())
             .collect();
+        // Only an edited PklProject (an input) supersedes in-flight syncs.
+        // PklProject.deps.json is an output of `pkl project resolve`: syncs
+        // rewrite it themselves, so treating its events as supersession made
+        // editors that report watched files re-sync forever. Its contents are
+        // installed by the reload below and bump the generation only when they
+        // actually change.
         if uris
             .iter()
             .filter_map(|uri| url_to_path(uri).ok())
-            .any(|path| {
-                matches!(
-                    path.file_name().and_then(|name| name.to_str()),
-                    Some("PklProject" | "PklProject.deps.json")
-                )
-            })
+            .any(|path| path.file_name().and_then(|name| name.to_str()) == Some("PklProject"))
         {
             self.project_generation += 1;
         }
