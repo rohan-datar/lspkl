@@ -378,3 +378,48 @@ fn auto_sync_setting_is_nested_default_true_and_null_pull_keeps_push() {
         .unwrap();
     assert!(workspace.settings().projects.auto_sync);
 }
+
+/// Editors report the PklProject.deps.json that `pkl project resolve` rewrites
+/// during every sync. That event must not supersede the sync that caused it,
+/// or the result is dropped, nothing is persisted, and syncing never stops.
+#[test]
+fn deps_file_rewritten_by_resolve_does_not_restart_sync() {
+    let f = Fixture::new();
+    fs::write(f.root.join("blocked"), "").unwrap();
+    let peer = f.start(true);
+    wait(|| f.root.join("evaluating").exists());
+    // Like an editor watcher reporting resolve's rewrite while eval runs.
+    peer.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":uri(&f.root.join("PklProject.deps.json")),"type":2}]}),
+    );
+    fs::remove_file(f.root.join("blocked")).unwrap();
+    wait(|| f.saved().exists());
+    // And again after the result was applied.
+    peer.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":uri(&f.root.join("PklProject.deps.json")),"type":2}]}),
+    );
+    quiet();
+    quiet();
+    assert_eq!(f.resolves(), 1, "the sync must not restart itself");
+    peer.stop();
+}
+
+#[test]
+fn deps_file_event_does_not_reject_a_manual_sync() {
+    let f = Fixture::new();
+    fs::write(f.root.join("blocked"), "").unwrap();
+    let mut peer = f.start(false);
+    let sync = peer.start_request("pkl/syncProjects", Value::Null);
+    wait(|| f.root.join("evaluating").exists());
+    peer.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":uri(&f.root.join("PklProject.deps.json")),"type":2}]}),
+    );
+    fs::remove_file(f.root.join("blocked")).unwrap();
+    let response = peer.response(sync);
+    assert!(response.get("error").is_none(), "{response}");
+    wait(|| f.saved().exists());
+    peer.stop();
+}

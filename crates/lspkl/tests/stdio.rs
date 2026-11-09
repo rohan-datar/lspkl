@@ -1037,9 +1037,10 @@ async fn blocked_project_job(watched: Option<&str>, cancel: bool) {
 #[cfg(unix)]
 #[tokio::test]
 async fn project_watchers_invalidate_jobs_before_manager_registration() {
-    for name in ["PklProject", "PklProject.deps.json"] {
-        blocked_project_job(Some(name), false).await;
-    }
+    // Only an edited PklProject supersedes an in-flight sync. The deps file is
+    // rewritten by the sync itself (see auto_sync.rs
+    // deps_file_rewritten_by_resolve_does_not_restart_sync).
+    blocked_project_job(Some("PklProject"), false).await;
 }
 
 #[cfg(unix)]

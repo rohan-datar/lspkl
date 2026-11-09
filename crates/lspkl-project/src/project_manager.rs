@@ -297,6 +297,11 @@ impl ProjectManager {
                 let Some(project) = self.projects.get_mut(&parent.join("PklProject")) else {
                     return false;
                 };
+                // `pkl project resolve` rewrites the file even when nothing
+                // changed; identical contents are not a project change.
+                if project.project_deps == deps {
+                    return false;
+                }
                 Arc::make_mut(project).project_deps = deps;
                 true
             }
