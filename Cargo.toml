@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.dependencies]
-insta = "1.43.2"
+insta = "1.49.0"
 text-size = "1.1"
 line-index = "0.1"
 tree-sitter = "0.25"
