@@ -1,6 +1,6 @@
 [package]
 name = "lspkl-syntax"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Pkl parsing and typed syntax trees for the lspkl language server"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ text-size.workspace = true
 line-index.workspace = true
 tree-sitter.workspace = true
 tree-sitter-language = "0.1"
-smallvec = "1.13"
+smallvec = "1.16"
 thiserror = "2.0"
 
 [dev-dependencies]
@@ -20,4 +20,4 @@ insta.workspace = true
 lspkl-stdlib.workspace = true
 
 [build-dependencies]
-cc = "1.2"
+cc = "1.11"
