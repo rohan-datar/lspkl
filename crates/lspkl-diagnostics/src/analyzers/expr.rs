@@ -9,6 +9,7 @@ use lspkl_types::{AnalysisContext, Type};
 
 use crate::analyzer::Analyzer;
 use crate::holder::DiagnosticsHolder;
+use crate::{QuickFix, TextEdit};
 
 pub struct ExprAnalyzer;
 
@@ -101,8 +102,14 @@ impl Analyzer for ExprAnalyzer {
                     && !matches!(expr_type, Type::Unknown)
                     && expr_type.is_subtype_of(&tested_type, ctx.db)
                 {
-                    holder.add_error(source_tree.span(node), "type cast is redundant");
-                    // TODO: add quickfix
+                    holder.add_error_with_fix(
+                        source_tree.span(node),
+                        "type cast is redundant",
+                        QuickFix::single(
+                            "Remove redundant type cast",
+                            surviving_operand(source_tree, node, expr_node),
+                        ),
+                    );
                 } else if (super::type_check::is_exact_class_value(
                     NodeRef::new(file, expr_node),
                     ctx,
@@ -128,8 +135,14 @@ impl Analyzer for ExprAnalyzer {
                         lspkl_types::expr_type(ctx.db, expr, ctx.root)
                     });
                 if !expr_type.is_nullable(ctx.db) {
-                    holder.add_error(source_tree.span(node), "null coalescing is redundant");
-                    // TODO: add quickfix
+                    holder.add_error_with_fix(
+                        source_tree.span(node),
+                        "null coalescing is redundant",
+                        QuickFix::single(
+                            "Remove redundant null coalescing",
+                            surviving_operand(source_tree, node, expr_node),
+                        ),
+                    );
                 }
                 false
             }
@@ -145,12 +158,85 @@ impl Analyzer for ExprAnalyzer {
                         lspkl_types::expr_type(ctx.db, expr, ctx.root)
                     });
                 if !expr_type.is_nullable(ctx.db) {
-                    holder.add_error(source_tree.span(node), "non null is redundant");
-                    // TODO: add quickfix
+                    holder.add_error_with_fix(
+                        source_tree.span(node),
+                        "non null is redundant",
+                        QuickFix::single(
+                            "Remove redundant non-null assertion",
+                            surviving_operand(source_tree, node, expr_node),
+                        ),
+                    );
                 }
                 false
             }
             _ => true,
         }
+    }
+}
+
+/// Preserve the operand's exact source, including any existing grouping.
+fn surviving_operand(
+    tree: &lspkl_syntax::ast::SyntaxTree,
+    removed: lspkl_syntax::ast::NodeId,
+    operand: lspkl_syntax::ast::NodeId,
+) -> TextEdit {
+    let grouped = tree.parent(removed).is_some_and(|parent| {
+        let child_precedence = precedence(tree.kind(operand));
+        if let Some(binary) = nodes::BinaryExpr::cast(tree, parent) {
+            let parent_precedence = precedence(tree.kind(parent));
+            let right_associative = matches!(
+                tree.kind(parent),
+                NodeKind::NullCoalesceExpr | NodeKind::ExponentiationExpr
+            );
+            child_precedence < parent_precedence
+                || (child_precedence == parent_precedence
+                    && if right_associative {
+                        binary.left(tree) == Some(removed)
+                    } else {
+                        binary.right(tree) == Some(removed)
+                    })
+        } else if nodes::UnaryExpr::cast(tree, parent).is_some()
+            || nodes::QualifiedAccessExpr::cast(tree, parent)
+                .and_then(|access| access.receiver(tree))
+                == Some(removed)
+            || nodes::SubscriptExpr::cast(tree, parent).and_then(|access| access.receiver(tree))
+                == Some(removed)
+        {
+            child_precedence < precedence(tree.kind(parent))
+        } else {
+            false
+        }
+    });
+    let text = tree.text(operand);
+    TextEdit::replace(
+        tree.span(removed),
+        if grouped {
+            format!("({text})")
+        } else {
+            text.to_owned()
+        },
+    )
+}
+
+// Binding powers from the Pkl expression grammar. Delimited expressions and
+// atoms bind more tightly than operators; existing parentheses remain intact.
+fn precedence(kind: &NodeKind) -> u8 {
+    match kind {
+        NodeKind::FunctionLiteralExpr | NodeKind::IfExpr | NodeKind::LetExpr => 0,
+        NodeKind::NullCoalesceExpr => 8,
+        NodeKind::PipeExpr => 9,
+        NodeKind::LogicalOrExpr => 10,
+        NodeKind::LogicalAndExpr => 11,
+        NodeKind::EqualityExpr => 12,
+        NodeKind::TypeTestExpr | NodeKind::TypeCastExpr => 14,
+        NodeKind::ComparisonExpr => 15,
+        NodeKind::AdditiveExpr => 16,
+        NodeKind::MultiplicativeExpr => 17,
+        NodeKind::ExponentiationExpr => 18,
+        NodeKind::LogicalNotExpr => 19,
+        NodeKind::UnaryMinusExpr => 20,
+        NodeKind::NonNullExpr => 21,
+        NodeKind::QualifiedAccessExpr | NodeKind::SubscriptExpr => 22,
+        _ => 23,
     }
 }

@@ -1305,3 +1305,101 @@ async fn contextual_object_this_supports_hover_completion_and_diagnostics() {
     );
     client.shutdown().await;
 }
+
+#[tokio::test]
+async fn redundant_expression_code_actions_apply_workspace_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = uri(&temp.path().join("quickfix.pkl"));
+    let mut client = start(temp.path(), json!({})).await;
+    for (index, (source, expected, message)) in [
+        (
+            "x = 1 + 2 as Int * 3",
+            "x = (1 + 2) * 3",
+            "type cast is redundant",
+        ),
+        (
+            "x = (1 + 2 ?? 3) * 4",
+            "x = (1 + 2) * 4",
+            "null coalescing is redundant",
+        ),
+        (
+            "x = (1 + 2)!! * 3",
+            "x = (1 + 2) * 3",
+            "non null is redundant",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 0 {
+            open(&mut client, &document, source).await;
+        } else {
+            client
+                .notify(
+                    "textDocument/didChange",
+                    json!({
+                        "textDocument":{"uri":document,"version":index * 2 + 1},
+                        "contentChanges":[{"text":source}]
+                    }),
+                )
+                .await;
+        }
+        let published = diagnostics(&mut client, &document).await;
+        let diagnostic = published["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["message"] == message)
+            .unwrap();
+        // A mismatched echo must not select a fix, even at the same range.
+        let mut wrong = diagnostic.clone();
+        wrong["message"] = json!("not the original diagnostic");
+        let rejected = client
+            .request(
+                "textDocument/codeAction",
+                json!({
+                    "textDocument":{"uri":document}, "range":diagnostic["range"],
+                    "context":{"diagnostics":[wrong]}
+                }),
+            )
+            .await;
+        assert_eq!(rejected["result"], json!([]), "{rejected}");
+        let response = client
+            .request(
+                "textDocument/codeAction",
+                json!({
+                    "textDocument":{"uri":document}, "range":diagnostic["range"],
+                    "context":{"diagnostics":[diagnostic]}
+                }),
+            )
+            .await;
+        let actions = response["result"].as_array().unwrap();
+        assert_eq!(actions.len(), 1, "{response}");
+        assert_eq!(actions[0]["kind"], "quickfix");
+        let edits = actions[0]["edit"]["changes"][&document].as_array().unwrap();
+        assert_eq!(edits.len(), 1);
+        let edit = &edits[0];
+        // These one-line ASCII sources have identical byte and UTF-16 offsets.
+        assert_eq!(edit["range"]["start"]["line"], 0);
+        assert_eq!(edit["range"]["end"]["line"], 0);
+        let start = edit["range"]["start"]["character"].as_u64().unwrap() as usize;
+        let end = edit["range"]["end"]["character"].as_u64().unwrap() as usize;
+        let mut edited = source.to_owned();
+        edited.replace_range(start..end, edit["newText"].as_str().unwrap());
+        assert_eq!(edited, expected);
+        client
+            .notify(
+                "textDocument/didChange",
+                json!({
+                    "textDocument":{"uri":document,"version":index * 2 + 2},
+                    "contentChanges":[{"text":edited}]
+                }),
+            )
+            .await;
+        assert_eq!(
+            diagnostics(&mut client, &document).await["diagnostics"],
+            json!([])
+        );
+    }
+    client.shutdown().await;
+}
